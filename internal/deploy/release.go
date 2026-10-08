@@ -46,12 +46,44 @@ func NewReleaseManager(st *Store, dp *Deployer) *ReleaseManager {
 func (s *Store) CreateReleaseOrder(o *ReleaseOrder) error {
 	hosts, _ := json.Marshal(o.Hosts)
 	target, _ := json.Marshal(o.Target)
-	res, err := s.db.Exec(`INSERT INTO release_orders(service,artifact_id,version,environment,reason,strategy,status,batch_size,pause_between_batches,failure_threshold,hosts,target_snapshot,runtime_env_encrypted,next_index,total,succeeded,failed,actor,started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)`, o.Service, o.ArtifactID, o.Version, o.Environment, o.Reason, o.Strategy, o.Status, o.BatchSize, o.PauseBetweenBatches, o.FailureThreshold, string(hosts), string(target), o.runtimeEnvEncrypted, o.NextIndex, len(o.Hosts), o.Actor, o.StartedAt)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if releaseStatusActive(o.Status) {
+		if err := lockReleaseTarget(tx, o.Service, o.Environment); err != nil {
+			return err
+		}
+	}
+	res, err := tx.Exec(`INSERT INTO release_orders(service,artifact_id,version,environment,reason,strategy,status,batch_size,pause_between_batches,failure_threshold,hosts,target_snapshot,runtime_env_encrypted,next_index,total,succeeded,failed,actor,started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)`, o.Service, o.ArtifactID, o.Version, o.Environment, o.Reason, o.Strategy, o.Status, o.BatchSize, o.PauseBetweenBatches, o.FailureThreshold, string(hosts), string(target), o.runtimeEnvEncrypted, o.NextIndex, len(o.Hosts), o.Actor, o.StartedAt)
 	if err != nil {
 		return err
 	}
 	o.ID, _ = res.LastInsertId()
 	o.Total = len(o.Hosts)
+	return tx.Commit()
+}
+
+// All release creation paths share this reservation, including orchestration.
+// MySQL row locking serializes competing API instances; SQLite's store owns a
+// single connection and serializes these transactions locally.
+func lockReleaseTarget(tx *deployTx, service, environment string) error {
+	query := `SELECT service FROM service_environments WHERE service=? AND environment=?`
+	if tx.dialect == "mysql" {
+		query += ` FOR UPDATE`
+	}
+	var name string
+	if err := tx.QueryRow(query, service, environment).Scan(&name); err != nil {
+		return fmt.Errorf("应用环境不存在或已被移除")
+	}
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM release_orders WHERE service=? AND environment=? AND status IN ('pending_approval','queued','running','waiting_next_batch','rolling_back')`, service, environment).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("%w: 该应用环境已有进行中的发布单", ErrRunConflict)
+	}
 	return nil
 }
 func scanRelease(scanner interface{ Scan(...any) error }) (ReleaseOrder, error) {
@@ -174,6 +206,21 @@ func (s *Store) SetReleaseStatus(id int64, status, approver string, ended bool) 
 	} else {
 		_, _ = s.db.Exec(`UPDATE release_orders SET status=?,approver=CASE WHEN ?='' THEN approver ELSE ? END,ended_at=NULL WHERE id=?`, status, approver, approver, id)
 	}
+}
+
+func (s *Store) compareReleaseStatus(id int64, from, to, approver string, ended bool) error {
+	var end any
+	if ended {
+		end = time.Now().Unix()
+	}
+	result, err := s.db.Exec(`UPDATE release_orders SET status=?,approver=CASE WHEN ?<>'' THEN ? ELSE approver END,ended_at=? WHERE id=? AND status=?`, to, approver, approver, end, id, from)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return ErrRunConflict
+	}
+	return nil
 }
 func (s *Store) SetReleaseProgress(id int64, next int) {
 	_, _ = s.db.Exec(`UPDATE release_orders SET next_index=? WHERE id=?`, next, id)
@@ -402,7 +449,9 @@ func (m *ReleaseManager) Approve(id int64, actor string) error {
 	if strings.TrimSpace(actor) == strings.TrimSpace(o.Actor) {
 		return fmt.Errorf("发布发起人不能审批自己的发布单")
 	}
-	m.st.SetReleaseStatus(id, "queued", actor, false)
+	if err := m.st.compareReleaseStatus(id, "pending_approval", "queued", actor, false); err != nil {
+		return err
+	}
 	m.st.Audit(actor, "approve", "release", fmt.Sprint(id), nil)
 	go m.startNextBatch(id)
 	return nil
@@ -424,7 +473,9 @@ func (m *ReleaseManager) Reject(id int64, actor string) error {
 	if strings.TrimSpace(actor) == strings.TrimSpace(o.Actor) {
 		return fmt.Errorf("发布发起人不能审批自己的发布单")
 	}
-	m.st.SetReleaseStatus(id, "rejected", actor, true)
+	if err := m.st.compareReleaseStatus(id, "pending_approval", "rejected", actor, true); err != nil {
+		return err
+	}
 	m.st.Audit(actor, "reject", "release", fmt.Sprint(id), nil)
 	return nil
 }
@@ -433,7 +484,9 @@ func (m *ReleaseManager) Continue(id int64, actor string) error {
 	if o == nil || o.Status != "waiting_next_batch" {
 		return fmt.Errorf("发布单不在批次暂停状态")
 	}
-	m.st.SetReleaseStatus(id, "queued", "", false)
+	if err := m.st.compareReleaseStatus(id, "waiting_next_batch", "queued", "", false); err != nil {
+		return err
+	}
 	m.st.Audit(actor, "continue", "release", fmt.Sprint(id), nil)
 	go m.startNextBatch(id)
 	return nil
@@ -443,7 +496,9 @@ func (m *ReleaseManager) Cancel(id int64, actor string) error {
 	if o == nil || (o.Status != "pending_approval" && o.Status != "waiting_next_batch" && o.Status != "queued") {
 		return fmt.Errorf("仅待审批、排队或批次暂停的发布单可取消")
 	}
-	m.st.SetReleaseStatus(id, "canceled", "", true)
+	if err := m.st.compareReleaseStatus(id, o.Status, "canceled", "", true); err != nil {
+		return err
+	}
 	m.st.Audit(actor, "cancel", "release", fmt.Sprint(id), nil)
 	return nil
 }
@@ -616,5 +671,5 @@ func (m *ReleaseManager) Rollback(id int64, reason, actor string) error {
 }
 
 func (m *ReleaseManager) Recover() {
-	_, _ = m.st.db.Exec(`UPDATE release_orders SET status='interrupted',ended_at=strftime('%s','now') WHERE status IN ('running','rolling_back')`)
+	_, _ = m.st.db.Exec(`UPDATE release_orders SET status='interrupted',ended_at=strftime('%s','now') WHERE status IN ('queued','running','rolling_back')`)
 }

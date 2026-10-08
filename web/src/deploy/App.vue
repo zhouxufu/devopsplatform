@@ -39,6 +39,9 @@ async function syncServiceContext(service) {
     if (route.params.name) await router.push('/')
     return
   }
+  // Multi-application delivery pages are global workspaces: context sync must
+  // not interrupt editing a version or an orchestration plan.
+  if (route.path.startsWith('/changes') || route.path.startsWith('/orchestration')) return
   if (String(route.params.name || '') !== service) await router.push(`/svc/${encodeURIComponent(service)}/overview`)
 }
 // 平台壳上下文
@@ -60,12 +63,13 @@ try { if (embedded) window.parent.postMessage({ type: 'context.request' }, locat
     <header>
       <span class="logo">🚀 部署平台</span>
       <nav>
-        <RouterLink to="/">🚀<i>交付</i></RouterLink>
+        <RouterLink to="/">🔨<i>构建</i></RouterLink>
+        <RouterLink to="/orchestration">🚀<i>编排</i></RouterLink>
         <RouterLink to="/changes">🧾<i>变更</i></RouterLink>
         <RouterLink to="/plugins">🧩<i>扩展</i></RouterLink>
       </nav>
       <PlatformNav @open="platformPanel=$event" />
-      <span class="hint">构建 · 制品 · 发布 · 观测</span>
+      <span class="hint">基础构建 · 部署编排 · 变更管控</span>
     </header>
     <main><RouterView /></main>
     <PlatformPanel :view="platformPanel" plugin="deploy" @switch="platformPanel=$event" @close="platformPanel=''" />

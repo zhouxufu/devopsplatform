@@ -634,6 +634,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 	deployer := NewDeployer(st, hub, busURL)
 	releaseManager := NewReleaseManager(st, deployer)
 	releaseManager.Recover()
+	registerDeliveryRoutes(mux, st, releaseManager)
 	managedJavaTarget := func(service, environment string) (*ServiceEnvironment, *Service, []Host, error) {
 		target := st.GetServiceEnvironment(service, environment)
 		base := st.GetService(service)
@@ -1050,6 +1051,15 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		mux.HandleFunc("POST /api/releases/{id}/"+action, func(w http.ResponseWriter, r *http.Request) {
 			var id int64
 			fmt.Sscanf(r.PathValue("id"), "%d", &id)
+			order := st.GetReleaseOrder(id)
+			if order == nil {
+				writeError(w, http.StatusNotFound, "发布单不存在")
+				return
+			}
+			if (action == "continue" || action == "cancel") && !canManageOwned(r, order.Actor) {
+				writeError(w, http.StatusForbidden, "仅发起人或管理员可继续或取消发布")
+				return
+			}
 			if err := handler(id, actorOf(r)); err != nil {
 				writeError(w, 409, err)
 				return
@@ -1060,6 +1070,11 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 	mux.HandleFunc("POST /api/releases/{id}/rollback", func(w http.ResponseWriter, r *http.Request) {
 		var id int64
 		fmt.Sscanf(r.PathValue("id"), "%d", &id)
+		order := st.GetReleaseOrder(id)
+		if order == nil || !canManageOwned(r, order.Actor) {
+			writeError(w, http.StatusForbidden, "仅发起人或管理员可回滚发布")
+			return
+		}
 		var req struct {
 			Reason string `json:"reason"`
 		}

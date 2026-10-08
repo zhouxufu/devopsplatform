@@ -285,9 +285,12 @@ func (s *Store) Changes(status, service, query string, limit int) []Change {
 	out := []Change{}
 	for rows.Next() {
 		if v, err := scanChange(rows); err == nil {
-			v.WorkItems = s.ChangeWorkItems(v.ID)
 			out = append(out, v)
 		}
+	}
+	rows.Close() // SQLite uses one connection: release it before loading associations.
+	for i := range out {
+		out[i].WorkItems = s.ChangeWorkItems(out[i].ID)
 	}
 	return out
 }
@@ -340,9 +343,6 @@ func (s *Store) SetChangeWorkItems(changeID int64, ids []int64) error {
 	if change.Status != ChangeDraft {
 		return fmt.Errorf("仅草稿变更可调整关联需求")
 	}
-	if len(ids) == 0 {
-		return fmt.Errorf("变更至少关联一个需求或缺陷")
-	}
 	seen := map[int64]bool{}
 	for _, id := range ids {
 		if id < 1 || seen[id] || s.GetWorkItem(id) == nil {
@@ -373,9 +373,6 @@ func (s *Store) SetChangeReady(id int64, ready bool) (*Change, error) {
 	v := s.GetChange(id)
 	if v == nil {
 		return nil, fmt.Errorf("变更不存在")
-	}
-	if ready && len(v.WorkItems) == 0 {
-		return nil, fmt.Errorf("变更至少关联一个需求或缺陷")
 	}
 	status := ChangeDraft
 	if ready {
@@ -468,9 +465,12 @@ func (s *Store) ReleaseVersions(status string, limit int) []ReleaseVersion {
 	out := []ReleaseVersion{}
 	for rows.Next() {
 		if v, err := scanReleaseVersion(rows); err == nil {
-			v.Changes, v.Promotions = s.ReleaseVersionChanges(v.ID), s.ReleasePromotions(v.ID)
 			out = append(out, v)
 		}
+	}
+	rows.Close()
+	for i := range out {
+		out[i].Changes, out[i].Promotions = s.ReleaseVersionChanges(out[i].ID), s.ReleasePromotions(out[i].ID)
 	}
 	return out
 }
@@ -508,9 +508,12 @@ func (s *Store) ReleaseVersionChanges(id int64) []Change {
 	out := []Change{}
 	for rows.Next() {
 		if v, err := scanChange(rows); err == nil {
-			v.WorkItems = s.ChangeWorkItems(v.ID)
 			out = append(out, v)
 		}
+	}
+	rows.Close()
+	for i := range out {
+		out[i].WorkItems = s.ChangeWorkItems(out[i].ID)
 	}
 	return out
 }
@@ -653,11 +656,11 @@ func (s *Store) ReviewReleasePromotion(id int64, actor string, approve bool) (*R
 		return nil, fmt.Errorf("环境推进不在待审核状态")
 	}
 	env := s.GetEnvironment(v.Environment)
-	if env == nil || !allowedApprover(env.Approvers, actor) {
-		return nil, fmt.Errorf("当前用户不是该环境的发布审核人员")
-	}
 	if strings.TrimSpace(v.Actor) == strings.TrimSpace(actor) {
 		return nil, fmt.Errorf("发布发起人不能审核自己的推进申请")
+	}
+	if env == nil || !allowedApprover(env.Approvers, actor) {
+		return nil, fmt.Errorf("当前用户不是该环境的发布审核人员")
 	}
 	status := PromotionRejected
 	if approve {

@@ -169,7 +169,7 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
 <template>
   <div>
     <div class="page-head">
-      <div class="title-row"><h2>应用</h2><HelpTip text="管理应用的代码来源、构建配置、制品版本和环境发布状态。" /></div>
+      <div class="title-row"><h2>基础构建</h2><HelpTip text="管理应用的代码来源、构建配置和不可变制品；单应用可直接发布，多应用交付使用部署编排。" /></div>
       <ElButton type="primary" native-type="button" @click="openNew">＋ 接入应用</ElButton>
     </div>
 

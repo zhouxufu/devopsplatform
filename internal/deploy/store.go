@@ -311,6 +311,10 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			}
 		}
 	}
+	if err := s.initDeliverySchema(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

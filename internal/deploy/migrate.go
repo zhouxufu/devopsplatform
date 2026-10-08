@@ -62,6 +62,8 @@ var deployMigrationTables = func() []deployMigrationTable {
 		migrationTable("application_resource_requirements", "service,alias,kind,required,description", "service,alias"),
 		migrationTable("application_environment_resources", "service,environment,alias,connection,config,updated_at", "service,environment,alias"),
 		migrationTable("change_executions", "id,promotion_id,change_id,environment,connection,status,before_digest,after_digest,log,started_at,ended_at", "id"),
+		migrationTable("delivery_templates", "id,document,owner", "id"),
+		migrationTable("delivery_runs", "id,plan,digest,status,execution,env_secrets,owner,approver,created_at,revision", "id"),
 		migrationTable("audit_events", "id,actor,action,resource_type,resource_id,detail,created_at", "id"),
 		migrationTable("agent_configs", "host_name,server_url,monitor_url,run_user,run_group,spool_max_mb,collect,updated_at,applied_at,last_apply_error", "host_name"),
 	}

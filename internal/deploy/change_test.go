@@ -65,7 +65,7 @@ func TestIndependentChangeAndReleasePromotionLifecycle(t *testing.T) {
 	}
 }
 
-func TestChangeRequiresWorkItemAndReadyChange(t *testing.T) {
+func TestChangeAllowsIndependentWorkAndRequiresReadyChange(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -76,8 +76,11 @@ func TestChangeRequiresWorkItemAndReadyChange(t *testing.T) {
 	if err := st.CreateChange(change); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.SetChangeReady(change.ID, true); err == nil || !strings.Contains(err.Error(), "需求") {
-		t.Fatalf("change without demand became ready: %v", err)
+	if _, err := st.SetChangeReady(change.ID, true); err != nil {
+		t.Fatalf("independent change cannot become ready: %v", err)
+	}
+	if _, err := st.SetChangeReady(change.ID, false); err != nil {
+		t.Fatal(err)
 	}
 	work := &WorkItem{Title: "调整超时时间", Owner: "alice"}
 	if err := st.CreateWorkItem(work); err != nil {
@@ -102,5 +105,8 @@ func TestChangeRequiresWorkItemAndReadyChange(t *testing.T) {
 	}
 	if _, err := st.SetChangeReady(change.ID, false); err == nil {
 		t.Fatal("versioned change was reopened")
+	}
+	if len(st.Changes("", "", "", 100)) != 1 || len(st.ReleaseVersions("", 100)) != 1 {
+		t.Fatal("list associations are incomplete")
 	}
 }

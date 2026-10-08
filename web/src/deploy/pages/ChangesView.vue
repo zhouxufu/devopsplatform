@@ -1,192 +1,722 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import Modal from '../../shared/components/Modal.vue'
-import HelpTip from '../../shared/components/HelpTip.vue'
-import Sel from '../../shared/components/Sel.vue'
-import { ElButton, ElInput } from '../../shared/components/ui.js'
-import { toast } from '../../shared/composables/toast.js'
-
-const versions = ref([]), environments = ref([]), services = ref([]), me = ref({})
-const selected = ref(null), statusFilter = ref(''), environmentFilter = ref('')
-const showVersion = ref(false), showWork = ref(false), showChange = ref(false), saving = ref(false)
-const versionForm = ref({}), workForm = ref({}), changeForm = ref({})
-
-const statusOptions = [
-  { value: 'draft', label: '草稿' }, { value: 'pending_approval', label: '待审核' },
-  { value: 'approved', label: '已就绪' }, { value: 'rejected', label: '已驳回' },
-  { value: 'completed', label: '已归档' }, { value: 'canceled', label: '已取消' },
-]
-const statusText = Object.fromEntries(statusOptions.map(v => [v.value, v.label]))
-const changeKinds = [
-  { value: 'artifact', label: '应用制品' }, { value: 'mysql', label: 'MySQL 变更' },
-  { value: 'nacos', label: 'Nacos 配置' }, { value: 'manual', label: '人工操作' },
-]
-const kindText = Object.fromEntries(changeKinds.map(v => [v.value, v.label]))
-const riskText = { low: '低', medium: '中', high: '高' }
-
-async function request(url, options) {
-  const response = await fetch(url, options)
-  const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(body.error || `请求失败（${response.status}）`)
-  return body
-}
-async function loadVersions(selectID = selected.value?.id) {
-  const query = new URLSearchParams({ limit: '200' })
-  if (statusFilter.value) query.set('status', statusFilter.value)
-  if (environmentFilter.value) query.set('environment', environmentFilter.value)
-  versions.value = await request(`api/change-versions?${query}`)
-  const target = versions.value.find(v => v.id === selectID) || versions.value[0]
-  if (target) await selectVersion(target.id)
-  else selected.value = null
-}
-async function selectVersion(id) { selected.value = await request(`api/change-versions/${id}`) }
-function environmentName(name) { return environments.value.find(v => v.name === name)?.display_name || name }
-const selectedEnvironment = computed(() => environments.value.find(v => v.name === selected.value?.environment))
-const editable = computed(() => ['draft', 'rejected'].includes(selected.value?.status))
-const manageable = computed(() => !!selected.value && (me.value.username === 'local' || me.value.role === 'admin' || me.value.username === selected.value.owner))
-const canReview = computed(() => {
-  const names = String(selectedEnvironment.value?.approvers || '').split(',').map(v => v.trim())
-  return selected.value?.status === 'pending_approval' && names.includes(me.value.username) && selected.value.owner !== me.value.username
-})
-function statusClass(status) {
-  return status === 'approved' || status === 'completed' ? 'ok' : status === 'rejected' || status === 'canceled' ? 'bad' : status === 'pending_approval' ? 'warn' : 'dim'
-}
-function openVersion(version) {
-  versionForm.value = version ? { version: version.version, title: version.title, environment: version.environment, description: version.description } : { version: '', title: '', environment: environmentFilter.value || environments.value[0]?.name || '', description: '' }
-  showVersion.value = true
-}
-async function saveVersion() {
-  if (!versionForm.value.version?.trim() || !versionForm.value.title?.trim() || !versionForm.value.environment) return toast('版本号、标题和目标环境必填', 'warning')
-  saving.value = true
+import { computed, inject, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import Modal from "../../shared/components/Modal.vue";
+import HelpTip from "../../shared/components/HelpTip.vue";
+import Sel from "../../shared/components/Sel.vue";
+import { ElButton, ElInput } from "../../shared/components/ui.js";
+import { toast } from "../../shared/composables/toast.js";
+const api = inject("api"),
+  route = useRoute(),
+  router = useRouter();
+const tab = computed(() =>
+  ["work", "changes", "versions"].includes(route.query.tab)
+    ? route.query.tab
+    : "changes",
+);
+const work = ref([]),
+  changes = ref([]),
+  versions = ref([]),
+  deliveries = ref([]),
+  services = ref([]),
+  me = ref({});
+const query = ref(""),
+  filter = ref(""),
+  dialog = ref(""),
+  form = ref({}),
+  saving = ref(false);
+const kinds = [
+  { value: "code", label: "代码分支" },
+  { value: "artifact", label: "应用制品" },
+  { value: "nacos", label: "Nacos 配置" },
+  { value: "mysql", label: "SQL 变更" },
+  { value: "data-sync", label: "数据对比同步" },
+  { value: "redis", label: "Redis 命令" },
+  { value: "manual", label: "人工操作" },
+];
+const labels = {
+  open: "进行中",
+  closed: "已关闭",
+  draft: "草稿",
+  ready: "已就绪",
+  completed: "已完成",
+  canceled: "已取消",
+};
+const kindLabel = (value) =>
+  kinds.find((v) => v.value === value)?.label || value;
+const list = computed(() =>
+  (tab.value === "work"
+    ? work.value
+    : tab.value === "versions"
+      ? versions.value
+      : changes.value
+  ).filter(
+    (v) =>
+      (!filter.value || v.status === filter.value) &&
+      (!query.value ||
+        `${v.title} ${v.version || ""} ${v.external_id || ""} ${v.service || ""} ${v.reference || ""}`
+          .toLowerCase()
+          .includes(query.value.toLowerCase())),
+  ),
+);
+const readyChanges = computed(() =>
+  changes.value.filter((c) => c.status === "ready"),
+);
+const canManage = (item) =>
+  me.value.username === "local" ||
+  me.value.role === "admin" ||
+  me.value.username === item.owner;
+const safeURL = (value) =>
+  /^https?:\/\//i.test(value || "") ? value : undefined;
+async function load() {
   try {
-    const editing = selected.value && showVersion.value && versionForm.value._id
-    const body = await request(editing ? `api/change-versions/${versionForm.value._id}` : 'api/change-versions', { method: editing ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(versionForm.value) })
-    showVersion.value = false; toast(editing ? '版本已更新' : '版本已创建', 'success'); await loadVersions(body.id)
-  } catch (error) { toast(error.message, 'error') } finally { saving.value = false }
+    [
+      work.value,
+      changes.value,
+      versions.value,
+      services.value,
+      deliveries.value,
+    ] = await Promise.all([
+      api("api/work-items?limit=500"),
+      api("api/changes?limit=500"),
+      api("api/release-versions?limit=500"),
+      api("api/services"),
+      api("api/delivery/runs"),
+    ]);
+  } catch (e) {
+    toast(e.message, "error");
+  }
 }
-function editVersion() {
-  versionForm.value = { _id: selected.value.id, version: selected.value.version, title: selected.value.title, environment: selected.value.environment, description: selected.value.description }
-  showVersion.value = true
+function open(type, item) {
+  dialog.value = type;
+  if (type === "work")
+    form.value = item
+      ? { ...item }
+      : {
+          title: "",
+          kind: "requirement",
+          source: "manual",
+          external_id: "",
+          description: "",
+          status: "open",
+        };
+  if (type === "changes")
+    form.value = item
+      ? { ...item, work_item_ids: (item.work_items || []).map((v) => v.id) }
+      : {
+          title: "",
+          kind: "code",
+          service: "",
+          reference: "",
+          summary: "",
+          risk_level: "medium",
+          rollback_plan: "",
+          work_item_ids: [],
+        };
+  if (type === "versions")
+    form.value = item
+      ? {
+          ...item,
+          change_ids: (item.changes || []).map((v) => v.id),
+          work_item_ids: [],
+        }
+      : {
+          version: "",
+          title: "",
+          description: "",
+          change_ids: [],
+          work_item_ids: [],
+        };
 }
-async function deleteVersion() {
-  if (!confirm(`删除版本「${selected.value.version}」及其全部变更内容？`)) return
-  try { await request(`api/change-versions/${selected.value.id}`, { method: 'DELETE' }); toast('版本已删除', 'success'); selected.value = null; await loadVersions() } catch (error) { toast(error.message, 'error') }
+function addWorkChanges(ids) {
+  const included = readyChanges.value
+    .filter((c) => (c.work_items || []).some((w) => ids.includes(w.id)))
+    .map((c) => c.id);
+  form.value.change_ids = [...new Set([...form.value.change_ids, ...included])];
 }
-function openWork() { workForm.value = { source: 'manual', external_id: '', kind: 'requirement', title: '', url: '', status: '' }; showWork.value = true }
-async function addWork() {
-  if (!workForm.value.title?.trim()) return toast('需求或缺陷标题必填', 'warning')
-  try { await request(`api/change-versions/${selected.value.id}/work-items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(workForm.value) }); showWork.value = false; toast('需求已关联', 'success'); await loadVersions(selected.value.id) } catch (error) { toast(error.message, 'error') }
-}
-function openChange() { changeForm.value = { kind: 'artifact', title: '', service: '', reference: '', summary: '', risk_level: 'medium', rollback_plan: '' }; showChange.value = true }
-async function addChange() {
-  if (!changeForm.value.title?.trim()) return toast('变更标题必填', 'warning')
-  try { await request(`api/change-versions/${selected.value.id}/changes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changeForm.value) }); showChange.value = false; toast('变更项已添加', 'success'); await loadVersions(selected.value.id) } catch (error) { toast(error.message, 'error') }
-}
-async function removeItem(type, id) {
-  if (!confirm('删除这条记录？')) return
-  try { await request(`api/change-versions/${selected.value.id}/${type}/${id}`, { method: 'DELETE' }); await loadVersions(selected.value.id) } catch (error) { toast(error.message, 'error') }
-}
-async function action(name) {
-  const labels = { submit: '提交审核', approve: '审核通过', reject: '驳回', reopen: '重新编辑', complete: '归档', cancel: '取消' }
-  if (['reject', 'cancel', 'complete'].includes(name) && !confirm(`确认${labels[name]}当前版本？`)) return
-  try { const body = await request(`api/change-versions/${selected.value.id}/${name}`, { method: 'POST' }); toast(`${labels[name]}成功`, 'success'); await loadVersions(body.id) } catch (error) { toast(error.message, 'error') }
-}
-async function initialize() {
+async function save() {
+  if (!form.value.title?.trim()) return toast("请填写标题", "warning");
+  if (
+    dialog.value === "versions" &&
+    (!form.value.version?.trim() || !form.value.change_ids?.length)
+  )
+    return toast("请填写版本号并选择至少一项已就绪变更", "warning");
+  saving.value = true;
+  const endpoint = {
+    work: "work-items",
+    changes: "changes",
+    versions: "release-versions",
+  }[dialog.value];
   try {
-    [environments.value, services.value, me.value] = await Promise.all([request('api/environments'), request('api/services'), request('/api/me')])
-    await loadVersions()
-  } catch (error) { toast(error.message, 'error') }
+    await api(`api/${endpoint}${form.value.id ? "/" + form.value.id : ""}`, {
+      method: form.value.id ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form.value),
+    });
+    dialog.value = "";
+    await load();
+    toast("已保存", "success");
+  } catch (e) {
+    toast(e.message, "error");
+  } finally {
+    saving.value = false;
+  }
 }
-onMounted(initialize)
+async function action(type, item, op) {
+  if (
+    !confirm(
+      `${op === "delete" ? "删除" : op === "ready" ? "标记就绪" : "退回草稿"}「${item.title}」？`,
+    )
+  )
+    return;
+  try {
+    const endpoint = type === "versions" ? "release-versions" : "changes";
+    await api(`api/${endpoint}/${item.id}${op === "delete" ? "" : "/" + op}`, {
+      method: op === "delete" ? "DELETE" : "POST",
+    });
+    await load();
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+watch(tab, () => {
+  query.value = "";
+  filter.value = "";
+});
+onMounted(async () => {
+  me.value = await api("/api/me").catch(() => ({
+    username: "local",
+    role: "admin",
+  }));
+  await load();
+});
 </script>
-
 <template>
-  <div class="changes-page">
-    <div class="page-head">
-      <div><div class="title-row"><h2>变更中心</h2><HelpTip text="一个版本聚合需求、应用制品、SQL、配置和人工操作；审核通过后才进入后续发布编排。" /></div><p>先确认“本次为什么改、具体改什么、失败怎么退”，再组织发布。</p></div>
-      <ElButton type="primary" @click="openVersion()">＋ 新建版本</ElButton>
+  <div class="change-center">
+    <div class="heading">
+      <div class="title">
+        <h2>变更管控</h2>
+        <HelpTip
+          text="需求与变更独立存在；发布版本汇总本次交付范围，不绑定环境。执行时由部署编排选择环境，审核的是具体执行快照。"
+        />
+      </div>
+      <ElButton type="primary" @click="open(tab)"
+        >＋
+        {{
+          tab === "work"
+            ? "新建需求 / 关联 BUG"
+            : tab === "versions"
+              ? "创建发布版本"
+              : "新建变更"
+        }}</ElButton
+      >
     </div>
+    <nav class="tabs">
+      <button
+        v-for="item in [
+          { key: 'work', label: '需求与 BUG' },
+          { key: 'changes', label: '独立变更' },
+          { key: 'versions', label: '发布版本' },
+        ]"
+        :key="item.key"
+        :class="{ active: tab === item.key }"
+        @click="router.replace({ path: '/changes', query: { tab: item.key } })"
+      >
+        {{ item.label }}
+      </button>
+    </nav>
     <div class="toolbar">
-      <Sel v-model="statusFilter" :options="statusOptions" all-label="全部状态" width="150px" @change="loadVersions()" />
-      <Sel v-model="environmentFilter" :options="environments.map(v=>({value:v.name,label:v.display_name}))" all-label="全部环境" width="150px" @change="loadVersions()" />
-      <span>共 {{ versions.length }} 个版本</span>
+      <ElInput
+        v-model="query"
+        placeholder="搜索标题、版本、外部编号或应用"
+        clearable
+        style="max-width: 420px"
+      /><Sel
+        v-model="filter"
+        :options="
+          (tab === 'work'
+            ? ['open', 'closed']
+            : tab === 'versions'
+              ? ['draft', 'ready', 'completed']
+              : ['draft', 'ready']
+          ).map((v) => ({ value: v, label: labels[v] }))
+        "
+        all-label="全部状态"
+      /><span>{{ list.length }} 条</span><ElButton @click="load">刷新</ElButton>
     </div>
-    <div v-if="versions.length" class="workspace">
-      <aside class="version-list">
-        <button v-for="version in versions" :key="version.id" :class="{ active:selected?.id===version.id }" @click="selectVersion(version.id)">
-          <div><b>{{ version.version }}</b><span :class="['badge',statusClass(version.status)]">{{ statusText[version.status] || version.status }}</span></div>
-          <strong>{{ version.title }}</strong>
-          <small>{{ environmentName(version.environment) }} · {{ version.owner || '未知发起人' }}</small>
+    <div v-if="!list.length" class="empty">
+      <h3>
+        尚无{{
+          tab === "work"
+            ? "需求与缺陷"
+            : tab === "versions"
+              ? "发布版本"
+              : "变更"
+        }}
+      </h3>
+      <p>
+        {{
+          tab === "versions"
+            ? "先将变更标记就绪，再选择需求或变更创建版本。"
+            : "可以独立创建，不需要先建立发布版本。"
+        }}
+      </p>
+      <ElButton @click="open(tab)">新建</ElButton>
+    </div>
+    <article v-for="item in list" :key="item.id" class="record">
+      <div class="record-head">
+        <div>
+          <span class="tag">{{
+            tab === "versions"
+              ? item.version
+              : tab === "work"
+                ? item.kind === "bug"
+                  ? "BUG"
+                  : "需求"
+                : kindLabel(item.kind)
+          }}</span
+          ><strong>{{ item.title }}</strong>
+        </div>
+        <span class="status">{{ labels[item.status] || item.status }}</span>
+      </div>
+      <p>{{ item.summary || item.description || "暂无说明" }}</p>
+      <div class="meta">
+        <span>#{{ item.id }} · {{ item.owner }}</span
+        ><span v-if="item.service">应用 {{ item.service }}</span
+        ><span v-if="item.external_id"
+          >{{ item.source }} / {{ item.external_id }}</span
+        ><a
+          v-if="safeURL(item.url)"
+          :href="safeURL(item.url)"
+          target="_blank"
+          rel="noopener noreferrer"
+          >外部记录</a
+        >
+      </div>
+      <template v-if="tab === 'changes'"
+        ><code v-if="item.reference">{{ item.reference }}</code>
+        <div class="meta">
+          关联需求：{{
+            (item.work_items || []).map((v) => v.title).join("、") ||
+            "无（独立变更）"
+          }}
+          ·
+          {{
+            item.risk_level === "high"
+              ? "高"
+              : item.risk_level === "low"
+                ? "低"
+                : "中"
+          }}风险
+        </div>
+      </template>
+      <template v-if="tab === 'versions'"
+        ><div class="chips">
+          <span v-for="c in item.changes" :key="c.id"
+            >{{ kindLabel(c.kind) }} · {{ c.title }}
+            <small v-if="c.service">/ {{ c.service }}</small></span
+          >
+        </div>
+        <div class="meta">
+          部署范围：{{
+            [
+              ...new Set(
+                (item.changes || [])
+                  .filter((c) => ["code", "artifact"].includes(c.kind))
+                  .map((c) => c.service)
+                  .filter(Boolean),
+              ),
+            ].join("、") || "仅非代码变更，不自动发布服务"
+          }}
+          · 不绑定环境
+        </div></template
+      >
+      <div v-if="tab === 'versions'" class="chips">
+        <button
+          v-for="run in deliveries.filter(
+            (r) => r.plan.version?.id === item.id,
+          )"
+          :key="run.id"
+          @click="
+            router.push({
+              path: '/orchestration',
+              query: { run: String(run.id) },
+            })
+          "
+        >
+          {{ run.plan.environment.display_name }} · #{{ run.id }} ·
+          {{
+            {
+              pending_approval: "待审核",
+              approved: "待执行",
+              running: "执行中",
+              success: "成功",
+              failed: "失败",
+              rejected: "已驳回",
+              canceled: "已取消",
+            }[run.status] || run.status
+          }}
         </button>
-      </aside>
-      <section v-if="selected" class="detail">
-        <div class="detail-head">
-          <div><div class="eyebrow">{{ environmentName(selected.environment) }} · #{{ selected.id }}</div><h3>{{ selected.version }} · {{ selected.title }}</h3><p>{{ selected.description || '暂无版本说明' }}</p></div>
-          <span :class="['state',statusClass(selected.status)]">{{ statusText[selected.status] || selected.status }}</span>
+      </div>
+      <div class="actions">
+        <template v-if="canManage(item)"
+          ><ElButton
+            v-if="tab === 'work' || item.status === 'draft'"
+            size="small"
+            @click="open(tab, item)"
+            >编辑</ElButton
+          ><ElButton
+            v-if="tab !== 'work' && item.status === 'draft'"
+            size="small"
+            type="primary"
+            @click="action(tab, item, 'ready')"
+            >标记就绪</ElButton
+          ><ElButton
+            v-if="tab === 'changes' && item.status === 'ready'"
+            size="small"
+            @click="action(tab, item, 'reopen')"
+            >退回草稿</ElButton
+          ><ElButton
+            v-if="tab !== 'work' && item.status === 'draft'"
+            size="small"
+            @click="action(tab, item, 'delete')"
+            >删除</ElButton
+          ></template
+        ><ElButton
+          v-if="
+            tab === 'versions' && ['ready', 'completed'].includes(item.status)
+          "
+          size="small"
+          type="primary"
+          @click="
+            router.push({
+              path: '/orchestration',
+              query: { version: String(item.id) },
+            })
+          "
+          >按版本发起编排</ElButton
+        >
+      </div>
+    </article>
+    <Modal
+      :show="!!dialog"
+      :title="
+        dialog === 'work'
+          ? '需求 / BUG'
+          : dialog === 'versions'
+            ? '发布版本'
+            : '独立变更'
+      "
+      extra-wide
+      @close="dialog = ''"
+    >
+      <form class="form-grid" @submit.prevent="save">
+        <label class="span">标题<ElInput v-model="form.title" /></label>
+        <template v-if="dialog === 'work'"
+          ><label
+            >类型<Sel
+              v-model="form.kind"
+              :options="[
+                { value: 'requirement', label: '需求' },
+                { value: 'bug', label: 'BUG' },
+              ]"
+              width="100%" /></label
+          ><label
+            >来源<Sel
+              v-model="form.source"
+              :options="[
+                { value: 'manual', label: '自定义' },
+                { value: 'zentao', label: '禅道（手工关联）' },
+                { value: 'external', label: '其他外部平台' },
+              ]"
+              width="100%" /></label
+          ><label v-if="form.source !== 'manual'"
+            >外部编号<ElInput v-model="form.external_id" /></label
+          ><label v-if="form.source !== 'manual'"
+            >记录链接<ElInput v-model="form.url" /></label
+          ><label v-if="form.id"
+            >状态<Sel
+              v-model="form.status"
+              :options="[
+                { value: 'open', label: '进行中' },
+                { value: 'closed', label: '已关闭' },
+              ]"
+              width="100%" /></label
+          ><label class="span"
+            >说明<ElInput v-model="form.description" type="textarea" :rows="3"
+          /></label>
+          <p class="notice span">
+            本版支持外部记录关联；禅道自动同步、日期基线及上线状态回写尚未接通。
+          </p></template
+        >
+        <template v-if="dialog === 'changes'"
+          ><label
+            >变更类型<Sel
+              v-model="form.kind"
+              :options="kinds"
+              width="100%" /></label
+          ><label
+            >关联应用<Sel
+              v-model="form.service"
+              :options="services.map((s) => ({ value: s.name, label: s.name }))"
+              all-label="不关联应用"
+              filterable
+              width="100%" /></label
+          ><label class="span"
+            >{{
+              form.kind === "code"
+                ? "代码分支"
+                : form.kind === "artifact"
+                  ? "制品说明 / 标识"
+                  : form.kind === "nacos"
+                    ? "配置项与期望值（本版记录）"
+                    : form.kind === "mysql"
+                      ? "SQL 内容（本版记录）"
+                      : "实施内容（本版记录）"
+            }}<ElInput
+              v-model="form.reference"
+              type="textarea"
+              :rows="3" /></label
+          ><label
+            >关联需求 / BUG（可选）<Sel
+              v-model="form.work_item_ids"
+              multiple
+              :options="
+                work.map((w) => ({ value: w.id, label: `#${w.id} ${w.title}` }))
+              "
+              filterable
+              width="100%" /></label
+          ><label
+            >风险等级<Sel
+              v-model="form.risk_level"
+              :options="[
+                { value: 'low', label: '低' },
+                { value: 'medium', label: '中' },
+                { value: 'high', label: '高' },
+              ]"
+              width="100%" /></label
+          ><label
+            >变更说明<ElInput
+              v-model="form.summary"
+              type="textarea"
+              :rows="3" /></label
+          ><label
+            >回退方案<ElInput
+              v-model="form.rollback_plan"
+              type="textarea"
+              :rows="3"
+          /></label>
+          <p
+            v-if="!['code', 'artifact', 'manual'].includes(form.kind)"
+            class="notice span"
+          >
+            该类变更目前可登记、关联和进入版本；执行器未接通，编排会阻止提交，不会自动执行或标记成功。
+          </p></template
+        >
+        <template v-if="dialog === 'versions'"
+          ><label
+            >版本号<ElInput
+              v-model="form.version"
+              placeholder="例如 2026.10.1" /></label
+          ><label
+            >按需求 / BUG 自动加入变更<Sel
+              v-model="form.work_item_ids"
+              multiple
+              :options="work.map((w) => ({ value: w.id, label: w.title }))"
+              filterable
+              width="100%"
+              @change="addWorkChanges" /></label
+          ><label class="span"
+            >选择已就绪变更（可增删）<Sel
+              v-model="form.change_ids"
+              multiple
+              :options="
+                readyChanges.map((c) => ({
+                  value: c.id,
+                  label: `${kindLabel(c.kind)} · ${c.title}${c.service ? ' / ' + c.service : ''}`,
+                }))
+              "
+              filterable
+              width="100%"
+          /></label>
+          <div class="selection span">
+            <p v-for="id in form.change_ids" :key="id">
+              {{ changes.find((c) => c.id === id)?.title }}
+              <button
+                type="button"
+                @click="
+                  form.change_ids = form.change_ids.filter((v) => v !== id)
+                "
+              >
+                移除
+              </button>
+            </p>
+          </div>
+          <label class="span"
+            >版本说明<ElInput
+              v-model="form.description"
+              type="textarea"
+              :rows="3"
+          /></label>
+          <p class="notice span">
+            需求选择只追加关联的已就绪变更，需核对完整范围。创建版本不自动合并代码、不执行变更；推进环境与审核在部署编排中完成。
+          </p></template
+        >
+        <div class="footer span">
+          <ElButton native-type="button" @click="dialog = ''">取消</ElButton
+          ><ElButton type="primary" native-type="submit" :loading="saving"
+            >保存</ElButton
+          >
         </div>
-        <div class="meta"><span>发起人 <b>{{ selected.owner }}</b></span><span v-if="selected.approver">审核人 <b>{{ selected.approver }}</b></span><span>更新 {{ new Date(selected.updated_at*1000).toLocaleString() }}</span></div>
-        <div class="actions">
-          <template v-if="manageable">
-            <ElButton v-if="editable" @click="editVersion">编辑版本</ElButton>
-            <ElButton v-if="editable" type="primary" @click="action('submit')">提交审核</ElButton>
-            <ElButton v-if="['rejected','approved'].includes(selected.status)" @click="action('reopen')">重新编辑</ElButton>
-            <ElButton v-if="selected.status==='approved'" type="primary" @click="action('complete')">确认完成并归档</ElButton>
-            <ElButton v-if="['draft','rejected','pending_approval','approved'].includes(selected.status)" @click="action('cancel')">取消版本</ElButton>
-            <ElButton v-if="['draft','rejected','canceled'].includes(selected.status)" @click="deleteVersion">删除</ElButton>
-          </template>
-          <template v-if="canReview"><ElButton type="primary" @click="action('approve')">审核通过</ElButton><ElButton @click="action('reject')">驳回</ElButton></template>
-        </div>
-
-        <article class="block">
-          <header><div><h4>需求与缺陷</h4><p>可以手工新建，也可以填写外部系统编号和链接。</p></div><ElButton v-if="editable && manageable" size="small" @click="openWork">＋ 添加</ElButton></header>
-          <div v-if="selected.work_items?.length" class="rows">
-            <div v-for="item in selected.work_items" :key="item.id" class="row">
-              <span class="type">{{ item.kind==='bug'?'缺陷':'需求' }}</span><div><b>{{ item.title }}</b><small>{{ item.source==='manual'?'手工录入':item.source }}<template v-if="item.external_id"> · {{ item.external_id }}</template><template v-if="item.status"> · {{ item.status }}</template></small></div>
-              <a v-if="item.url" :href="item.url" target="_blank">查看</a><button v-if="editable && manageable" class="op del" @click="removeItem('work-items',item.id)">删除</button>
-            </div>
-          </div><div v-else class="empty-mini">尚未关联需求；没有外部 Bug 时可直接添加手工需求。</div>
-        </article>
-
-        <article class="block">
-          <header><div><h4>实施变更</h4><p>制品、数据库、配置和人工操作统一进入本版本。</p></div><ElButton v-if="editable && manageable" size="small" @click="openChange">＋ 添加</ElButton></header>
-          <div v-if="selected.changes?.length" class="change-grid">
-            <div v-for="item in selected.changes" :key="item.id" class="change-card">
-              <div><span class="type">{{ kindText[item.kind] || item.kind }}</span><span :class="['risk',item.risk_level]">{{ riskText[item.risk_level] || item.risk_level }}风险</span></div>
-              <b>{{ item.title }}</b><small v-if="item.service">应用：{{ item.service }}</small><code v-if="item.reference">{{ item.reference }}</code><p>{{ item.summary || '暂无实施说明' }}</p><p class="rollback">回退：{{ item.rollback_plan || '未填写' }}</p>
-              <button v-if="editable && manageable" class="op del" @click="removeItem('changes',item.id)">删除</button>
-            </div>
-          </div><div v-else class="empty-mini">尚未添加实施变更，提交前至少需要一项。</div>
-        </article>
-      </section>
-    </div>
-    <div v-else class="empty-state"><span>🧾</span><h3>建立第一个发布版本</h3><p>把分散的需求、制品、SQL 和配置归入同一个可审核版本。</p><ElButton type="primary" @click="openVersion()">新建版本</ElButton></div>
-
-    <Modal :show="showVersion" :title="versionForm._id ? '编辑版本' : '新建版本'" wide @close="showVersion=false">
-      <div class="form-grid"><div class="fld"><label>版本号</label><ElInput v-model="versionForm.version" placeholder="如 2026.10.1" /></div><div class="fld"><label>目标环境</label><Sel v-model="versionForm.environment" :options="environments.map(v=>({value:v.name,label:v.display_name}))" width="100%" /></div></div>
-      <div class="fld"><label>版本标题</label><ElInput v-model="versionForm.title" placeholder="说明本次版本的业务目标" /></div>
-      <div class="fld"><label>版本说明</label><textarea v-model="versionForm.description" rows="4" placeholder="范围、窗口和注意事项"></textarea></div>
-      <div class="dialog-actions"><ElButton @click="showVersion=false">取消</ElButton><ElButton type="primary" :loading="saving" @click="saveVersion">保存</ElButton></div>
-    </Modal>
-
-    <Modal :show="showWork" title="添加需求或缺陷" wide @close="showWork=false">
-      <div class="form-grid"><div class="fld"><label>来源</label><select v-model="workForm.source"><option value="manual">手工录入</option><option value="external">外部工作项</option></select></div><div class="fld"><label>类型</label><select v-model="workForm.kind"><option value="requirement">需求</option><option value="bug">缺陷</option></select></div></div>
-      <div class="fld"><label>标题</label><ElInput v-model="workForm.title" placeholder="需求或缺陷标题" /></div>
-      <div class="form-grid"><div class="fld"><label>外部编号（可选）</label><ElInput v-model="workForm.external_id" placeholder="如 ZT-1024" /></div><div class="fld"><label>外部状态（可选）</label><ElInput v-model="workForm.status" placeholder="如 已关闭/待上线" /></div></div>
-      <div class="fld"><label>链接（可选）</label><ElInput v-model="workForm.url" placeholder="https://..." /></div>
-      <div class="dialog-actions"><ElButton @click="showWork=false">取消</ElButton><ElButton type="primary" @click="addWork">添加</ElButton></div>
-    </Modal>
-
-    <Modal :show="showChange" title="添加实施变更" wide @close="showChange=false">
-      <div class="form-grid"><div class="fld"><label>变更类型</label><select v-model="changeForm.kind"><option v-for="item in changeKinds" :key="item.value" :value="item.value">{{ item.label }}</option></select></div><div class="fld"><label>风险等级</label><select v-model="changeForm.risk_level"><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select></div></div>
-      <div class="fld"><label>标题</label><ElInput v-model="changeForm.title" placeholder="例如：发布 AI 服务、执行用户表索引" /></div>
-      <div class="form-grid"><div class="fld"><label>关联应用（可选）</label><Sel v-model="changeForm.service" :options="services.map(v=>({value:v.name,label:v.name}))" all-label="不关联应用" width="100%" /></div><div class="fld"><label>制品 / SQL / 配置引用</label><ElInput v-model="changeForm.reference" placeholder="artifact:24、sql:v3、nacos:dataId@v2" /></div></div>
-      <div class="fld"><label>实施说明</label><textarea v-model="changeForm.summary" rows="3" placeholder="执行内容和前置条件"></textarea></div>
-      <div class="fld"><label>回退方案</label><textarea v-model="changeForm.rollback_plan" rows="3" placeholder="失败后如何恢复"></textarea></div>
-      <div class="dialog-actions"><ElButton @click="showChange=false">取消</ElButton><ElButton type="primary" @click="addChange">添加</ElButton></div>
+      </form>
     </Modal>
   </div>
 </template>
-
 <style scoped>
-.changes-page{max-width:1500px;margin:0 auto}.page-head{display:flex;align-items:flex-start;gap:16px;margin-bottom:12px}.page-head>button{margin-left:auto}.page-head h2{font-size:20px}.page-head p,.block header p{color:var(--muted);font-size:12px}.title-row{display:flex;align-items:center;gap:7px}.toolbar{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:9px;margin-bottom:12px}.toolbar>span{margin-left:auto;color:var(--dim);font-size:11px}.workspace{display:grid;grid-template-columns:270px minmax(0,1fr);gap:12px;min-height:calc(100vh - 145px)}.version-list{background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:6px;overflow:auto}.version-list button{display:block;width:100%;border:0;background:transparent;text-align:left;padding:10px;cursor:pointer}.version-list button+button{border-top:1px solid var(--border)}.version-list button.active{background:var(--panel2)}.version-list button>div{display:flex;align-items:center;gap:6px}.version-list strong{display:block;font-size:12px;margin:4px 0}.version-list small,.row small,.change-card small{display:block;color:var(--dim)}.badge,.state{border-radius:10px;padding:1px 7px;font-size:10px}.badge{margin-left:auto}.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}.bad{color:var(--error);background:color-mix(in srgb,var(--error) 10%,transparent)}.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 12%,transparent)}.dim{color:var(--muted);background:var(--panel2)}.detail{min-width:0}.detail-head{display:flex;align-items:flex-start;background:var(--panel);border:1px solid var(--border);border-radius:9px 9px 0 0;padding:15px}.detail-head h3{font-size:17px;margin:2px 0}.detail-head p{color:var(--muted)}.detail-head .state{margin-left:auto;font-size:11px}.eyebrow{color:var(--brand);font-size:10px}.meta{display:flex;gap:20px;padding:8px 15px;background:var(--panel2);color:var(--muted);font-size:11px}.actions{display:flex;justify-content:flex-end;gap:7px;padding:10px;background:var(--panel);border:1px solid var(--border);border-top:0;border-radius:0 0 9px 9px}.block{margin-top:12px;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:13px}.block header{display:flex;align-items:center;margin-bottom:10px}.block header h4{font-size:13px}.block header button{margin-left:auto}.rows{border-top:1px solid var(--border)}.row{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--border)}.row>div{flex:1}.row>a{color:var(--brand)}.type{font-size:10px;color:var(--brand);background:var(--panel2);padding:2px 6px;border-radius:5px;white-space:nowrap}.empty-mini{padding:18px;text-align:center;color:var(--dim);background:var(--panel2);border-radius:6px}.change-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px}.change-card{position:relative;border:1px solid var(--border);border-radius:7px;padding:10px;min-width:0}.change-card>div{display:flex;gap:6px;margin-bottom:7px}.change-card>b,.change-card code{display:block;margin-bottom:5px}.change-card code{font-size:10px;word-break:break-all;color:var(--brand)}.change-card p{font-size:11px;color:var(--muted);white-space:pre-wrap}.change-card .rollback{margin-top:7px;padding-top:7px;border-top:1px dashed var(--border)}.change-card .op{position:absolute;right:2px;top:8px}.risk{font-size:9px}.risk.low{color:var(--ok)}.risk.medium{color:var(--warn)}.risk.high{color:var(--error)}.empty-state{height:55vh;display:flex;flex-direction:column;align-items:center;justify-content:center;border:1px dashed var(--border);border-radius:9px;color:var(--muted)}.empty-state span{font-size:32px}.empty-state h3{color:var(--text);margin:10px}.empty-state button{margin-top:14px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.fld select,.fld textarea{width:100%}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}@media(max-width:900px){.workspace{grid-template-columns:1fr}.version-list{max-height:230px}.form-grid{grid-template-columns:1fr}.meta{flex-wrap:wrap}.actions{flex-wrap:wrap}}
+.change-center {
+  max-width: 1500px;
+  margin: auto;
+}
+.heading,
+.title,
+.toolbar,
+.record-head,
+.actions,
+.meta,
+.chips {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.heading,
+.record-head {
+  justify-content: space-between;
+}
+.title h2 {
+  margin: 0;
+}
+.tabs {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid var(--border);
+  margin: 20px 0;
+}
+.tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  padding: 12px 4px;
+  cursor: pointer;
+}
+.tabs button.active {
+  color: var(--brand);
+  border-color: var(--brand);
+}
+.toolbar {
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.toolbar span,
+.meta,
+p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.record {
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+.record-head > div {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.tag,
+.status,
+.chips span {
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--panel2);
+  font-size: 12px;
+}
+.meta,
+.chips {
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.record code {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--panel2);
+  padding: 12px;
+  font-size: 12px;
+  max-height: 150px;
+  overflow: auto;
+}
+.actions {
+  margin-top: 12px;
+}
+.empty {
+  text-align: center;
+  padding: 70px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.form-grid label {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  min-width: 0;
+}
+.span {
+  grid-column: 1/-1;
+}
+.notice {
+  background: var(--panel2);
+  padding: 12px;
+  border-radius: 8px;
+  line-height: 1.6;
+  margin: 0;
+}
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.selection p {
+  margin: 5px 0;
+  display: flex;
+  justify-content: space-between;
+}
+.selection button {
+  background: none;
+  border: 0;
+  color: var(--brand);
+  cursor: pointer;
+}
+@media (max-width: 700px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .heading {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .record-head {
+    align-items: flex-start;
+  }
+  .record-head > div {
+    flex-wrap: wrap;
+  }
+}
 </style>

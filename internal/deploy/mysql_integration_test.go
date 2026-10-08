@@ -65,4 +65,42 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	if got := st.GetRun(run.ID); got == nil || got.Trigger != "manual" || got.Status != "canceled" || !strings.Contains(st.RunLog(run.ID), "mysql smoke") {
 		t.Fatalf("pipeline round-trip failed: %#v", got)
 	}
+	change := &Change{Kind: "manual", Title: "MySQL 中文交付验证", Owner: "local"}
+	if err := st.CreateChange(change); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetChangeReady(change.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	version := &ReleaseVersion{Version: "mysql-smoke", Title: "MySQL 编排版本", Owner: "local"}
+	if err := st.CreateReleaseVersion(version); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetReleaseVersionChanges(version.ID, []int64{change.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetReleaseVersionReady(version.ID); err != nil {
+		t.Fatal(err)
+	}
+	tpl := &DeliveryTemplate{Name: "MySQL 编排", Mode: "version", Owner: "local", Nodes: []DeliveryNode{{ID: "check", Kind: "manual", Name: "人工验收", Instructions: "确认数据库验证通过"}}}
+	if err := st.SaveDeliveryTemplate(tpl); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveDeliveryTemplate(tpl); err != nil {
+		t.Fatal(err)
+	} // idempotent update
+	manager := NewReleaseManager(st, nil)
+	delivery, err := st.CreateDeliveryRun(DeliveryRequest{TemplateID: tpl.ID, VersionID: version.ID, Environment: "test"}, "local", manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.AdvanceDeliveryRun(delivery.ID, "local", true, manager); err != nil {
+		t.Fatal(err)
+	}
+	if completed, err := st.AdvanceDeliveryRun(delivery.ID, "local", false, manager); err != nil || completed.Status != "success" {
+		t.Fatalf("delivery completion: %#v %v", completed, err)
+	}
+	if len(st.ReleaseVersions("", 100)) != 1 || len(st.DeliveryRuns()) != 1 || len(st.DeliveryTemplates()) != 1 {
+		t.Fatal("MySQL delivery persistence is incomplete")
+	}
 }

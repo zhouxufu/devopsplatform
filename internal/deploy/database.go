@@ -121,7 +121,7 @@ func openDeployDatabase(cfg DatabaseConfig) (*deployDB, error) {
 }
 
 func migrateMySQLDeploySchema(db *deployDB) error {
-	for _, ddl := range mysqlDeploySchema {
+	for _, ddl := range append(append([]string{}, mysqlDeploySchema...), deliverySchema("mysql")...) {
 		if _, err := db.Exec(ddl); err != nil {
 			return fmt.Errorf("migrate deploy mysql schema: %w", err)
 		}
