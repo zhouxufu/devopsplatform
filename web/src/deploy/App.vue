@@ -5,6 +5,7 @@ import { toast } from '../shared/composables/toast.js'
 import PlatformNav from '../shared/components/PlatformNav.vue'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
 const embedded = window.parent !== window.window
+const directAPI = !location.pathname.startsWith('/api/plugins/')
 const route = useRoute(), router = useRouter()
 const globalEnvironment = ref(sessionStorage.getItem('lp-deploy-environment') || '')
 const globalService = ref('')
@@ -71,7 +72,7 @@ try { if (embedded) window.parent.postMessage({ type: 'context.request' }, locat
       <PlatformNav @open="platformPanel=$event" />
     </header>
     <main><RouterView /></main>
-    <PlatformPanel :view="platformPanel" plugin="deploy" @switch="platformPanel=$event" @close="platformPanel=''" />
+    <PlatformPanel :view="platformPanel" plugin="deploy" :directAPI="directAPI" @switch="platformPanel=$event" @close="platformPanel=''" />
   </div>
 </template>
 <style scoped>

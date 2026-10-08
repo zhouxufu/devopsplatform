@@ -103,6 +103,9 @@ func TestChangeAllowsIndependentWorkAndRequiresReadyChange(t *testing.T) {
 	if err := st.SetReleaseVersionChanges(version.ID, []int64{change.ID}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.SetReleaseVersionReady(version.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.SetChangeReady(change.ID, false); err == nil {
 		t.Fatal("versioned change was reopened")
 	}

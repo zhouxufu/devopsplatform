@@ -20,6 +20,7 @@ import (
 
 func integrationSchema(identity, doc string) []string {
 	return []string{
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS release_version_scope (release_version_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS change_payloads (change_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS issue_sync_state (connection VARCHAR(191) PRIMARY KEY, last_at BIGINT NOT NULL, status VARCHAR(32) NOT NULL, detail %s NOT NULL)`, doc),
 		`CREATE TABLE IF NOT EXISTS external_work_items (connection VARCHAR(191) NOT NULL, kind VARCHAR(32) NOT NULL, external_id VARCHAR(191) NOT NULL, work_item_id BIGINT NOT NULL, PRIMARY KEY(connection,kind,external_id))`,

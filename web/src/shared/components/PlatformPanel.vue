@@ -5,6 +5,7 @@ import ResourcesView from '../../deploy/pages/ResourcesView.vue'
 const props = defineProps({
   view: { type: String, default: '' },
   plugin: { type: String, default: 'deploy' },
+  directAPI: Boolean,
 })
 const emit = defineEmits(['close', 'switch'])
 function onKeydown(event) { if (props.view && event.key === 'Escape') emit('close') }
@@ -21,7 +22,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <nav><button type="button" :class="{active:view==='apps'}" @click="$emit('switch','apps')">📦 应用中心</button><button type="button" :class="{active:view==='resources'}" @click="$emit('switch','resources')">🖥 资源中心</button></nav>
         <button class="close" type="button" aria-label="关闭并返回原页面" title="关闭并返回原页面" @click="$emit('close')">×</button>
       </header>
-      <main><ApplicationCenterView v-if="view==='apps'"/><ResourcesView v-else-if="view==='resources'" :plugin="plugin"/></main>
+      <main><ApplicationCenterView v-if="view==='apps'"/><ResourcesView v-else-if="view==='resources'" :plugin="plugin" :directAPI="directAPI"/></main>
     </aside>
   </div>
 </template>

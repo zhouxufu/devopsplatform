@@ -58,6 +58,7 @@ var deployMigrationTables = func() []deployMigrationTable {
 		migrationTable("work_item_changes", "work_item_id,change_id", "work_item_id,change_id"),
 		migrationTable("release_versions", "id,version,title,description,status,owner,created_at,updated_at", "id"),
 		migrationTable("release_version_changes", "release_version_id,change_id,sort_order", "release_version_id,change_id"),
+		migrationTable("release_version_scope", "release_version_id,document", "release_version_id"),
 		migrationTable("release_promotions", "id,release_version_id,environment,status,actor,approver,created_at,updated_at", "id"),
 		migrationTable("application_resource_requirements", "service,alias,kind,required,description", "service,alias"),
 		migrationTable("application_environment_resources", "service,environment,alias,connection,config,updated_at", "service,environment,alias"),

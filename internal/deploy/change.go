@@ -3,6 +3,7 @@ package deploy
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -64,16 +65,18 @@ type Change struct {
 }
 
 type ReleaseVersion struct {
-	ID          int64              `json:"id"`
-	Version     string             `json:"version"`
-	Title       string             `json:"title"`
-	Description string             `json:"description,omitempty"`
-	Status      string             `json:"status"`
-	Owner       string             `json:"owner,omitempty"`
-	CreatedAt   int64              `json:"created_at"`
-	UpdatedAt   int64              `json:"updated_at"`
-	Changes     []Change           `json:"changes,omitempty"`
-	Promotions  []ReleasePromotion `json:"promotions,omitempty"`
+	ID              int64              `json:"id"`
+	Version         string             `json:"version"`
+	Title           string             `json:"title"`
+	Description     string             `json:"description,omitempty"`
+	Status          string             `json:"status"`
+	Owner           string             `json:"owner,omitempty"`
+	CreatedAt       int64              `json:"created_at"`
+	UpdatedAt       int64              `json:"updated_at"`
+	Changes         []Change           `json:"changes,omitempty"`
+	Promotions      []ReleasePromotion `json:"promotions,omitempty"`
+	WorkItems       []WorkItem         `json:"work_items"`
+	ManualChangeIDs []int64            `json:"manual_change_ids"`
 }
 
 type ReleasePromotion struct {
@@ -211,21 +214,65 @@ func (s *Store) UpdateWorkItem(v *WorkItem) error {
 }
 
 func (s *Store) DeleteWorkItem(id int64) error {
-	if current := s.GetWorkItem(id); current != nil && strings.HasPrefix(current.Source, "zentao:") {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE work_items SET updated_at=updated_at WHERE id=?`, id); err != nil {
+		return err
+	}
+	var source string
+	if err = tx.QueryRow(`SELECT source FROM work_items WHERE id=?`, id).Scan(&source); err != nil {
+		return fmt.Errorf("需求或缺陷不存在")
+	}
+	if strings.HasPrefix(source, "zentao:") {
 		return fmt.Errorf("同步的外部记录不能直接删除；请调整同步范围")
 	}
+	rows, err := tx.Query(`SELECT document FROM release_version_scope`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var scope VersionScope
+		if err = json.Unmarshal([]byte(raw), &scope); err != nil {
+			rows.Close()
+			return err
+		}
+		for _, wid := range scope.WorkItemIDs {
+			if wid == id {
+				rows.Close()
+				return fmt.Errorf("需求已纳入版本范围，请先从草稿版本移出")
+			}
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
 	var refs int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM work_item_changes WHERE work_item_id=?`, id).Scan(&refs)
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM work_item_changes WHERE work_item_id=?`, id).Scan(&refs); err != nil {
+		return err
+	}
 	if refs > 0 {
 		return fmt.Errorf("需求已关联变更，不能删除")
 	}
-	result, err := s.db.Exec(`DELETE FROM work_items WHERE id=?`, id)
+	result, err := tx.Exec(`DELETE FROM work_items WHERE id=?`, id)
 	if err == nil {
 		if n, _ := result.RowsAffected(); n == 0 {
 			return fmt.Errorf("需求或缺陷不存在")
 		}
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 const changeSelect = `SELECT id,kind,title,COALESCE(service,''),COALESCE(reference,''),COALESCE(summary,''),risk_level,COALESCE(rollback_plan,''),status,COALESCE(owner,''),created_at,updated_at FROM changes`
@@ -407,6 +454,25 @@ func (s *Store) SetChangeWorkItems(changeID int64, ids []int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	ordered := append([]int64{}, ids...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	for _, wid := range ordered {
+		q := `SELECT id FROM work_items WHERE id=?`
+		if s.db.dialect == "mysql" {
+			q += " FOR UPDATE"
+		}
+		var exists int64
+		if err = tx.QueryRow(q, wid).Scan(&exists); err != nil {
+			return fmt.Errorf("关联需求已删除，请刷新")
+		}
+	}
+	if _, err = tx.Exec(`UPDATE changes SET updated_at=updated_at WHERE id=?`, changeID); err != nil {
+		return err
+	}
+	var state string
+	if err = tx.QueryRow(`SELECT status FROM changes WHERE id=?`, changeID).Scan(&state); err != nil || state != ChangeDraft {
+		return fmt.Errorf("仅草稿变更可调整关联需求，请刷新")
+	}
 	if _, err := tx.Exec(`DELETE FROM work_item_changes WHERE change_id=?`, changeID); err != nil {
 		return err
 	}
@@ -422,8 +488,16 @@ func (s *Store) SetChangeWorkItems(changeID int64, ids []int64) error {
 }
 
 func (s *Store) SetChangeReady(id int64, ready bool) (*Change, error) {
-	v := s.GetChange(id)
-	if v == nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE changes SET updated_at=updated_at WHERE id=?`, id); err != nil {
+		return nil, err
+	}
+	var current string
+	if err = tx.QueryRow(`SELECT status FROM changes WHERE id=?`, id).Scan(&current); err != nil {
 		return nil, fmt.Errorf("变更不存在")
 	}
 	status := ChangeDraft
@@ -431,12 +505,17 @@ func (s *Store) SetChangeReady(id int64, ready bool) (*Change, error) {
 		status = ChangeReady
 	} else {
 		var refs int
-		_ = s.db.QueryRow(`SELECT COUNT(*) FROM release_version_changes WHERE change_id=?`, id).Scan(&refs)
+		if err = tx.QueryRow(`SELECT COUNT(*) FROM release_version_changes c JOIN release_versions v ON v.id=c.release_version_id WHERE c.change_id=? AND v.status<>'draft'`, id).Scan(&refs); err != nil {
+			return nil, err
+		}
 		if refs > 0 {
-			return nil, fmt.Errorf("变更已进入发布版本，不能退回草稿")
+			return nil, fmt.Errorf("变更已进入冻结版本，不能退回草稿")
 		}
 	}
-	if _, err := s.db.Exec(`UPDATE changes SET status=?,updated_at=? WHERE id=?`, status, time.Now().Unix(), id); err != nil {
+	if _, err := tx.Exec(`UPDATE changes SET status=?,updated_at=? WHERE id=?`, status, time.Now().Unix(), id); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return s.GetChange(id), nil
@@ -450,16 +529,25 @@ func (s *Store) DeleteChange(id int64) error {
 	if v.Status != ChangeDraft {
 		return fmt.Errorf("仅草稿变更可删除")
 	}
-	var refs int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM release_version_changes WHERE change_id=?`, id).Scan(&refs)
-	if refs > 0 {
-		return fmt.Errorf("变更已进入发布版本，不能删除")
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE changes SET updated_at=updated_at WHERE id=?`, id); err != nil {
+		return err
+	}
+	var state string
+	var refs int
+	if err = tx.QueryRow(`SELECT status FROM changes WHERE id=?`, id).Scan(&state); err != nil || state != ChangeDraft {
+		return fmt.Errorf("仅草稿变更可删除，请刷新")
+	}
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM release_version_changes WHERE change_id=?`, id).Scan(&refs); err != nil {
+		return err
+	}
+	if refs > 0 {
+		return fmt.Errorf("变更已进入发布版本，请先从草稿版本移出")
+	}
 	if _, err := tx.Exec(`DELETE FROM work_item_changes WHERE change_id=?`, id); err != nil {
 		return err
 	}
@@ -526,6 +614,7 @@ func (s *Store) ReleaseVersions(status string, limit int) []ReleaseVersion {
 	rows.Close()
 	for i := range out {
 		out[i].Changes, out[i].Promotions = s.ReleaseVersionChanges(out[i].ID), s.ReleasePromotions(out[i].ID)
+		s.loadVersionScope(&out[i])
 	}
 	return out
 }
@@ -536,6 +625,7 @@ func (s *Store) GetReleaseVersion(id int64) *ReleaseVersion {
 		return nil
 	}
 	v.Changes, v.Promotions = s.ReleaseVersionChanges(id), s.ReleasePromotions(id)
+	s.loadVersionScope(&v)
 	return &v
 }
 
@@ -550,8 +640,11 @@ func (s *Store) UpdateReleaseVersion(v *ReleaseVersion) error {
 	if err := normalizeReleaseVersion(v); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`UPDATE release_versions SET version=?,title=?,description=?,updated_at=? WHERE id=?`, v.Version, v.Title, v.Description, time.Now().Unix(), v.ID)
-	return err
+	ids := []int64{}
+	for _, w := range current.WorkItems {
+		ids = append(ids, w.ID)
+	}
+	return s.SaveReleaseDraft(v, VersionScope{WorkItemIDs: ids, ManualChangeIDs: current.ManualChangeIDs})
 }
 
 func (s *Store) ReleaseVersionChanges(id int64) []Change {
@@ -569,6 +662,7 @@ func (s *Store) ReleaseVersionChanges(id int64) []Change {
 	rows.Close()
 	for i := range out {
 		out[i].WorkItems = s.ChangeWorkItems(out[i].ID)
+		s.loadSQLPayload(&out[i])
 	}
 	return out
 }
@@ -592,34 +686,11 @@ func (s *Store) SetReleaseVersionChanges(id int64, changeIDs []int64) error {
 		}
 		seen[changeID] = true
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM release_version_changes WHERE release_version_id=?`, id); err != nil {
-		return err
-	}
-	for order, changeID := range changeIDs {
-		if _, err := tx.Exec(`INSERT INTO release_version_changes(release_version_id,change_id,sort_order) VALUES(?,?,?)`, id, changeID, order); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.Exec(`UPDATE release_versions SET updated_at=? WHERE id=?`, time.Now().Unix(), id); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return s.SaveReleaseDraft(v, VersionScope{ManualChangeIDs: changeIDs})
 }
 
 func (s *Store) SetReleaseVersionReady(id int64) (*ReleaseVersion, error) {
-	v := s.GetReleaseVersion(id)
-	if v == nil || v.Status != ReleaseVersionDraft {
-		return nil, fmt.Errorf("仅草稿版本可提交")
-	}
-	if len(v.Changes) == 0 {
-		return nil, fmt.Errorf("发布版本至少选择一个变更")
-	}
-	if _, err := s.db.Exec(`UPDATE release_versions SET status=?,updated_at=? WHERE id=?`, ReleaseVersionReady, time.Now().Unix(), id); err != nil {
+	if err := s.freezeReleaseVersion(id); err != nil {
 		return nil, err
 	}
 	return s.GetReleaseVersion(id), nil
@@ -638,6 +709,23 @@ func (s *Store) DeleteReleaseVersion(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE release_versions SET updated_at=updated_at WHERE id=?`, id); err != nil {
+		return err
+	}
+	var state string
+	var refs int
+	if err = tx.QueryRow(`SELECT status FROM release_versions WHERE id=?`, id).Scan(&state); err != nil || state != ReleaseVersionDraft {
+		return fmt.Errorf("仅草稿版本可删除，请刷新")
+	}
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM release_promotions WHERE release_version_id=?`, id).Scan(&refs); err != nil {
+		return err
+	}
+	if refs > 0 {
+		return fmt.Errorf("版本已有推进记录，不能删除")
+	}
+	if _, err := tx.Exec(`DELETE FROM release_version_scope WHERE release_version_id=?`, id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM release_version_changes WHERE release_version_id=?`, id); err != nil {
 		return err
 	}

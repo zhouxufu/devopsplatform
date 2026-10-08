@@ -8,13 +8,14 @@ import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor
 import ResourcesView from './ResourcesView.vue';
 import { ElButton, ElInput } from "../../shared/components/ui.js";
 import { toast } from "../../shared/composables/toast.js";
+import { scopeChanges, scopePayload, frozenChangeIDs } from '../versionScope.js';
 const api = inject("api"),
   route = useRoute(),
   router = useRouter();
 const tab = computed(() =>
   ["work", "changes", "versions"].includes(route.query.tab)
     ? route.query.tab
-    : "changes",
+    : "work",
 );
 const work = ref([]),
   changes = ref([]),
@@ -38,6 +39,7 @@ const query = ref(""),
   dialog = ref(""),
   form = ref({}),
   saving = ref(false);
+const associationFilter=ref('');
 watch(()=>form.value.kind,kind=>{if(dialog.value==='changes'&&kind==='mysql'&&!form.value.sql)form.value.sql={resource_alias:'',content:'',max_affected_rows:100}})
 const kinds = [
   { value: "code", label: "代码分支" },
@@ -67,15 +69,52 @@ const list = computed(() =>
   ).filter(
     (v) =>
       (!filter.value || v.status === filter.value) &&
+      (!associationFilter.value || (tab.value==='work' ? v.kind===associationFilter.value : tab.value==='changes' ? (associationFilter.value==='independent' ? !v.work_items?.length : !!v.work_items?.length) : true)) &&
       (!query.value ||
         `${v.title} ${v.version || ""} ${v.external_id || ""} ${v.service || ""} ${v.reference || ""}`
           .toLowerCase()
           .includes(query.value.toLowerCase())),
   ),
 );
-const readyChanges = computed(() =>
-  changes.value.filter((c) => c.status === "ready"),
-);
+const detail = computed(() => route.query.item ? (tab.value === 'work' ? work.value : tab.value === 'versions' ? versions.value : []).find(v=>v.id===Number(route.query.item)) : null);
+const detailChanges = computed(()=> tab.value==='work' ? changes.value.filter(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id)) : detail.value?.changes || []);
+const detailVersions = computed(()=>versions.value.filter(v=>(v.work_items||[]).some(w=>w.id===detail.value?.id)||(v.changes||[]).some(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id))));
+const detailRuns = computed(()=>deliveries.value.filter(r=>tab.value==='versions' ? r.plan.version?.id===detail.value?.id : detailVersions.value.some(v=>v.id===r.plan.version?.id)));
+const selectedChanges = computed(()=>scopeChanges(changes.value,form.value.work_item_ids,form.value.manual_change_ids));
+const frozenIDs=computed(()=>frozenChangeIDs(versions.value));
+const isFrozenChange=c=>frozenIDs.value.has(c.id);
+const showAddVersion=ref(false),addVersionID=ref(''),addItem=ref(null),addType=ref('work');
+const sqlResources=ref([]),sqlResourcesLoading=ref(false),sqlResourcesError=ref('');
+let resourceRequest=0;
+async function loadSQLResources(){
+  const seq=++resourceRequest;sqlResources.value=[];sqlResourcesError.value='';
+  if(dialog.value!=='changes'||form.value.kind!=='mysql'||!form.value.service)return;
+  sqlResourcesLoading.value=true;
+  try{const data=await api(`api/services/${encodeURIComponent(form.value.service)}/resources`);if(seq===resourceRequest)sqlResources.value=(data.requirements||[]).filter(r=>r.kind==='mysql')}
+  catch(e){if(seq===resourceRequest)sqlResourcesError.value=e.message}finally{if(seq===resourceRequest)sqlResourcesLoading.value=false}
+}
+watch(()=>[dialog.value,form.value.kind,form.value.service],()=>{sqlResourcesLoading.value=false;loadSQLResources()});
+function view(type,item){router.push({path:'/changes',query:{tab:type,item:String(item.id)}})}
+function back(){router.push({path:'/changes',query:{tab:tab.value}})}
+function addChange(item){open('changes');form.value.work_item_ids=[item.id];const apps=[...new Set(changes.value.filter(c=>(c.work_items||[]).some(w=>w.id===item.id)).map(c=>c.service).filter(Boolean))];if(apps.length===1)form.value.service=apps[0]}
+function chooseVersion(type,item){addType.value=type;addItem.value=item;addVersionID.value='';showAddVersion.value=true}
+async function addToVersion(){
+  const v=versions.value.find(v=>v.id===addVersionID.value);if(!v)return toast('请选择草稿版本','warning');saving.value=true;
+  try{const w=(v.work_items||[]).map(w=>w.id),m=[...(v.manual_change_ids||[])];(addType.value==='work'?w:m).push(addItem.value.id);
+    await api(`api/release-versions/${v.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(scopePayload(v,w,m))});
+    showAddVersion.value=false;await load();view('versions',v);toast('已纳入版本范围','success')
+  }catch(e){toast(e.message,'error')}finally{saving.value=false}
+}
+function versionBlockers(v){
+  const out=[];if(!v.changes?.length)out.push('尚未选择实施变更');
+  for(const c of v.changes||[])if(c.status!=='ready')out.push(`待就绪：${c.title}`);
+  for(const w of v.work_items||[])if(!(v.changes||[]).some(c=>(c.work_items||[]).some(x=>x.id===w.id)))out.push(`待补充变更：${w.title}`);
+  const expected=scopeChanges(changes.value,(v.work_items||[]).map(w=>w.id),v.manual_change_ids);
+  if(expected.some(c=>!(v.changes||[]).some(x=>x.id===c.id)))out.push('需求有新增变更，请刷新关联范围');
+  return out;
+}
+async function refreshScope(v){saving.value=true;try{await api(`api/release-versions/${v.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(scopePayload(v,(v.work_items||[]).map(w=>w.id),v.manual_change_ids))});await load();toast('已刷新关联范围','success')}catch(e){toast(e.message,'error')}finally{saving.value=false}}
+const runLabel=s=>({pending_approval:'待审核',approved:'待执行',running:'执行中',success:'成功',failed:'失败',rejected:'已驳回',canceled:'已取消'}[s]||s);
 const canManage = (item) =>
   me.value.username === "local" ||
   me.value.role === "admin" ||
@@ -135,7 +174,8 @@ function open(type, item) {
       ? {
           ...item,
           change_ids: (item.changes || []).map((v) => v.id),
-          work_item_ids: [],
+          work_item_ids: (item.work_items || []).map(v=>v.id),
+          manual_change_ids: [...(item.manual_change_ids || [])],
         }
       : {
           version: "",
@@ -143,35 +183,38 @@ function open(type, item) {
           description: "",
           change_ids: [],
           work_item_ids: [],
+          manual_change_ids: [],
         };
-}
-function addWorkChanges(ids) {
-  const included = readyChanges.value
-    .filter((c) => (c.work_items || []).some((w) => ids.includes(w.id)))
-    .map((c) => c.id);
-  form.value.change_ids = [...new Set([...form.value.change_ids, ...included])];
 }
 async function save() {
   if (!form.value.title?.trim()) return toast("请填写标题", "warning");
   if (
     dialog.value === "versions" &&
-    (!form.value.version?.trim() || !form.value.change_ids?.length)
+    !form.value.version?.trim()
   )
-    return toast("请填写版本号并选择至少一项已就绪变更", "warning");
+    return toast("请填写版本号", "warning");
+  if(dialog.value==='changes'&&form.value.kind==='mysql'&&(!form.value.service||!sqlResources.value.some(r=>r.alias===form.value.sql?.resource_alias)))return toast('请选择应用及已配置的数据库资源','warning');
   saving.value = true;
   const endpoint = {
     work: "work-items",
     changes: "changes",
     versions: "release-versions",
   }[dialog.value];
+  const origin=route.fullPath,creating=!form.value.id;
   try {
-    await api(`api/${endpoint}${form.value.id ? "/" + form.value.id : ""}`, {
+    const type=dialog.value;
+    const result=await api(`api/${endpoint}${form.value.id ? "/" + form.value.id : ""}`, {
       method: form.value.id ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({...form.value,sql:dialog.value==='changes'&&form.value.kind==='mysql'?{...form.value.sql,max_affected_rows:Number(form.value.sql.max_affected_rows)}:undefined}),
     });
+    const keepContext=dialog.value===type&&route.fullPath===origin;
     dialog.value = "";
     await load();
+    if(creating&&keepContext&&route.fullPath===origin&&(type==='work'||type==='versions'))view(type,result);
+    // Adding a change from a planned demand refreshes that draft's derived scope.
+    // No ready/frozen version is ever modified here.
+    if(type==='changes'&&tab.value==='work')toast('变更已保存；版本范围可通过“编辑范围”重新载入关联变更','success');
     toast("已保存", "success");
   } catch (e) {
     toast(e.message, "error");
@@ -182,7 +225,7 @@ async function save() {
 async function action(type, item, op) {
   if (
     !confirm(
-      `${op === "delete" ? "删除" : op === "ready" ? "标记就绪" : "退回草稿"}「${item.title}」？`,
+      `${op === "delete" ? "删除" : op === "ready" ? type==='versions'?'冻结版本范围（之后不可修改）':'标记就绪' : "退回草稿"}「${item.title}」？`,
     )
   )
     return;
@@ -199,6 +242,7 @@ async function action(type, item, op) {
 watch(tab, () => {
   query.value = "";
   filter.value = "";
+  associationFilter.value='';
 });
 onMounted(async () => {
   me.value = await api("/api/me").catch(() => ({
@@ -217,23 +261,23 @@ onMounted(async () => {
           text="需求与变更独立存在；发布版本汇总本次交付范围，不绑定环境。执行时由部署编排选择环境，审核的是具体执行快照。"
         />
       </div>
-      <div class="actions"><ElButton @click="openResources">资源连接</ElButton><ElButton @click="showBindings=true">应用资源绑定</ElButton><ElButton v-if="tab==='work'" @click="showSync=true">同步禅道 BUG</ElButton></div>
+      <div v-if="!route.query.item" class="actions"><ElButton v-if="tab==='work'" @click="showSync=true">同步禅道 BUG</ElButton>
       <ElButton type="primary" @click="open(tab)"
         >＋
         {{
           tab === "work"
-            ? "新建需求 / 关联 BUG"
+            ? "新建需求"
             : tab === "versions"
               ? "创建发布版本"
               : "新建变更"
         }}</ElButton
-      >
+      ></div>
     </div>
     <nav class="tabs">
       <button
         v-for="item in [
           { key: 'work', label: '需求与 BUG' },
-          { key: 'changes', label: '独立变更' },
+          { key: 'changes', label: '变更列表' },
           { key: 'versions', label: '发布版本' },
         ]"
         :key="item.key"
@@ -243,6 +287,29 @@ onMounted(async () => {
         {{ item.label }}
       </button>
     </nav>
+    <template v-if="route.query.item">
+      <ElButton @click="back">← 返回列表</ElButton>
+      <section v-if="detail" class="workspace">
+        <div class="heading"><div><h2>{{tab==='versions'?detail.version+' · ':''}}{{detail.title}}</h2><p>{{labels[detail.status]}} · {{detail.owner}} · {{detail.description||'暂无说明'}}</p></div>
+          <div class="actions"><ElButton v-if="canManage(detail)&&(tab==='work'||detail.status==='draft')" @click="open(tab,detail)">{{tab==='versions'?'编辑范围':'编辑需求'}}</ElButton>
+            <template v-if="tab==='work'"><ElButton @click="chooseVersion('work',detail)">纳入版本</ElButton><ElButton type="primary" @click="addChange(detail)">＋ 添加变更</ElButton></template>
+            <ElButton v-else-if="detail.status==='draft'&&canManage(detail)" type="primary" @click="action('versions',detail,'ready')">冻结并标记就绪</ElButton>
+            <ElButton v-else-if="['ready','completed'].includes(detail.status)" type="primary" @click="router.push({path:'/orchestration',query:{version:String(detail.id)}})">发起交付</ElButton>
+          </div></div>
+        <div v-if="tab==='versions'&&detail.status==='draft'&&versionBlockers(detail).length" class="notice"><b>发布前待处理</b><p v-for="reason in versionBlockers(detail)" :key="reason">{{reason}}</p></div>
+        <ElButton v-if="tab==='versions'&&detail.status==='draft'&&canManage(detail)" :loading="saving" @click="refreshScope(detail)">刷新关联范围</ElButton>
+        <div v-if="tab==='versions'" class="record"><h3>需求与 Bug · {{detail.work_items?.length||0}}</h3><div class="chips"><ElButton v-for="w in detail.work_items||[]" :key="w.id" @click="view('work',w)">#{{w.id}} {{w.title}}</ElButton></div><p v-if="!detail.work_items?.length">可先建立空草稿，也可以直接选择独立变更。</p></div>
+        <h3>{{tab==='versions'?'实施范围':'关联变更'}} · {{detailChanges.length}}</h3>
+        <div v-if="!detailChanges.length" class="empty compact">尚无变更。{{tab==='work'?'点击“添加变更”，自动关联当前需求。':'点击“编辑范围”，选择需求或手工补入变更。'}}</div>
+        <article v-for="c in detailChanges" :key="c.id" class="record"><div class="record-head"><strong>{{kindLabel(c.kind)}} · {{c.title}}</strong><span class="status">{{labels[c.status]}}</span></div><p>{{c.service||'无关联应用'}} · {{c.reference||c.sql?.resource_alias||c.summary||'暂无说明'}}</p>
+          <div class="actions"><ElButton v-if="c.service&&['code','artifact'].includes(c.kind)" @click="router.push(`/svc/${encodeURIComponent(c.service)}/build`)">查看构建与制品</ElButton><ElButton v-if="c.sql" @click="checkSQL(c)">SQL 预检</ElButton><template v-if="canManage(c)"><ElButton v-if="c.status==='draft'" @click="open('changes',c)">编辑变更</ElButton><ElButton v-if="c.status==='draft'" @click="action('changes',c,'ready')">标记就绪</ElButton><ElButton v-else-if="!isFrozenChange(c)" @click="action('changes',c,'reopen')">退回草稿</ElButton></template><span v-if="isFrozenChange(c)" class="meta">已随版本冻结；后续修改请新建变更</span></div>
+        </article>
+        <p v-if="tab==='versions'" class="notice">版本规划不自动合并代码，也不会自动选择最新制品。发起交付时明确选择每个应用的构建制品，同一应用只发布一次。</p>
+        <template v-if="tab==='work'"><h3>所在版本</h3><div class="chips"><ElButton v-for="v in detailVersions" :key="v.id" @click="view('versions',v)">{{v.version}} · {{labels[v.status]}}</ElButton><span v-if="!detailVersions.length">未纳入版本，可继续独立开发与测试。</span></div></template>
+        <h3>交付记录</h3><div class="chips"><ElButton v-for="r in detailRuns" :key="r.id" @click="router.push({path:'/orchestration',query:{run:String(r.id)}})">#{{r.id}} · {{r.plan.environment.display_name}} · {{runLabel(r.status)}}</ElButton><span v-if="!detailRuns.length">尚无交付记录；需求关闭不代表已经上线。</span></div>
+      </section><div v-else class="empty">记录不存在或正在加载。<ElButton @click="back">返回列表</ElButton></div>
+    </template>
+    <template v-else>
     <div class="toolbar">
       <ElInput
         v-model="query"
@@ -260,7 +327,7 @@ onMounted(async () => {
           ).map((v) => ({ value: v, label: labels[v] }))
         "
         all-label="全部状态"
-      /><span>{{ list.length }} 条</span><ElButton @click="load">刷新</ElButton>
+      /><Sel v-if="tab!=='versions'" v-model="associationFilter" :options="tab==='work'?[{value:'requirement',label:'需求'},{value:'bug',label:'BUG'}]:[{value:'linked',label:'关联需求的变更'},{value:'independent',label:'独立变更'}]" all-label="全部类型" width="180px" /><span>{{ list.length }} 条</span><ElButton @click="load">刷新</ElButton>
     </div>
     <div v-if="!list.length" class="empty">
       <h3>
@@ -275,7 +342,7 @@ onMounted(async () => {
       <p>
         {{
           tab === "versions"
-            ? "先将变更标记就绪，再选择需求或变更创建版本。"
+            ? "先创建版本草稿，再逐步选择需求与变更；就绪校验在冻结版本时进行。"
             : "可以独立创建，不需要先建立发布版本。"
         }}
       </p>
@@ -293,7 +360,7 @@ onMounted(async () => {
                   : "需求"
                 : kindLabel(item.kind)
           }}</span
-          ><strong>{{ item.title }}</strong>
+          ><button v-if="tab!=='changes'" class="record-link" @click="view(tab,item)">{{item.title}}</button><strong v-else>{{ item.title }}</strong>
         </div>
         <span class="status">{{ labels[item.status] || item.status }}</span>
       </div>
@@ -330,7 +397,7 @@ onMounted(async () => {
         </div>
       </template>
       <template v-if="tab === 'versions'"
-        ><div class="chips">
+        ><p>需求 / Bug {{item.work_items?.length||0}} 项 · 变更 {{item.changes?.length||0}} 项 · 待就绪 {{(item.changes||[]).filter(c=>c.status!=='ready').length}} 项</p><div class="chips">
           <span v-for="c in item.changes" :key="c.id"
             >{{ kindLabel(c.kind) }} · {{ c.title }}
             <small v-if="c.service">/ {{ c.service }}</small></span
@@ -378,6 +445,9 @@ onMounted(async () => {
         </button>
       </div>
       <div class="actions">
+        <template v-if="tab==='work'"><ElButton type="primary" size="small" @click="view('work',item)">查看需求</ElButton><ElButton size="small" @click="addChange(item)">添加变更</ElButton><ElButton size="small" @click="chooseVersion('work',item)">纳入版本</ElButton></template>
+        <ElButton v-if="tab==='changes'" size="small" @click="chooseVersion('changes',item)">纳入版本</ElButton>
+        <ElButton v-if="tab==='versions'" size="small" type="primary" @click="view('versions',item)">进入版本</ElButton>
         <template v-if="canManage(item)"
           ><ElButton
             v-if="tab === 'work' || item.status === 'draft'"
@@ -385,13 +455,13 @@ onMounted(async () => {
             @click="open(tab, item)"
             >编辑</ElButton
           ><ElButton
-            v-if="tab !== 'work' && item.status === 'draft'"
+            v-if="tab === 'changes' && item.status === 'draft'"
             size="small"
             type="primary"
             @click="action(tab, item, 'ready')"
             >标记就绪</ElButton
           ><ElButton
-            v-if="tab === 'changes' && item.status === 'ready'"
+            v-if="tab === 'changes' && item.status === 'ready' && !isFrozenChange(item)"
             size="small"
             @click="action(tab, item, 'reopen')"
             >退回草稿</ElButton
@@ -417,8 +487,10 @@ onMounted(async () => {
         >
       </div>
     </article>
+    </template>
+    <Modal :show="showAddVersion" title="纳入发布版本" wide @close="showAddVersion=false"><div class="form-grid"><p class="span">{{addItem?.title}} · 仅调整草稿范围，不触发构建或执行</p><label class="span">草稿版本<Sel v-model="addVersionID" :options="versions.filter(v=>v.status==='draft'&&canManage(v)).map(v=>({value:v.id,label:v.version+' · '+v.title}))" width="100%" /></label><div class="footer span"><ElButton @click="showAddVersion=false;open('versions');form.work_item_ids=addType==='work'?[addItem.id]:[];form.manual_change_ids=addType==='changes'?[addItem.id]:[]">创建新版本</ElButton><ElButton @click="showAddVersion=false">取消</ElButton><ElButton type="primary" :loading="saving" @click="addToVersion">确认纳入</ElButton></div></div></Modal>
     <Modal :show="showResources" title="资源中心" extra-wide @close="showResources=false;load()"><ResourcesView directAPI /></Modal>
-    <ApplicationResourcesEditor :show="showBindings" :services="services" :initial-service="form.service" @close="showBindings=false" />
+    <ApplicationResourcesEditor :show="showBindings" :services="services" :initial-service="form.service" @close="showBindings=false;loadSQLResources()" />
     <Modal :show="showSync" title="同步禅道 BUG（开源 16.0）" wide @close="showSync=false">
       <div class="form-grid"><label class="span">禅道连接<Sel v-model="syncForm.connection" :options="connections.filter(c=>c.kind==='zentao').map(c=>c.name)" width="100%" /></label><label class="span">本次日期基线（留空沿用连接设置）<ElInput v-model="syncForm.baseline" placeholder="YYYY-MM-DD" /></label><p class="notice span">同步产品范围内的 Bug，关闭状态来自禅道。尚未回写上线状态；选版时仍需核对历史上线范围。</p><p v-for="state in syncStates.filter(s=>s.connection===syncForm.connection)" :key="state.connection" class="span">上次同步：{{state.status==='success'?'成功':'失败'}} · {{state.detail}}</p><div class="actions span"><ElButton @click="openResources">配置禅道连接</ElButton><ElButton type="primary" :loading="saving" @click="syncIssues">立即同步</ElButton></div></div>
     </Modal>
@@ -432,7 +504,7 @@ onMounted(async () => {
           ? '需求 / BUG'
           : dialog === 'versions'
             ? '发布版本'
-            : '独立变更'
+            : '变更'
       "
       extra-wide
       @close="dialog = ''"
@@ -504,7 +576,7 @@ onMounted(async () => {
               v-model="form.reference"
               type="textarea"
               :rows="3" /></label
-          ><template v-if="form.kind==='mysql'"><label>数据库资源别名<ElInput v-model="form.sql.resource_alias" placeholder="如 business-db（先配置应用资源绑定）" /></label><label>允许影响行数（1–10000）<ElInput v-model.number="form.sql.max_affected_rows" type="number" /></label><label class="span">执行 SQL<ElInput v-model="form.sql.content" type="textarea" :rows="7" placeholder="ALTER TABLE menus ADD COLUMN enabled int NOT NULL DEFAULT 1;" /></label><p class="notice span">支持建表、单字段新增、普通/唯一索引及单表 INSERT/UPDATE/DELETE；不支持删除结构、函数、子查询或跨库。DDL 与 DML 分节点、分次交付。预检检查目标结构，执行前再次核对审批基线。</p></template><label
+          ><template v-if="form.kind==='mysql'"><label>数据库资源<Sel v-model="form.sql.resource_alias" :options="sqlResources.map(r=>({value:r.alias,label:r.alias}))" width="100%" /><span v-if="sqlResourcesLoading">正在读取…</span><span v-else-if="sqlResourcesError">{{sqlResourcesError}}</span><span v-else-if="!sqlResources.length">{{form.service?'该应用尚未声明数据库资源':'先选择关联应用'}}</span><ElButton v-if="form.service&&(me.role==='admin'||me.username==='local')" size="small" @click="showBindings=true">配置应用资源</ElButton></label><label>允许影响行数（1–10000）<ElInput v-model.number="form.sql.max_affected_rows" type="number" /></label><label class="span">执行 SQL<ElInput v-model="form.sql.content" type="textarea" :rows="7" placeholder="ALTER TABLE menus ADD COLUMN enabled int NOT NULL DEFAULT 1;" /></label><p class="notice span">支持建表、单字段新增、普通/唯一索引及单表 INSERT/UPDATE/DELETE；不支持删除结构、函数、子查询或跨库。DDL 与 DML 分节点、分次交付。预检检查目标结构，执行前再次核对审批基线。</p></template><label
             >关联需求 / BUG（可选）<Sel
               v-model="form.work_item_ids"
               multiple
@@ -546,19 +618,19 @@ onMounted(async () => {
               v-model="form.version"
               placeholder="例如 2026.10.1" /></label
           ><label
-            >按需求 / BUG 自动加入变更<Sel
+            >选择需求 / BUG<Sel
               v-model="form.work_item_ids"
               multiple
               :options="work.map((w) => ({ value: w.id, label: w.title }))"
               filterable
               width="100%"
-              @change="addWorkChanges" /></label
+              /></label
           ><label class="span"
-            >选择已就绪变更（可增删）<Sel
-              v-model="form.change_ids"
+            >手工补入变更（可含草稿）<Sel
+              v-model="form.manual_change_ids"
               multiple
               :options="
-                readyChanges.map((c) => ({
+                changes.map((c) => ({
                   value: c.id,
                   label: `${kindLabel(c.kind)} · ${c.title}${c.service ? ' / ' + c.service : ''}`,
                 }))
@@ -567,16 +639,8 @@ onMounted(async () => {
               width="100%"
           /></label>
           <div class="selection span">
-            <p v-for="id in form.change_ids" :key="id">
-              {{ changes.find((c) => c.id === id)?.title }}
-              <button
-                type="button"
-                @click="
-                  form.change_ids = form.change_ids.filter((v) => v !== id)
-                "
-              >
-                移除
-              </button>
+            <p v-for="c in selectedChanges" :key="c.id">
+              {{c.title}} · {{labels[c.status]}} · {{(form.manual_change_ids||[]).includes(c.id)?'手工选择':'由需求关联'}}
             </p>
           </div>
           <label class="span"
@@ -586,7 +650,7 @@ onMounted(async () => {
               :rows="3"
           /></label>
           <p class="notice span">
-            需求选择只追加关联的已就绪变更，需核对完整范围。创建版本不自动合并代码、不执行变更；推进环境与审核在部署编排中完成。
+            需求关联的变更自动汇总并去重；取消需求会移除其独有变更，共享或手工选择的变更保留。草稿可暂为空；冻结时要求变更全部就绪且每个需求至少有一项实施变更。创建版本不会执行变更。
           </p></template
         >
         <div class="footer span">
@@ -604,6 +668,11 @@ onMounted(async () => {
   max-width: 1500px;
   margin: auto;
 }
+.workspace { margin-top:20px; }
+.workspace h2 { margin:0; overflow-wrap:anywhere; }
+.workspace .notice { margin-bottom:16px; }
+.record-link { color:var(--brand); border:0; background:none; font:inherit; font-weight:600; cursor:pointer; text-align:left; overflow-wrap:anywhere; }
+.empty.compact { padding:30px; margin-bottom:16px; }
 .heading,
 .title,
 .toolbar,
@@ -660,6 +729,7 @@ p {
   border-radius: 12px;
   margin-bottom: 12px;
 }
+.record p {overflow-wrap:anywhere}
 .record-head > div {
   display: flex;
   gap: 12px;

@@ -883,19 +883,20 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 	mux.HandleFunc("POST /api/release-versions", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ReleaseVersion
-			ChangeIDs []int64 `json:"change_ids"`
+			ChangeIDs   []int64  `json:"change_ids"`
+			WorkItemIDs []int64  `json:"work_item_ids"`
+			ManualIDs   *[]int64 `json:"manual_change_ids"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&req) != nil {
 			writeError(w, http.StatusBadRequest, "发布版本参数格式错误")
 			return
 		}
-		req.Owner = actorOf(r)
-		if err := st.CreateReleaseVersion(&req.ReleaseVersion); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
+		req.ID, req.Owner = 0, actorOf(r)
+		manual := req.ChangeIDs
+		if req.ManualIDs != nil {
+			manual = *req.ManualIDs
 		}
-		if err := st.SetReleaseVersionChanges(req.ID, req.ChangeIDs); err != nil {
-			_ = st.DeleteReleaseVersion(req.ID)
+		if err := st.SaveReleaseDraft(&req.ReleaseVersion, VersionScope{WorkItemIDs: req.WorkItemIDs, ManualChangeIDs: manual}); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -911,18 +912,20 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		}
 		var req struct {
 			ReleaseVersion
-			ChangeIDs []int64 `json:"change_ids"`
+			ChangeIDs   []int64  `json:"change_ids"`
+			WorkItemIDs []int64  `json:"work_item_ids"`
+			ManualIDs   *[]int64 `json:"manual_change_ids"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&req) != nil {
 			writeError(w, http.StatusBadRequest, "发布版本参数格式错误")
 			return
 		}
 		req.ID, req.Owner = id, current.Owner
-		if err := st.UpdateReleaseVersion(&req.ReleaseVersion); err != nil {
-			writeError(w, http.StatusConflict, err)
-			return
+		manual := req.ChangeIDs
+		if req.ManualIDs != nil {
+			manual = *req.ManualIDs
 		}
-		if err := st.SetReleaseVersionChanges(id, req.ChangeIDs); err != nil {
+		if err := st.SaveReleaseDraft(&req.ReleaseVersion, VersionScope{WorkItemIDs: req.WorkItemIDs, ManualChangeIDs: manual}); err != nil {
 			writeError(w, http.StatusConflict, err)
 			return
 		}

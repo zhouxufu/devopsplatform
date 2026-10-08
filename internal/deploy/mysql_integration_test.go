@@ -69,15 +69,28 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	if err := st.CreateChange(change); err != nil {
 		t.Fatal(err)
 	}
+	work := &WorkItem{Title: "MySQL 版本规划需求", Owner: "local"}
+	if err := st.CreateWorkItem(work); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetChangeWorkItems(change.ID, []int64{work.ID}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.SetChangeReady(change.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	version := &ReleaseVersion{Version: "mysql-smoke", Title: "MySQL 编排版本", Owner: "local"}
-	if err := st.CreateReleaseVersion(version); err != nil {
+	if err := st.SaveReleaseDraft(version, VersionScope{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetReleaseVersionChanges(version.ID, []int64{change.ID}); err != nil {
+	if _, err := st.SetReleaseVersionReady(version.ID); err == nil {
+		t.Fatal("empty MySQL draft frozen")
+	}
+	if err := st.SaveReleaseDraft(version, VersionScope{WorkItemIDs: []int64{work.ID}}); err != nil {
 		t.Fatal(err)
+	}
+	if got := st.GetReleaseVersion(version.ID); len(got.WorkItems) != 1 || len(got.Changes) != 1 || len(got.ManualChangeIDs) != 0 {
+		t.Fatalf("MySQL scope not persisted: %#v", got)
 	}
 	if _, err := st.SetReleaseVersionReady(version.ID); err != nil {
 		t.Fatal(err)

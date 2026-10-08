@@ -19,7 +19,7 @@ const templates = ref([]),
   artifacts = ref([]),
   me = ref({});
 const changes=ref([]);
-const area = ref("templates"),
+const area = ref("runs"),
   showTemplate = ref(false),
   showRun = ref(false),
   selected = ref(null),
@@ -28,6 +28,17 @@ const area = ref("templates"),
 const template = ref({}),
   request = ref({}),
   preview = ref(null);
+const showChooser=ref(false),chosenTemplate=ref('');
+const availableTemplates=computed(()=>templates.value.filter(t=>!route.query.version||t.mode==='version'));
+function startDelivery(){
+  selected.value=null;
+  const available=availableTemplates.value;
+  if(available.length===1){openRun(available[0]);return}
+  chosenTemplate.value='';showChooser.value=true;
+}
+function continueDelivery(){const t=availableTemplates.value.find(t=>t.id===chosenTemplate.value);if(!t)return toast('请选择编排模板','warning');showChooser.value=false;openRun(t)}
+function createForDelivery(){showChooser.value=false;editTemplate();template.value.mode=route.query.version?'version':'fixed';creatingForDelivery.value=true}
+const creatingForDelivery=ref(false);
 const states = {
   pending_approval: "待审核",
   approved: "待执行",
@@ -137,6 +148,7 @@ function move(list, index, delta) {
     [list[index], list[other]] = [list[other], list[index]];
 }
 function editTemplate(item) {
+  creatingForDelivery.value=false;
   template.value = item
     ? JSON.parse(JSON.stringify(item))
     : {
@@ -151,8 +163,9 @@ function editTemplate(item) {
 }
 async function saveTemplate() {
   busy.value = true;
+  const origin=route.fullPath;
   try {
-    await api(
+    const saved=await api(
       `api/delivery/templates${template.value.id ? "/" + template.value.id : ""}`,
       {
         method: template.value.id ? "PUT" : "POST",
@@ -160,8 +173,10 @@ async function saveTemplate() {
         body: JSON.stringify(template.value),
       },
     );
+    const continueInContext=creatingForDelivery.value&&showTemplate.value&&route.fullPath===origin;
     showTemplate.value = false;
     await load();
+    if(continueInContext&&route.fullPath===origin)openRun(saved);
     toast("模板已保存", "success");
   } catch (e) {
     toast(e.message, "error");
@@ -210,6 +225,7 @@ async function submit() {
 async function openDetail(run) {
   try {
     selected.value = await api(`api/delivery/runs/${run.id}`);
+    router.replace({path:'/orchestration',query:{run:String(run.id)}});
     const entries = await Promise.all(
       selected.value.steps
         .filter((s) => s.release_id)
@@ -277,9 +293,7 @@ onMounted(async () => {
     area.value = "runs";
     await openDetail({ id: Number(route.query.run) });
   } else if (route.query.version) {
-    const tpl = templates.value.find((t) => t.mode === "version");
-    if (tpl) openRun(tpl);
-    else toast("请先新建“按发布版本”范围的编排模板", "warning");
+    startDelivery();
   }
 });
 </script>
@@ -292,21 +306,18 @@ onMounted(async () => {
           text="模板定义顺序节点；执行单选择环境、版本和制品并冻结快照。生产需要指定审核人审核；本版按节点显式推进，多服务不会因多个 BUG 重复发布。"
         />
       </div>
-      <ElButton type="primary" @click="editTemplate()">＋ 新建编排</ElButton>
+      <ElButton v-if="area==='templates'" type="primary" @click="editTemplate()">＋ 新建编排</ElButton><ElButton v-else type="primary" @click="startDelivery">发起交付</ElButton>
     </div>
     <nav class="tabs">
+      <button :class="{ active: area === 'runs' }" @click="area = 'runs'">执行与审核 <small>{{runs.filter(r=>r.status==='pending_approval').length||''}}</small></button>
       <button
         :class="{ active: area === 'templates' }"
         @click="area = 'templates'"
       >
         编排模板</button
-      ><button :class="{ active: area === 'runs' }" @click="area = 'runs'">
-        执行与审核
-        <small>{{
-          runs.filter((r) => r.status === "pending_approval").length || ""
-        }}</small></button
       ><ElButton size="small" @click="load">刷新</ElButton>
     </nav>
+    <div v-if="route.query.version" class="notice"><ElButton size="small" @click="router.push({path:'/changes',query:{tab:'versions',item:String(route.query.version)}})">← 返回版本</ElButton> 当前交付版本：{{versions.find(v=>v.id===Number(route.query.version))?.version||route.query.version}}</div>
     <template v-if="area === 'templates'"
       ><div v-if="!templates.length" class="empty">
         <h3>组织多个应用的一次交付</h3>
@@ -342,7 +353,7 @@ onMounted(async () => {
     >
     <template v-else
       ><div v-if="!runs.length" class="empty">
-        尚无执行单，从编排模板发起交付。
+        <h3>尚无执行单</h3><p>选择已有编排，核对版本、环境和制品后提交；提交不会自动执行。</p><ElButton @click="startDelivery">发起第一次交付</ElButton>
       </div>
       <article v-for="r in runs" :key="r.id" class="card">
         <div class="heading">
@@ -362,6 +373,7 @@ onMounted(async () => {
         <ElButton @click="openDetail(r)">查看 / 审核 / 执行</ElButton>
       </article></template
     >
+    <Modal :show="showChooser" title="选择交付编排" wide @close="showChooser=false"><div class="form-grid"><p class="span">{{route.query.version?'当前版本：'+(versions.find(v=>v.id===Number(route.query.version))?.version||route.query.version):'选择固定服务编排，或按版本推导服务范围'}}。不会自动选择第一个模板。</p><label v-if="availableTemplates.length" class="span">编排模板<Sel v-model="chosenTemplate" :options="availableTemplates.map(t=>({value:t.id,label:t.name+' · '+(t.mode==='version'?'按版本':'固定服务')}))" width="100%" /></label><p v-else class="span">暂无适用模板。先配置交付步骤，保存后继续选择环境和制品。</p><div class="actions span"><ElButton @click="createForDelivery">新建适用编排</ElButton><ElButton @click="showChooser=false">取消</ElButton><ElButton v-if="availableTemplates.length" type="primary" @click="continueDelivery">下一步</ElButton></div></div></Modal>
     <Modal
       :show="showTemplate"
       title="编排模板"

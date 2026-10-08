@@ -1,5 +1,6 @@
 <script setup>
 import BuildEnvironmentEditor from '../components/BuildEnvironmentEditor.vue'
+import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor.vue'
 import { ref, computed, onUnmounted, watch, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Stages from '../../shared/components/Stages.vue'
@@ -12,6 +13,7 @@ const route = useRoute(), router = useRouter()
 const globalEnvironment = inject('globalEnvironment', ref(''))
 const setPlatformContext = inject('setPlatformContext', () => {})
 const name = computed(() => route.params.name)
+const showAppResources=ref(false)
 if (name.value) setPlatformContext({ service: String(name.value) })
 const tab = computed(() => ({ hist: 'build', dep: 'release', cfg: 'advanced', settings: 'build' }[route.params.tab] || route.params.tab || 'overview'))
 const runs = ref([]), latest = ref(null)
@@ -524,10 +526,12 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
       <ElButton type="primary" size="small" @click="openOneClickDeploy()">一键部署</ElButton>
     </div>
     <nav class="app-tabs">
-      <button v-for="t in [['overview','概览'],['build','构建'],['artifact','制品'],['environment','环境'],['release','发布单']]" :key="t[0]" :class="{ active: tab === t[0] }" @click="setTab(t[0])">{{ t[1] }}</button>
+      <button v-for="t in [['overview','概览'],['build','构建'],['artifact','制品'],['environment','环境'],['release','发布单'],['resources','资源配置']]" :key="t[0]" :class="{ active: tab === t[0] }" @click="setTab(t[0])">{{ t[1] }}</button>
     </nav>
     <div v-if="globalEnvironmentMissing" class="context-warning">当前全局环境 <b>{{globalEnvironment}}</b> 尚未为此应用配置。<button class="op op-btn" @click="editTarget()">立即配置发布目标 →</button></div>
 
+    <section v-if="tab==='resources'" class="section"><h3>应用资源配置</h3><p>声明应用使用的逻辑资源，并按环境绑定实际连接。日常构建和发布无需重复配置。</p><ElButton @click="showAppResources=true">配置应用资源</ElButton></section>
+    <ApplicationResourcesEditor :show="showAppResources" :services="[{name:String(name)}]" :initial-service="String(name)" @close="showAppResources=false" />
     <!-- 应用概览：环境是主视图，构建与发布是动作。 -->
     <div v-if="tab === 'overview'">
       <div class="overview-strip">
