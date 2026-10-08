@@ -1,6 +1,8 @@
 <script setup>
 import { computed, inject, onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
+import WorkDeliveryEditor from '../components/WorkDeliveryEditor.vue';
+import DataSyncTasks from '../components/DataSyncTasks.vue';
 import Modal from "../../shared/components/Modal.vue";
 import HelpTip from "../../shared/components/HelpTip.vue";
 import Sel from "../../shared/components/Sel.vue";
@@ -40,6 +42,12 @@ const query = ref(""),
   form = ref({}),
   saving = ref(false);
 const associationFilter=ref('');
+const showDeliveryEditor=ref(false),deliveryItem=ref(null),deliveryEditor=ref(null),addedVersion=ref(null);
+const showSyncTasks=ref(false);
+function openSyncTasks(){showSyncTasks.value=true}
+function syncGenerated(){load();deliveryEditor.value?.refreshAfterSync()}
+function editDelivery(item){deliveryItem.value=item;showDeliveryEditor.value=true}
+onBeforeRouteLeave(()=>!deliveryEditor.value?.hasDraft()||confirm('离开将放弃尚未保存的交付草稿，确定离开？'));
 watch(()=>form.value.kind,kind=>{if(dialog.value==='changes'&&kind==='mysql'&&!form.value.sql)form.value.sql={resource_alias:'',content:'',max_affected_rows:100}})
 const kinds = [
   { value: "code", label: "代码分支" },
@@ -102,7 +110,7 @@ async function addToVersion(){
   const v=versions.value.find(v=>v.id===addVersionID.value);if(!v)return toast('请选择草稿版本','warning');saving.value=true;
   try{const w=(v.work_items||[]).map(w=>w.id),m=[...(v.manual_change_ids||[])];(addType.value==='work'?w:m).push(addItem.value.id);
     await api(`api/release-versions/${v.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(scopePayload(v,w,m))});
-    showAddVersion.value=false;await load();view('versions',v);toast('已纳入版本范围','success')
+    showAddVersion.value=false;await load();addedVersion.value=v;toast('已纳入版本范围，当前页面保持不变','success')
   }catch(e){toast(e.message,'error')}finally{saving.value=false}
 }
 function versionBlockers(v){
@@ -211,7 +219,10 @@ async function save() {
     const keepContext=dialog.value===type&&route.fullPath===origin;
     dialog.value = "";
     await load();
-    if(creating&&keepContext&&route.fullPath===origin&&(type==='work'||type==='versions'))view(type,result);
+    if(creating&&keepContext&&route.fullPath===origin&&(type==='work'||type==='versions')){
+      if(type==='versions'&&tab.value==='work')addedVersion.value=result;
+      else view(type,result);
+    }
     // Adding a change from a planned demand refreshes that draft's derived scope.
     // No ready/frozen version is ever modified here.
     if(type==='changes'&&tab.value==='work')toast('变更已保存；版本范围可通过“编辑范围”重新载入关联变更','success');
@@ -286,23 +297,27 @@ onMounted(async () => {
       >
         {{ item.label }}
       </button>
+      <button @click="deliveryItem=null;openSyncTasks()">数据同步任务</button>
     </nav>
+    <p v-if="addedVersion&&!route.query.item" class="notice">已纳入 {{addedVersion.version}}。<ElButton @click="view('versions',addedVersion);addedVersion=null">进入版本 →</ElButton></p>
     <template v-if="route.query.item">
       <ElButton @click="back">← 返回列表</ElButton>
       <section v-if="detail" class="workspace">
         <div class="heading"><div><h2>{{tab==='versions'?detail.version+' · ':''}}{{detail.title}}</h2><p>{{labels[detail.status]}} · {{detail.owner}} · {{detail.description||'暂无说明'}}</p></div>
           <div class="actions"><ElButton v-if="canManage(detail)&&(tab==='work'||detail.status==='draft')" @click="open(tab,detail)">{{tab==='versions'?'编辑范围':'编辑需求'}}</ElButton>
-            <template v-if="tab==='work'"><ElButton @click="chooseVersion('work',detail)">纳入版本</ElButton><ElButton type="primary" @click="addChange(detail)">＋ 添加变更</ElButton></template>
+            <template v-if="tab==='work'"><ElButton @click="chooseVersion('work',detail)">纳入版本</ElButton><ElButton type="primary" @click="editDelivery(detail)">编辑交付内容</ElButton></template>
             <ElButton v-else-if="detail.status==='draft'&&canManage(detail)" type="primary" @click="action('versions',detail,'ready')">冻结并标记就绪</ElButton>
             <ElButton v-else-if="['ready','completed'].includes(detail.status)" type="primary" @click="router.push({path:'/orchestration',query:{version:String(detail.id)}})">发起交付</ElButton>
           </div></div>
         <div v-if="tab==='versions'&&detail.status==='draft'&&versionBlockers(detail).length" class="notice"><b>发布前待处理</b><p v-for="reason in versionBlockers(detail)" :key="reason">{{reason}}</p></div>
         <ElButton v-if="tab==='versions'&&detail.status==='draft'&&canManage(detail)" :loading="saving" @click="refreshScope(detail)">刷新关联范围</ElButton>
         <div v-if="tab==='versions'" class="record"><h3>需求与 Bug · {{detail.work_items?.length||0}}</h3><div class="chips"><ElButton v-for="w in detail.work_items||[]" :key="w.id" @click="view('work',w)">#{{w.id}} {{w.title}}</ElButton></div><p v-if="!detail.work_items?.length">可先建立空草稿，也可以直接选择独立变更。</p></div>
-        <h3>{{tab==='versions'?'实施范围':'关联变更'}} · {{detailChanges.length}}</h3>
-        <div v-if="!detailChanges.length" class="empty compact">尚无变更。{{tab==='work'?'点击“添加变更”，自动关联当前需求。':'点击“编辑范围”，选择需求或手工补入变更。'}}</div>
+        <p v-if="addedVersion" class="notice">已纳入 {{addedVersion.version}}。<ElButton @click="view('versions',addedVersion);addedVersion=null">进入版本 →</ElButton></p>
+        <h3>{{tab==='versions'?'实施范围':'交付内容'}} · {{detailChanges.length}}</h3>
+        <div v-if="!detailChanges.length" class="empty compact">尚无内容。{{tab==='work'?'点击“编辑交付内容”，连续填写涉及的代码、SQL 和配置。':'点击“编辑范围”，选择需求或手工补入变更。'}}</div>
         <article v-for="c in detailChanges" :key="c.id" class="record"><div class="record-head"><strong>{{kindLabel(c.kind)}} · {{c.title}}</strong><span class="status">{{labels[c.status]}}</span></div><p>{{c.service||'无关联应用'}} · {{c.reference||c.sql?.resource_alias||c.summary||'暂无说明'}}</p>
-          <div class="actions"><ElButton v-if="c.service&&['code','artifact'].includes(c.kind)" @click="router.push(`/svc/${encodeURIComponent(c.service)}/build`)">查看构建与制品</ElButton><ElButton v-if="c.sql" @click="checkSQL(c)">SQL 预检</ElButton><template v-if="canManage(c)"><ElButton v-if="c.status==='draft'" @click="open('changes',c)">编辑变更</ElButton><ElButton v-if="c.status==='draft'" @click="action('changes',c,'ready')">标记就绪</ElButton><ElButton v-else-if="!isFrozenChange(c)" @click="action('changes',c,'reopen')">退回草稿</ElButton></template><span v-if="isFrozenChange(c)" class="meta">已随版本冻结；后续修改请新建变更</span></div>
+          <p v-if="c.sql?.data_sync" class="meta">数据同步任务 #{{c.sql.data_sync.task_id}} · 修订 {{c.sql.data_sync.task_revision}} · 本次目标 {{c.sql.data_sync.target_environment}}；差异已冻结，重新修改请再次对比。</p>
+          <div class="actions"><ElButton v-if="c.service&&['code','artifact'].includes(c.kind)" @click="router.push(`/svc/${encodeURIComponent(c.service)}/build`)">查看构建与制品</ElButton><ElButton v-if="c.sql" @click="checkSQL(c)">SQL 预检</ElButton><template v-if="canManage(c)"><ElButton v-if="c.status==='draft'&&!c.sql?.data_sync" @click="open('changes',c)">编辑变更</ElButton><ElButton v-if="c.status==='draft'" @click="action('changes',c,'ready')">标记就绪</ElButton><ElButton v-else-if="!isFrozenChange(c)" @click="action('changes',c,'reopen')">退回草稿</ElButton></template><span v-if="isFrozenChange(c)" class="meta">已随版本冻结；后续修改请新建变更</span></div>
         </article>
         <p v-if="tab==='versions'" class="notice">版本规划不自动合并代码，也不会自动选择最新制品。发起交付时明确选择每个应用的构建制品，同一应用只发布一次。</p>
         <template v-if="tab==='work'"><h3>所在版本</h3><div class="chips"><ElButton v-for="v in detailVersions" :key="v.id" @click="view('versions',v)">{{v.version}} · {{labels[v.status]}}</ElButton><span v-if="!detailVersions.length">未纳入版本，可继续独立开发与测试。</span></div></template>
@@ -445,12 +460,12 @@ onMounted(async () => {
         </button>
       </div>
       <div class="actions">
-        <template v-if="tab==='work'"><ElButton type="primary" size="small" @click="view('work',item)">查看需求</ElButton><ElButton size="small" @click="addChange(item)">添加变更</ElButton><ElButton size="small" @click="chooseVersion('work',item)">纳入版本</ElButton></template>
-        <ElButton v-if="tab==='changes'" size="small" @click="chooseVersion('changes',item)">纳入版本</ElButton>
+        <template v-if="tab==='work'"><ElButton type="primary" size="small" @click="view('work',item)">查看需求</ElButton><ElButton size="small" @click="editDelivery(item)">编辑交付内容</ElButton><ElButton size="small" @click="chooseVersion('work',item)">纳入版本</ElButton></template>
+        <ElButton v-if="tab==='changes'" size="small" @click="chooseVersion('changes',item)">纳入版本</ElButton><span v-if="item.sql?.data_sync" class="meta">同步任务 #{{item.sql.data_sync.task_id}} · {{item.sql.data_sync.target_environment}}（冻结差异）</span>
         <ElButton v-if="tab==='versions'" size="small" type="primary" @click="view('versions',item)">进入版本</ElButton>
         <template v-if="canManage(item)"
           ><ElButton
-            v-if="tab === 'work' || item.status === 'draft'"
+            v-if="tab === 'work' || (item.status === 'draft'&&!item.sql?.data_sync)"
             size="small"
             @click="open(tab, item)"
             >编辑</ElButton
@@ -488,6 +503,8 @@ onMounted(async () => {
       </div>
     </article>
     </template>
+    <WorkDeliveryEditor ref="deliveryEditor" :show="showDeliveryEditor" :item="deliveryItem" :services="services" :work-items="work" :can-manage="canManage" @close="showDeliveryEditor=false" @saved="load" @open-sync="openSyncTasks" />
+    <DataSyncTasks :show="showSyncTasks" :services="services" :environments="environments" :item="deliveryItem" @close="showSyncTasks=false" @generated="syncGenerated" @preview="checkSQL" />
     <Modal :show="showAddVersion" title="纳入发布版本" wide @close="showAddVersion=false"><div class="form-grid"><p class="span">{{addItem?.title}} · 仅调整草稿范围，不触发构建或执行</p><label class="span">草稿版本<Sel v-model="addVersionID" :options="versions.filter(v=>v.status==='draft'&&canManage(v)).map(v=>({value:v.id,label:v.version+' · '+v.title}))" width="100%" /></label><div class="footer span"><ElButton @click="showAddVersion=false;open('versions');form.work_item_ids=addType==='work'?[addItem.id]:[];form.manual_change_ids=addType==='changes'?[addItem.id]:[]">创建新版本</ElButton><ElButton @click="showAddVersion=false">取消</ElButton><ElButton type="primary" :loading="saving" @click="addToVersion">确认纳入</ElButton></div></div></Modal>
     <Modal :show="showResources" title="资源中心" extra-wide @close="showResources=false;load()"><ResourcesView directAPI /></Modal>
     <ApplicationResourcesEditor :show="showBindings" :services="services" :initial-service="form.service" @close="showBindings=false;loadSQLResources()" />

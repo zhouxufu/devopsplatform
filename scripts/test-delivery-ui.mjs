@@ -26,7 +26,7 @@ try {
   // Standalone preview intentionally has no platform auth endpoint.
   await page.route('**/api/me',route=>route.fulfill({json:{username:'local',role:'admin'}}))
   const suffix=Date.now().toString(36)
-  const title='UI回归需求-'+suffix, change='UI回归变更-'+suffix, version='UI回归版本-'+suffix, tpl='UI回归编排-'+suffix
+  const title='UI回归需求-'+suffix, change=title+' · 人工', version='UI回归版本-'+suffix, tpl='UI回归编排-'+suffix
   const dialog=()=>page.getByRole('dialog')
   const field=(name)=>dialog().locator('label').filter({hasText:new RegExp('^'+name)}).locator('input,textarea').first()
   const select=async(label,option)=>{await dialog().locator('label').filter({hasText:new RegExp('^'+label)}).locator('.el-select').click();await page.getByRole('option',{name:option,exact:true}).click()}
@@ -38,19 +38,19 @@ try {
   await waitFor(title)
   const wi=(await read('/api/work-items')).find(w=>w.title===title)
   assert(page.url().includes('item='+wi.id),'Demand detail did not open after save')
-  await page.reload();await page.getByRole('button',{name:'＋ 添加变更',exact:true}).waitFor()
+  await page.reload();await page.getByRole('button',{name:'编辑交付内容',exact:true}).waitFor()
   await page.getByRole('button',{name:'← 返回列表'}).click()
   // Cancel must work even with empty required fields.
   await page.getByRole('button',{name:'＋ 新建需求'}).click()
   await dialog().getByRole('button',{name:'取消',exact:true}).click()
   await dialog().waitFor({state:'hidden'})
   await page.locator('.record').filter({hasText:title}).getByRole('button',{name:'查看需求'}).click()
-  await page.getByRole('button',{name:'＋ 添加变更'}).click()
-  await field('标题').fill(change)
-  await select('变更类型','人工操作')
-  await field('实施内容').fill('核对本次发布的业务验收结果')
-  await dialog().locator('label').filter({hasText:/^关联需求/}).getByText(`#${wi.id} ${title}`,{exact:true}).waitFor()
-  await dialog().getByRole('button',{name:'保存',exact:true}).click()
+  await page.getByRole('button',{name:'编辑交付内容'}).click()
+  await dialog().getByRole('button',{name:/^其他操作/}).click()
+  await dialog().getByRole('button',{name:'＋ 添加其他操作'}).click()
+  await field('操作 / 引用').fill('核对本次发布的业务验收结果')
+  const batchSaved=page.waitForResponse(r=>r.url().endsWith('/delivery-content')&&r.request().method()==='PUT');await dialog().getByRole('button',{name:'保存全部内容'}).click();assert((await batchSaved).ok())
+  await dialog().getByRole('button',{name:'关闭',exact:true}).click()
   await page.locator('.record').filter({hasText:change}).getByRole('button',{name:'标记就绪'}).click()
   await page.locator('.record').filter({hasText:change}).getByText('已就绪',{exact:true}).waitFor()
   await page.getByRole('button',{name:'纳入版本',exact:true}).click()
@@ -59,6 +59,7 @@ try {
   await field('版本号').fill('qa-'+suffix)
   await dialog().locator('.selection').getByText(change,{exact:false}).waitFor()
   await dialog().getByRole('button',{name:'保存',exact:true}).click()
+  await page.getByRole('button',{name:'进入版本 →'}).click()
   const v=(await read('/api/release-versions')).find(v=>v.title===version)
   assert.deepEqual(v.work_items.map(w=>w.id),[wi.id],'Demand selection not persisted')
   await page.getByRole('button',{name:'冻结并标记就绪'}).click()

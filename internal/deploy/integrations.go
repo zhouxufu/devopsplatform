@@ -20,6 +20,7 @@ import (
 
 func integrationSchema(identity, doc string) []string {
 	return []string{
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS data_sync_tasks (id %s, document %s NOT NULL, owner VARCHAR(191) NOT NULL, revision BIGINT NOT NULL)`, identity, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS release_version_scope (release_version_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS change_payloads (change_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS issue_sync_state (connection VARCHAR(191) PRIMARY KEY, last_at BIGINT NOT NULL, status VARCHAR(32) NOT NULL, detail %s NOT NULL)`, doc),
@@ -409,6 +410,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string) (s
 }
 
 func registerIntegrationRoutes(mux *http.ServeMux, s *Store) {
+	registerDataSyncRoutes(mux, s)
 	registerIssueUserRoutes(mux, s)
 	mux.HandleFunc("GET /api/sql-executions", func(w http.ResponseWriter, r *http.Request) { writeIntegrationJSON(w, s.SQLLedger(), nil) })
 	mux.HandleFunc("GET /api/issue-sync", func(w http.ResponseWriter, r *http.Request) { writeIntegrationJSON(w, s.issueSyncStates(), nil) })

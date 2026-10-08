@@ -29,6 +29,30 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	if err := st.UpsertService(Service{Name: "orders", ArtifactType: "jar", BuildTool: "maven", MavenGoals: "package"}); err != nil {
 		t.Fatal(err)
 	}
+	batchWork := &WorkItem{Title: "MySQL 批量交付", Owner: "local"}
+	if err = st.CreateWorkItem(batchWork); err != nil {
+		t.Fatal(err)
+	}
+	base, err := st.WorkDelivery(batchWork.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := WorkDeliverySave{Digest: base.Digest, Changes: []Change{{Kind: "code", Title: "批量代码", Service: "orders", Reference: "feature/batch"}, {Kind: "manual", Title: "批量确认"}}}
+	if err = st.SaveWorkDelivery(batchWork.ID, &batch, "local", true); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := st.WorkDelivery(batchWork.ID)
+	if err != nil || len(saved.Changes) != 2 {
+		t.Fatalf("batch roundtrip failed: %v", err)
+	}
+	edit := saved.Changes[0]
+	edit.Reference = "feature/updated"
+	if err = st.SaveWorkDelivery(batchWork.ID, &WorkDeliverySave{Digest: saved.Digest, Changes: []Change{edit}}, "local", true); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SaveWorkDelivery(batchWork.ID, &WorkDeliverySave{Digest: saved.Digest, Changes: []Change{{Kind: "manual", Title: "stale"}}}, "local", true); err == nil {
+		t.Fatal("stale MySQL batch accepted")
+	}
 	if got := st.GetService("orders"); got == nil || !strings.HasPrefix(got.ApplicationID, "app_") {
 		t.Fatalf("service was not persisted: %#v", got)
 	}

@@ -48,20 +48,21 @@ type WorkItem struct {
 // Change is an independent implementation change. The same record is promoted
 // through environments and is never copied for dev/test/prod.
 type Change struct {
-	ID           int64      `json:"id"`
-	Kind         string     `json:"kind"`
-	Title        string     `json:"title"`
-	Service      string     `json:"service,omitempty"`
-	Reference    string     `json:"reference,omitempty"`
-	Summary      string     `json:"summary,omitempty"`
-	RiskLevel    string     `json:"risk_level"`
-	RollbackPlan string     `json:"rollback_plan,omitempty"`
-	Status       string     `json:"status"`
-	Owner        string     `json:"owner,omitempty"`
-	CreatedAt    int64      `json:"created_at"`
-	UpdatedAt    int64      `json:"updated_at"`
-	WorkItems    []WorkItem `json:"work_items,omitempty"`
-	SQL          *SQLChange `json:"sql,omitempty"`
+	ID           int64        `json:"id"`
+	Kind         string       `json:"kind"`
+	Title        string       `json:"title"`
+	Service      string       `json:"service,omitempty"`
+	Reference    string       `json:"reference,omitempty"`
+	Summary      string       `json:"summary,omitempty"`
+	RiskLevel    string       `json:"risk_level"`
+	RollbackPlan string       `json:"rollback_plan,omitempty"`
+	Status       string       `json:"status"`
+	Owner        string       `json:"owner,omitempty"`
+	CreatedAt    int64        `json:"created_at"`
+	UpdatedAt    int64        `json:"updated_at"`
+	WorkItems    []WorkItem   `json:"work_items,omitempty"`
+	SQL          *SQLChange   `json:"sql,omitempty"`
+	Nacos        *NacosChange `json:"nacos,omitempty"`
 }
 
 type ReleaseVersion struct {
@@ -306,6 +307,16 @@ func normalizeChange(v *Change) error {
 		if v.SQL.MaxAffectedRows < 1 || v.SQL.MaxAffectedRows > 10000 {
 			return fmt.Errorf("允许影响行数为 1–10000")
 		}
+		if v.SQL.DataSync != nil {
+			if err := validateSyncScript(v); err != nil {
+				return err
+			}
+		}
+	}
+	if v.Nacos != nil {
+		if err := normalizeNacosChange(v); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -405,6 +416,9 @@ func (s *Store) UpdateChange(v *Change) error {
 	}
 	if current.Status != ChangeDraft {
 		return fmt.Errorf("仅草稿变更可编辑")
+	}
+	if current.SQL != nil && current.SQL.DataSync != nil && (v.Kind != current.Kind || v.Service != current.Service || digestJSON(v.SQL) != digestJSON(current.SQL)) {
+		return fmt.Errorf("数据同步差异已冻结，请重新对比生成新计划，不可直接改写同步 SQL")
 	}
 	if err := normalizeChange(v); err != nil {
 		return err

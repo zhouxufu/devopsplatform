@@ -21,9 +21,10 @@ import (
 // Destructive DDL, routines, joins, subqueries and arbitrary functions are not
 // accepted. DML and DDL cannot share a transaction/approval node.
 type SQLChange struct {
-	ResourceAlias   string `json:"resource_alias"`
-	Content         string `json:"content"`
-	MaxAffectedRows int    `json:"max_affected_rows"`
+	ResourceAlias   string            `json:"resource_alias"`
+	Content         string            `json:"content"`
+	MaxAffectedRows int               `json:"max_affected_rows"`
+	DataSync        *DataSyncSnapshot `json:"data_sync,omitempty"`
 }
 type sqlColumn struct {
 	Type          string  `json:"type"`
@@ -90,8 +91,9 @@ var createIndexRE = regexp.MustCompile("(?is)^create\\s+(unique\\s+)?index\\s+(`
 
 func saveSQLPayload(tx *deployTx, v *Change) error {
 	doc, _ := json.Marshal(struct {
-		SQL *SQLChange `json:"sql,omitempty"`
-	}{v.SQL})
+		SQL   *SQLChange   `json:"sql,omitempty"`
+		Nacos *NacosChange `json:"nacos,omitempty"`
+	}{v.SQL, v.Nacos})
 	_, err := tx.Exec(`INSERT INTO change_payloads(change_id,document) VALUES(?,?) ON CONFLICT(change_id) DO UPDATE SET document=excluded.document`, v.ID, string(doc))
 	return err
 }
@@ -99,10 +101,12 @@ func (s *Store) loadSQLPayload(v *Change) {
 	var doc string
 	if s.db.QueryRow(`SELECT document FROM change_payloads WHERE change_id=?`, v.ID).Scan(&doc) == nil {
 		var payload struct {
-			SQL *SQLChange `json:"sql"`
+			SQL   *SQLChange   `json:"sql"`
+			Nacos *NacosChange `json:"nacos"`
 		}
 		if json.Unmarshal([]byte(doc), &payload) == nil {
 			v.SQL = payload.SQL
+			v.Nacos = payload.Nacos
 		}
 	}
 }
@@ -689,6 +693,8 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 	seen := map[int64]bool{}
 	tables := map[string]bool{}
 	var connection *ResourceConnection
+	syncChanges := map[int64]bool{}
+	syncSnapshots := map[int64]*DataSyncSnapshot{}
 	for _, id := range ids {
 		if seen[id] {
 			return nil, fmt.Errorf("SQL 变更不能重复")
@@ -706,6 +712,16 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 			return nil, fmt.Errorf("同一 SQL 节点只能操作一个数据库连接，请分成多个节点")
 		}
 		connection = resource
+		if c.SQL.DataSync != nil {
+			if err := validateSyncScript(c); err != nil {
+				return nil, err
+			}
+			syncChanges[id] = true
+			syncSnapshots[id] = c.SQL.DataSync
+			if err := verifyDataSyncTarget(ctx, resource, environment, c.SQL.DataSync); err != nil {
+				return nil, fmt.Errorf("同步任务 #%d：%w", c.SQL.DataSync.TaskID, err)
+			}
+		}
 		ops, err := parseChangeSQL(c.SQL.Content)
 		if err != nil {
 			return nil, err
@@ -747,7 +763,23 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 		return nil, err
 	}
 	p.SchemaDigest = digestJSON(catalogSnapshot(catalog, p.Tables))
-	dmlTables := map[string]bool{}
+	for _, snapshot := range syncSnapshots {
+		q, _ := parseSyncQuery(snapshot.TargetSQL)
+		table := catalog[q.Table]
+		unique := false
+		if table != nil {
+			for _, idx := range table.Indexes {
+				if idx.Unique && strings.Join(idx.Columns, "\x00") == strings.Join(snapshot.Keys, "\x00") {
+					unique = true
+				}
+			}
+		}
+		if !unique {
+			return nil, fmt.Errorf("同步匹配键不再对应目标唯一索引，请重新对比")
+		}
+	}
+	dmlTables := map[string]int64{}
+	syncScopes := map[string]bool{}
 	for i := range p.Statements {
 		op := &p.Statements[i]
 		mode := "ddl"
@@ -762,10 +794,10 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 			return nil, fmt.Errorf("第 %d 条预检失败：%w", i+1, err)
 		}
 		if mode == "dml" {
-			if dmlTables[op.Table] {
+			if prior := dmlTables[op.Table]; prior != 0 && (prior != op.ChangeID || !syncChanges[op.ChangeID]) {
 				return nil, fmt.Errorf("本版同一 SQL 节点每个表仅支持一条 DML，避免前序语句改变后续审批范围；批量插入请使用多行 VALUES")
 			}
-			dmlTables[op.Table] = true
+			dmlTables[op.Table] = op.ChangeID
 			if op.ExpectedRows > op.MaxAffectedRows {
 				return nil, fmt.Errorf("INSERT 超过允许影响行数")
 			}
@@ -777,6 +809,13 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 					return nil, e
 				}
 				op.ExpectedRows, op.DataDigest = count, hash
+				if syncChanges[op.ChangeID] {
+					key := op.Table + ":" + hash
+					if count != 1 || syncScopes[key] {
+						return nil, fmt.Errorf("同步更新必须对应互不重叠的单行唯一键")
+					}
+					syncScopes[key] = true
+				}
 			}
 		}
 	}
@@ -784,7 +823,7 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 		p.Warnings = append(p.Warnings, "DDL 会隐式提交；部分成功后停止，不自动重跑或假装事务回滚。")
 	}
 	if p.Mode == "dml" {
-		p.Warnings = append(p.Warnings, "DML 在单个 InnoDB 事务中执行；目标数据变化或行数超过上限时停止。每个表限一条 DML，批量插入可用多行 VALUES。")
+		p.Warnings = append(p.Warnings, "DML 在单个 InnoDB 事务中执行；目标数据变化或行数超过上限时停止。普通 SQL 每个表限一条 DML；数据同步仅允许同一冻结计划的互不重叠唯一键操作。")
 	}
 	return p, nil
 }

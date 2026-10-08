@@ -746,6 +746,33 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		wj(w, st.WorkItems(r.URL.Query().Get("status"), r.URL.Query().Get("q"), limit))
 	})
+	mux.HandleFunc("GET /api/work-items/{id}/delivery-content", func(w http.ResponseWriter, r *http.Request) {
+		out, err := st.WorkDelivery(changeID(r))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		wj(w, out)
+	})
+	mux.HandleFunc("PUT /api/work-items/{id}/delivery-content", func(w http.ResponseWriter, r *http.Request) {
+		var req WorkDeliverySave
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req) != nil {
+			writeError(w, http.StatusBadRequest, "交付内容格式错误")
+			return
+		}
+		admin := canManageOwned(r, "")
+		if err := st.SaveWorkDelivery(changeID(r), &req, actorOf(r), admin); err != nil {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
+		st.Audit(actorOf(r), "save", "work-delivery", fmt.Sprint(changeID(r)), map[string]any{"items": len(req.Changes)})
+		out, err := st.WorkDelivery(changeID(r))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		wj(w, out)
+	})
 	mux.HandleFunc("POST /api/work-items", func(w http.ResponseWriter, r *http.Request) {
 		var item WorkItem
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&item) != nil {
