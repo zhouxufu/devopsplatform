@@ -60,6 +60,7 @@ type Change struct {
 	CreatedAt    int64      `json:"created_at"`
 	UpdatedAt    int64      `json:"updated_at"`
 	WorkItems    []WorkItem `json:"work_items,omitempty"`
+	SQL          *SQLChange `json:"sql,omitempty"`
 }
 
 type ReleaseVersion struct {
@@ -191,8 +192,12 @@ func (s *Store) GetWorkItem(id int64) *WorkItem {
 }
 
 func (s *Store) UpdateWorkItem(v *WorkItem) error {
-	if s.GetWorkItem(v.ID) == nil {
+	current := s.GetWorkItem(v.ID)
+	if current == nil {
 		return fmt.Errorf("需求或缺陷不存在")
+	}
+	if strings.HasPrefix(current.Source, "zentao:") && (v.Source != current.Source || v.ExternalID != current.ExternalID || v.Kind != current.Kind) {
+		return fmt.Errorf("同步的外部记录不能修改来源、编号或类型")
 	}
 	if err := normalizeWorkItem(v); err != nil {
 		return err
@@ -206,6 +211,9 @@ func (s *Store) UpdateWorkItem(v *WorkItem) error {
 }
 
 func (s *Store) DeleteWorkItem(id int64) error {
+	if current := s.GetWorkItem(id); current != nil && strings.HasPrefix(current.Source, "zentao:") {
+		return fmt.Errorf("同步的外部记录不能直接删除；请调整同步范围")
+	}
 	var refs int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM work_item_changes WHERE work_item_id=?`, id).Scan(&refs)
 	if refs > 0 {
@@ -241,6 +249,17 @@ func normalizeChange(v *Change) error {
 	if v.RiskLevel != "low" && v.RiskLevel != "medium" && v.RiskLevel != "high" {
 		return fmt.Errorf("风险等级仅支持 low、medium 或 high")
 	}
+	if v.SQL != nil {
+		if v.Kind != "mysql" || v.Service == "" || !validResourceName(v.SQL.ResourceAlias) {
+			return fmt.Errorf("SQL 变更必须关联应用与资源别名")
+		}
+		if _, err := parseChangeSQL(v.SQL.Content); err != nil {
+			return err
+		}
+		if v.SQL.MaxAffectedRows < 1 || v.SQL.MaxAffectedRows > 10000 {
+			return fmt.Errorf("允许影响行数为 1–10000")
+		}
+	}
 	return nil
 }
 
@@ -250,12 +269,23 @@ func (s *Store) CreateChange(v *Change) error {
 	}
 	now := time.Now().Unix()
 	v.Status, v.CreatedAt, v.UpdatedAt = ChangeDraft, now, now
-	res, err := s.db.Exec(`INSERT INTO changes(kind,title,service,reference,summary,risk_level,rollback_plan,status,owner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO changes(kind,title,service,reference,summary,risk_level,rollback_plan,status,owner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		v.Kind, v.Title, v.Service, v.Reference, v.Summary, v.RiskLevel, v.RollbackPlan, v.Status, strings.TrimSpace(v.Owner), now, now)
 	if err == nil {
 		v.ID, _ = res.LastInsertId()
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if err = saveSQLPayload(tx, v); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Changes(status, service, query string, limit int) []Change {
@@ -291,6 +321,7 @@ func (s *Store) Changes(status, service, query string, limit int) []Change {
 	rows.Close() // SQLite uses one connection: release it before loading associations.
 	for i := range out {
 		out[i].WorkItems = s.ChangeWorkItems(out[i].ID)
+		s.loadSQLPayload(&out[i])
 	}
 	return out
 }
@@ -301,6 +332,7 @@ func (s *Store) GetChange(id int64) *Change {
 		return nil
 	}
 	v.WorkItems = s.ChangeWorkItems(id)
+	s.loadSQLPayload(&v)
 	return &v
 }
 
@@ -330,9 +362,29 @@ func (s *Store) UpdateChange(v *Change) error {
 	if err := normalizeChange(v); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`UPDATE changes SET kind=?,title=?,service=?,reference=?,summary=?,risk_level=?,rollback_plan=?,updated_at=? WHERE id=?`,
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE changes SET kind=?,title=?,service=?,reference=?,summary=?,risk_level=?,rollback_plan=?,updated_at=? WHERE id=? AND status='draft'`,
 		v.Kind, v.Title, v.Service, v.Reference, v.Summary, v.RiskLevel, v.RollbackPlan, time.Now().Unix(), v.ID)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		// MySQL reports zero changed rows when only the separately stored SQL
+		// payload changes within the same second. UPDATE still holds its row
+		// lock until commit; verify the draft before saving that payload.
+		var status string
+		if err := tx.QueryRow(`SELECT status FROM changes WHERE id=?`, v.ID).Scan(&status); err != nil || status != ChangeDraft {
+			return fmt.Errorf("变更状态已变化，请刷新")
+		}
+	}
+	if err = saveSQLPayload(tx, v); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetChangeWorkItems(changeID int64, ids []int64) error {
@@ -412,6 +464,9 @@ func (s *Store) DeleteChange(id int64) error {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM changes WHERE id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM change_payloads WHERE change_id=?`, id); err != nil {
 		return err
 	}
 	return tx.Commit()

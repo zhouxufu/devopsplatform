@@ -64,6 +64,10 @@ var deployMigrationTables = func() []deployMigrationTable {
 		migrationTable("change_executions", "id,promotion_id,change_id,environment,connection,status,before_digest,after_digest,log,started_at,ended_at", "id"),
 		migrationTable("delivery_templates", "id,document,owner", "id"),
 		migrationTable("delivery_runs", "id,plan,digest,status,execution,env_secrets,owner,approver,created_at,revision", "id"),
+		migrationTable("change_payloads", "change_id,document", "change_id"),
+		migrationTable("issue_sync_state", "connection,last_at,status,detail", "connection"),
+		migrationTable("external_work_items", "connection,kind,external_id,work_item_id", "connection,kind,external_id"),
+		migrationTable("sql_execution_ledger", "connection,database_name,change_id,digest,status,run_id,node_id,detail", "connection,database_name,change_id"),
 		migrationTable("audit_events", "id,actor,action,resource_type,resource_id,detail,created_at", "id"),
 		migrationTable("agent_configs", "host_name,server_url,monitor_url,run_user,run_group,spool_max_mb,collect,updated_at,applied_at,last_apply_error", "host_name"),
 	}

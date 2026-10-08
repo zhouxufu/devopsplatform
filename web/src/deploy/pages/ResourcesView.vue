@@ -8,8 +8,8 @@ import { toast } from '../../shared/composables/toast.js'
 import { MULTILINE_MODES, collectEditor, collectMultiline, selectCollectApplication } from '../agentCollection.js'
 import EnvironmentsView from './EnvironmentsView.vue'
 
-const props=defineProps({plugin:{type:String,default:'deploy'}})
-const resourceURL=url=>url.startsWith('api/')?`/api/resources/${url.slice(4)}`:url
+const props=defineProps({plugin:{type:String,default:'deploy'},directAPI:Boolean})
+const resourceURL=url=>url.startsWith('api/')?(props.directAPI?url:`/api/resources/${url.slice(4)}`):url
 const tab=ref(''),connections=ref([]),hosts=ref([]),groups=ref([]),environments=ref([]),variables=ref([]),runners=ref([]),audit=ref([]),agentStats=ref([]),applications=ref([])
 const showConnection=ref(false),showHost=ref(false),showGroup=ref(false),showVariables=ref(false),showRunner=ref(false),showAgent=ref(false),showApplication=ref(false)
 const connectionForm=ref({}),hostForm=ref({}),editingHost=ref(null),groupForm=ref({}),variableForm=ref({}),runnerForm=ref({}),testState=ref({}),hostTestState=ref({})
@@ -17,7 +17,7 @@ const applicationForm=ref({name:''})
 const hostKeyScanning=ref(false),pendingHostKey=ref(null)
 const connectionKeyScanning=ref(false),pendingConnectionHostKey=ref(null)
 const agentHost=ref(null),agentForm=ref({}),agentSaving=ref(false),agentApplying=ref(false),agentRemoteState=ref({}),agentInstallState=ref({})
-const KINDS={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE'}
+const KINDS={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 变更数据库',zentao:'禅道 16.0（需求来源）'}
 const ALL_RESOURCE_TABS={connections:['connections','🔌','连接'],environments:['environments','🌐','环境'],hosts:['hosts','🖥','主机'],groups:['groups','▦','主机组'],variables:['variables','⌘','变量组'],runners:['runners','⚙','构建 Runner'],audit:['audit','◷','审计日志']}
 const RESOURCE_SCOPES={deploy:['connections','environments','hosts','groups','variables','runners','audit'],logs:['hosts','environments','audit'],monitor:['hosts','environments','audit'],devtools:['environments','audit']}
 const PLUGIN_LABELS={deploy:'部署平台',logs:'日志查询',monitor:'监控大盘',devtools:'AI 开发工具'}
@@ -30,7 +30,7 @@ async function json(url,opt){const r=await fetch(resourceURL(url),opt);const bod
 const asArray=value=>Array.isArray(value)?value:[]
 async function loadAgentStats(){const data=await json('/api/plugins/logs/api/stats').catch(()=>({agents:[]}));agentStats.value=asArray(data?.agents)}
 async function load(){
-  const result=await Promise.all(['api/connections','api/hosts','api/host-groups','api/environments','api/variable-groups','api/runners','api/audit?limit=100','/api/registry/applications'].map(x=>json(x)))
+  const result=await Promise.all(['api/connections','api/hosts','api/host-groups','api/environments','api/variable-groups','api/runners','api/audit?limit=100','/api/registry/applications'].map(x=>props.directAPI&&x==='/api/registry/applications'?Promise.resolve([]):json(x)))
   ;[connections.value,hosts.value,groups.value,environments.value,variables.value,runners.value,audit.value,applications.value]=result.map(asArray)
   loadAgentStats()
 }
@@ -38,7 +38,7 @@ onMounted(load)
 const post=(url,body)=>json(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
 async function remove(url,label){if(!confirm(`删除「${label}」？`))return;try{await json(url,{method:'DELETE'});toast('已删除','success');load()}catch(e){toast(e.message,'error')}}
 function editConnection(v){
-  const config={settings_path:'',repository_id:'',mirror_of:'*',region:'cn-hangzhou',oss_bucket:'',oss_endpoint:'',oss_prefix:'logplatform/releases',security_token:'',auth_mode:'https',known_hosts:'',ssh_fingerprint:'',...(v?.config||{})}
+  const config={database:'',tls:'false',product_ids:'',baseline:'',sync_minutes:'0',settings_path:'',repository_id:'',mirror_of:'*',region:'cn-hangzhou',oss_bucket:'',oss_endpoint:'',oss_prefix:'logplatform/releases',security_token:'',auth_mode:'https',known_hosts:'',ssh_fingerprint:'',...(v?.config||{})}
   connectionForm.value=v?{...v,username:'',password:'',private_key:'',passphrase:'',config}:{name:'',kind:'maven',endpoint:'',username:'',password:'',private_key:'',passphrase:'',config}
   pendingConnectionHostKey.value=null;connectionKeyScanning.value=false;showConnection.value=true
 }
@@ -204,13 +204,15 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
 
   <Modal :show="showConnection" title="资源连接" wide @close="showConnection=false">
     <div class="fld"><label>连接名称</label><ElInput v-model="connectionForm.name" placeholder="例如 云效代码凭据" /><small class="help">用于在应用中选择这份凭据，支持中文；名称中不要包含空格或斜杠。</small></div>
-    <div class="fld"><label>类型</label><Sel v-model="connectionForm.kind" :options="Object.entries(KINDS).map(([value,label])=>({value,label}))" width="100%" /></div>
+    <div class="fld"><label>类型</label><Sel v-model="connectionForm.kind" :disabled="!!connectionForm.updated_at" :options="Object.entries(KINDS).map(([value,label])=>({value,label}))" width="100%" /></div>
     <div v-if="connectionForm.kind==='git'" class="fld"><label>认证方式</label><Sel v-model="gitAuthMode" :options="[{value:'https',label:'HTTPS + 用户名 / PAT'},{value:'ssh',label:'SSH 私钥'}]" width="100%" /><small class="help">认证方式必须与应用中的仓库地址一致；SSH 地址形如 git@codeup.aliyun.com:组织/仓库.git。</small></div>
     <div v-if="connectionForm.kind!=='aliyun-sae'" class="fld">
       <label>{{connectionForm.kind==='git'&&gitAuthMode==='ssh'?'SSH 服务地址':'服务地址'}}</label>
-      <ElInput :model-value="connectionForm.endpoint" :placeholder="connectionForm.kind==='git'?(gitAuthMode==='ssh'?'codeup.aliyun.com:22':'https://codeup.aliyun.com'):connectionForm.kind==='docker'?'https://registry.example.com':'https://packages.example.com/repository/maven-public'" @update:model-value="updateConnectionEndpoint" />
+      <ElInput :model-value="connectionForm.endpoint" :placeholder="connectionForm.kind==='mysql'?'192.168.0.32:3306':connectionForm.kind==='zentao'?'http://192.168.0.5/zentao':connectionForm.kind==='git'?(gitAuthMode==='ssh'?'codeup.aliyun.com:22':'https://codeup.aliyun.com'):connectionForm.kind==='docker'?'https://registry.example.com':'https://packages.example.com/repository/maven-public'" @update:model-value="updateConnectionEndpoint" />
       <small v-if="connectionForm.kind==='git'" class="help">只填写 Git 服务，不填写具体仓库路径；HTTPS 可省略协议，SSH 可省略默认端口 22。</small>
     </div>
+    <template v-if="connectionForm.kind==='mysql'"><div class="two"><div class="fld"><label>数据库</label><ElInput v-model="connectionForm.config.database" placeholder="例如 estate_ai" /></div><div class="fld"><label>连接加密</label><Sel v-model="connectionForm.config.tls" :options="[{value:'true',label:'TLS（校验证书）'},{value:'false',label:'内网明文连接'}]" width="100%" /></div></div><small class="help">每个环境使用独立连接和最小权限账号；预检不会试执行 DDL。账号需可读取目标表结构。</small></template>
+    <template v-if="connectionForm.kind==='zentao'"><div class="two"><div class="fld"><label>产品 ID（逗号分隔）</label><ElInput v-model="connectionForm.config.product_ids" placeholder="1,2" /></div><div class="fld"><label>同步日期基线</label><ElInput v-model="connectionForm.config.baseline" placeholder="YYYY-MM-DD，留空全部" /></div></div><div class="fld"><label>自动同步周期（分钟，0 关闭）</label><ElInput v-model="connectionForm.config.sync_minutes" /></div><small class="help">适配开源 16.0，会话由平台维护。只读同步 Bug，不回写禅道；地址须包含实际安装子路径。</small></template>
     <template v-if="connectionForm.kind==='maven'"><div class="two"><div class="fld"><label>仓库 ID</label><ElInput v-model="connectionForm.config.repository_id" placeholder="默认使用连接名称" /></div><div class="fld"><label>mirrorOf</label><ElInput v-model="connectionForm.config.mirror_of" placeholder="*" /></div></div><div class="fld"><label>已有 settings.xml（可选）</label><ElInput v-model="connectionForm.config.settings_path" placeholder="留空由平台安全生成" /><small class="help">留空时自动生成引用环境变量的 settings.xml，不把密码写入文件。</small></div></template>
     <template v-if="connectionForm.kind==='aliyun-sae'"><div class="two"><div class="fld"><label>地域</label><ElInput v-model="connectionForm.config.region" placeholder="cn-hangzhou" /></div><div class="fld"><label>SAE Endpoint（可选）</label><ElInput v-model="connectionForm.endpoint" placeholder="留空自动生成" /></div></div><div class="two"><div class="fld"><label>OSS Bucket（JAR 必填）</label><ElInput v-model="connectionForm.config.oss_bucket" /></div><div class="fld"><label>OSS Endpoint（可选）</label><ElInput v-model="connectionForm.config.oss_endpoint" placeholder="留空按地域生成" /></div></div><div class="fld"><label>OSS 对象前缀</label><ElInput v-model="connectionForm.config.oss_prefix" placeholder="logplatform/releases" /></div><div class="fld"><label>STS SecurityToken（临时凭据时填写）</label><ElInput v-model="connectionForm.config.security_token" type="password" show-password placeholder="长期 AccessKey 留空" /></div></template>
     <template v-if="connectionForm.kind==='git'&&gitAuthMode==='ssh'">

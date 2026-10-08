@@ -4,6 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 import Modal from "../../shared/components/Modal.vue";
 import HelpTip from "../../shared/components/HelpTip.vue";
 import Sel from "../../shared/components/Sel.vue";
+import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor.vue';
+import ResourcesView from './ResourcesView.vue';
 import { ElButton, ElInput } from "../../shared/components/ui.js";
 import { toast } from "../../shared/composables/toast.js";
 const api = inject("api"),
@@ -20,11 +22,23 @@ const work = ref([]),
   deliveries = ref([]),
   services = ref([]),
   me = ref({});
+const connections=ref([]),environments=ref([]),syncStates=ref([]),showSync=ref(false),syncForm=ref({connection:'',baseline:''}),showBindings=ref(false),showResources=ref(false),showSQLPreview=ref(false),sqlPreview=ref(null),previewItem=ref(null),previewEnvironment=ref('');
+function openResources(){if(window.parent!==window)window.parent.postMessage({type:'platform.open',view:'resources'},location.origin);else showResources.value=true}
+async function syncIssues(){
+  if(!syncForm.value.connection)return toast('请选择禅道连接','warning');saving.value=true
+  try{await api(`api/issue-sync/${encodeURIComponent(syncForm.value.connection)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({baseline:syncForm.value.baseline})});await load();toast('禅道同步完成','success')}catch(e){toast(e.message,'error')}finally{saving.value=false;await load()}
+}
+async function checkSQL(item){previewItem.value=item;previewEnvironment.value=environments.value[0]?.name||'';sqlPreview.value=null;showSQLPreview.value=true}
+async function runSQLPreview(){
+  saving.value=true;sqlPreview.value=null
+  try{sqlPreview.value=await api(`api/changes/${previewItem.value.id}/sql-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({environment:previewEnvironment.value})})}catch(e){toast(e.message,'error')}finally{saving.value=false}
+}
 const query = ref(""),
   filter = ref(""),
   dialog = ref(""),
   form = ref({}),
   saving = ref(false);
+watch(()=>form.value.kind,kind=>{if(dialog.value==='changes'&&kind==='mysql'&&!form.value.sql)form.value.sql={resource_alias:'',content:'',max_affected_rows:100}})
 const kinds = [
   { value: "code", label: "代码分支" },
   { value: "artifact", label: "应用制品" },
@@ -76,12 +90,14 @@ async function load() {
       versions.value,
       services.value,
       deliveries.value,
+      connections.value,environments.value,syncStates.value,
     ] = await Promise.all([
       api("api/work-items?limit=500"),
       api("api/changes?limit=500"),
       api("api/release-versions?limit=500"),
       api("api/services"),
       api("api/delivery/runs"),
+      api('api/connections'),api('api/environments'),api('api/issue-sync'),
     ]);
   } catch (e) {
     toast(e.message, "error");
@@ -113,6 +129,7 @@ function open(type, item) {
           rollback_plan: "",
           work_item_ids: [],
         };
+  if(type==='changes')form.value.sql=item?.sql?{...item.sql}:{resource_alias:'',content:item?.kind==='mysql'?item.reference||'':'',max_affected_rows:100};
   if (type === "versions")
     form.value = item
       ? {
@@ -151,7 +168,7 @@ async function save() {
     await api(`api/${endpoint}${form.value.id ? "/" + form.value.id : ""}`, {
       method: form.value.id ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form.value),
+      body: JSON.stringify({...form.value,sql:dialog.value==='changes'&&form.value.kind==='mysql'?{...form.value.sql,max_affected_rows:Number(form.value.sql.max_affected_rows)}:undefined}),
     });
     dialog.value = "";
     await load();
@@ -200,6 +217,7 @@ onMounted(async () => {
           text="需求与变更独立存在；发布版本汇总本次交付范围，不绑定环境。执行时由部署编排选择环境，审核的是具体执行快照。"
         />
       </div>
+      <div class="actions"><ElButton @click="openResources">资源连接</ElButton><ElButton @click="showBindings=true">应用资源绑定</ElButton><ElButton v-if="tab==='work'" @click="showSync=true">同步禅道 BUG</ElButton></div>
       <ElButton type="primary" @click="open(tab)"
         >＋
         {{
@@ -295,6 +313,7 @@ onMounted(async () => {
       </div>
       <template v-if="tab === 'changes'"
         ><code v-if="item.reference">{{ item.reference }}</code>
+        <p v-if="item.sql">数据库资源：{{item.sql.resource_alias}} · 最多 {{item.sql.max_affected_rows}} 行 <ElButton size="small" @click="checkSQL(item)">SQL 预检</ElButton></p>
         <div class="meta">
           关联需求：{{
             (item.work_items || []).map((v) => v.title).join("、") ||
@@ -398,6 +417,14 @@ onMounted(async () => {
         >
       </div>
     </article>
+    <Modal :show="showResources" title="资源中心" extra-wide @close="showResources=false;load()"><ResourcesView directAPI /></Modal>
+    <ApplicationResourcesEditor :show="showBindings" :services="services" :initial-service="form.service" @close="showBindings=false" />
+    <Modal :show="showSync" title="同步禅道 BUG（开源 16.0）" wide @close="showSync=false">
+      <div class="form-grid"><label class="span">禅道连接<Sel v-model="syncForm.connection" :options="connections.filter(c=>c.kind==='zentao').map(c=>c.name)" width="100%" /></label><label class="span">本次日期基线（留空沿用连接设置）<ElInput v-model="syncForm.baseline" placeholder="YYYY-MM-DD" /></label><p class="notice span">同步产品范围内的 Bug，关闭状态来自禅道。尚未回写上线状态；选版时仍需核对历史上线范围。</p><p v-for="state in syncStates.filter(s=>s.connection===syncForm.connection)" :key="state.connection" class="span">上次同步：{{state.status==='success'?'成功':'失败'}} · {{state.detail}}</p><div class="actions span"><ElButton @click="openResources">配置禅道连接</ElButton><ElButton type="primary" :loading="saving" @click="syncIssues">立即同步</ElButton></div></div>
+    </Modal>
+    <Modal :show="showSQLPreview" title="SQL 结构与影响范围预检（不执行）" extra-wide @close="showSQLPreview=false">
+      <div class="form-grid"><label>目标环境<Sel v-model="previewEnvironment" :options="environments.map(e=>({value:e.name,label:e.display_name}))" width="100%" /></label><ElButton :loading="saving" @click="runSQLPreview">读取目标库并预检</ElButton><template v-if="sqlPreview"><p class="span">{{sqlPreview.connection}} / {{sqlPreview.database}} · {{sqlPreview.mode.toUpperCase()}}</p><p v-for="warning in sqlPreview.warnings" :key="warning" class="notice span">{{warning}}</p><article v-for="(op,index) in sqlPreview.statements" :key="index" class="span"><b>{{op.skip?'跳过（结构一致）':'计划执行'}} · {{op.reason||op.action}} · {{op.expected_rows||0}} 行</b><pre>{{op.sql}}</pre></article><p class="notice span">预检不执行 SQL。标记就绪后，在部署编排中选择 SQL 节点，提交冻结计划并按环境审批。</p></template></div>
+    </Modal>
     <Modal
       :show="!!dialog"
       :title="
@@ -446,7 +473,7 @@ onMounted(async () => {
             >说明<ElInput v-model="form.description" type="textarea" :rows="3"
           /></label>
           <p class="notice span">
-            本版支持外部记录关联；禅道自动同步、日期基线及上线状态回写尚未接通。
+            禅道 16.0 可通过“同步禅道 BUG”导入；此处用于自定义需求或手工关联。上线状态回写尚未接通。
           </p></template
         >
         <template v-if="dialog === 'changes'"
@@ -462,7 +489,7 @@ onMounted(async () => {
               all-label="不关联应用"
               filterable
               width="100%" /></label
-          ><label class="span"
+          ><label v-if="form.kind!=='mysql'" class="span"
             >{{
               form.kind === "code"
                 ? "代码分支"
@@ -477,7 +504,7 @@ onMounted(async () => {
               v-model="form.reference"
               type="textarea"
               :rows="3" /></label
-          ><label
+          ><template v-if="form.kind==='mysql'"><label>数据库资源别名<ElInput v-model="form.sql.resource_alias" placeholder="如 business-db（先配置应用资源绑定）" /></label><label>允许影响行数（1–10000）<ElInput v-model.number="form.sql.max_affected_rows" type="number" /></label><label class="span">执行 SQL<ElInput v-model="form.sql.content" type="textarea" :rows="7" placeholder="ALTER TABLE menus ADD COLUMN enabled int NOT NULL DEFAULT 1;" /></label><p class="notice span">支持建表、单字段新增、普通/唯一索引及单表 INSERT/UPDATE/DELETE；不支持删除结构、函数、子查询或跨库。DDL 与 DML 分节点、分次交付。预检检查目标结构，执行前再次核对审批基线。</p></template><label
             >关联需求 / BUG（可选）<Sel
               v-model="form.work_item_ids"
               multiple
@@ -507,7 +534,7 @@ onMounted(async () => {
               :rows="3"
           /></label>
           <p
-            v-if="!['code', 'artifact', 'manual'].includes(form.kind)"
+            v-if="!['code', 'artifact', 'manual','mysql'].includes(form.kind)"
             class="notice span"
           >
             该类变更目前可登记、关联和进入版本；执行器未接通，编排会阻止提交，不会自动执行或标记成功。
@@ -591,7 +618,10 @@ onMounted(async () => {
 .heading,
 .record-head {
   justify-content: space-between;
+  flex-wrap: wrap;
 }
+.title { min-width: 0; }
+.actions { flex-wrap: wrap; }
 .title h2 {
   margin: 0;
 }

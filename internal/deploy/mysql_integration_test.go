@@ -41,7 +41,7 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	if err := st.UpsertHostGroup(HostGroup{Name: "orders-test", Environment: "test", Hosts: []string{"test-a"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.UpsertServiceEnvironment(ServiceEnvironment{Service: "orders", Environment: "test", TargetType: "ssh-jar", HostGroup: "orders-test", RemoteDir: "/opt/orders"}); err != nil {
+	if err := st.UpsertServiceEnvironment(ServiceEnvironment{Service: "orders", Environment: "test", TargetType: "ssh-jar", HostGroup: "orders-test", RemoteDir: "/opt/orders", StartCmd: "bash /opt/orders/current/service.sh start"}); err != nil {
 		t.Fatal(err)
 	}
 	if target := st.GetServiceEnvironment("orders", "test"); target == nil || len(target.Hosts) != 1 {
@@ -102,5 +102,31 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	}
 	if len(st.ReleaseVersions("", 100)) != 1 || len(st.DeliveryRuns()) != 1 || len(st.DeliveryTemplates()) != 1 {
 		t.Fatal("MySQL delivery persistence is incomplete")
+	}
+	sqlChange := &Change{Kind: "mysql", Title: "MySQL SQL payload", Service: "orders", SQL: &SQLChange{ResourceAlias: "db", Content: "CREATE TABLE menus (id int NOT NULL, PRIMARY KEY (id))", MaxAffectedRows: 100}}
+	if err := st.CreateChange(sqlChange); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.GetChange(sqlChange.ID); got == nil || got.SQL == nil || got.SQL.Content != sqlChange.SQL.Content {
+		t.Fatalf("MySQL SQL payload persistence failed: %+v", got)
+	}
+	sqlChange.SQL.Content = "ALTER TABLE menus ADD COLUMN enabled int NOT NULL DEFAULT 1"
+	if err := st.UpdateChange(sqlChange); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.GetChange(sqlChange.ID); got.SQL == nil || got.SQL.Content != sqlChange.SQL.Content {
+		t.Fatal("MySQL payload-only edit was lost")
+	}
+	if _, err := st.db.Exec(`INSERT INTO issue_sync_state(connection,last_at,status,detail) VALUES('qa',1,'success','中文同步')`); err != nil {
+		t.Fatal(err)
+	}
+	if states := st.issueSyncStates(); len(states) != 1 || states[0].Detail != "中文同步" {
+		t.Fatalf("MySQL sync state persistence failed: %+v", states)
+	}
+	if _, err := st.db.Exec(`INSERT INTO sql_execution_ledger(connection,database_name,change_id,digest,status,run_id,node_id,detail) VALUES('qa','qa',?,'sha256:qa','success',?,'sql','中文执行')`, sqlChange.ID, delivery.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ledger := st.SQLLedger(); len(ledger) != 1 || ledger[0]["status"] != "success" {
+		t.Fatalf("MySQL SQL ledger persistence failed: %+v", ledger)
 	}
 }

@@ -19,7 +19,7 @@ import (
 
 type ResourceConnection struct {
 	Name             string            `json:"name"`
-	Kind             string            `json:"kind"` // git | maven | docker | aliyun-sae
+	Kind             string            `json:"kind"` // git | maven | docker | aliyun-sae | mysql | zentao
 	Endpoint         string            `json:"endpoint"`
 	Config           map[string]string `json:"config,omitempty"`
 	Username         string            `json:"username,omitempty"`
@@ -123,7 +123,7 @@ func normalizeConnectionEndpoint(kind, endpoint string) string {
 	}
 	// Resource endpoints are HTTP(S) service roots. HTTPS is the safe and most
 	// common default; explicitly configured http:// addresses remain unchanged.
-	if kind == "git" || kind == "maven" || kind == "docker" {
+	if kind == "git" || kind == "maven" || kind == "docker" || kind == "zentao" || kind == "nacos" {
 		return "https://" + endpoint
 	}
 	return endpoint
@@ -141,8 +141,11 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 	if !validConnectionName(c.Name) {
 		return fmt.Errorf("连接名称支持中文、字母、数字、点、短横线和下划线，长度 1-64")
 	}
-	if c.Kind != "git" && c.Kind != "maven" && c.Kind != "docker" && c.Kind != TargetAliyunSAE {
-		return fmt.Errorf("连接类型仅支持 git、maven、docker、aliyun-sae")
+	if c.Kind != "git" && c.Kind != "maven" && c.Kind != "docker" && c.Kind != TargetAliyunSAE && c.Kind != "mysql" && c.Kind != "zentao" {
+		return fmt.Errorf("连接类型仅支持 git、maven、docker、aliyun-sae、mysql、zentao")
+	}
+	if current != nil && current.Kind != c.Kind {
+		return fmt.Errorf("已有连接不能更换类型，请新建连接")
 	}
 	if c.Config == nil {
 		c.Config = map[string]string{}
@@ -169,6 +172,22 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 	}
 	if c.Kind != TargetAliyunSAE && c.Endpoint == "" {
 		return fmt.Errorf("服务地址不能为空")
+	}
+	if err := validateIntegrationConnection(&c); err != nil {
+		return err
+	}
+	if current != nil && (c.Kind == "zentao" || c.Kind == "mysql") && (current.Endpoint != c.Endpoint || current.Config["database"] != c.Config["database"]) {
+		var refs int
+		query := `SELECT COUNT(*) FROM external_work_items WHERE connection=?`
+		if c.Kind == "mysql" {
+			query = `SELECT COUNT(*) FROM sql_execution_ledger WHERE connection=?`
+		}
+		if err := s.db.QueryRow(query, c.Name).Scan(&refs); err != nil {
+			return err
+		}
+		if refs > 0 {
+			return fmt.Errorf("连接已有外部同步或 SQL 执行记录，不能更换目标，请新建连接；账号密码可以轮换")
+		}
 	}
 	if c.Kind == TargetAliyunSAE {
 		if c.Config == nil || strings.TrimSpace(c.Config["region"]) == "" {
@@ -289,11 +308,34 @@ func (s *Store) DeleteConnection(name string) error {
 	var envRefs int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM service_environments WHERE json_extract(deploy_config,'$.connection')=?`, name).Scan(&envRefs)
 	n += envRefs
+	var resourceRefs int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM application_environment_resources WHERE connection=?`, name).Scan(&resourceRefs)
+	n += resourceRefs
+	var externalRefs, executionRefs int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM external_work_items WHERE connection=?`, name).Scan(&externalRefs); err != nil {
+		return err
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sql_execution_ledger WHERE connection=?`, name).Scan(&executionRefs); err != nil {
+		return err
+	}
+	if externalRefs+executionRefs > 0 {
+		return fmt.Errorf("连接已有外部同步或 SQL 执行记录，不能删除，以保留身份关联和防重台账")
+	}
 	if n > 0 {
 		return fmt.Errorf("连接仍被 %d 个应用使用", n)
 	}
-	_, err := s.db.Exec(`DELETE FROM resource_connections WHERE name=?`, name)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`DELETE FROM issue_sync_state WHERE connection=?`, name); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM resource_connections WHERE name=?`, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) UpsertHostGroup(g HostGroup) error {

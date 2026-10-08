@@ -499,6 +499,17 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 			writeError(w, 404, "连接不存在")
 			return
 		}
+		if c.Kind == "mysql" || c.Kind == "zentao" {
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			err := testIntegrationConnection(ctx, c)
+			if err != nil {
+				wj(w, map[string]any{"ok": false, "error": err.Error()})
+				return
+			}
+			wj(w, map[string]any{"ok": true, "status": "认证及读取权限验证成功"})
+			return
+		}
 		if c.Kind == TargetAliyunSAE {
 			provider, err := newAliyunSAEProvider(c)
 			if err == nil {
@@ -635,6 +646,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 	releaseManager := NewReleaseManager(st, deployer)
 	releaseManager.Recover()
 	registerDeliveryRoutes(mux, st, releaseManager)
+	registerIntegrationRoutes(mux, st)
 	managedJavaTarget := func(service, environment string) (*ServiceEnvironment, *Service, []Host, error) {
 		target := st.GetServiceEnvironment(service, environment)
 		base := st.GetService(service)
@@ -1311,6 +1323,13 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		st.Audit("webhook", "trigger", "pipeline", fmt.Sprint(id), map[string]any{"service": sv.Name, "branch": branch})
 		wj(w, map[string]any{"id": id})
 	})
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for now := range ticker.C {
+			st.syncDueIssues(now)
+		}
+	}()
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()

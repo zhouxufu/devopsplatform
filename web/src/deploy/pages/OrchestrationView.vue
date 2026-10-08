@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import Modal from "../../shared/components/Modal.vue";
 import Sel from "../../shared/components/Sel.vue";
 import HelpTip from "../../shared/components/HelpTip.vue";
+import SQLPlanPreview from '../components/SQLPlanPreview.vue';
 import { ElButton, ElInput } from "../../shared/components/ui.js";
 import { toast } from "../../shared/composables/toast.js";
 const api = inject("api"),
@@ -17,6 +18,7 @@ const templates = ref([]),
   environments = ref([]),
   artifacts = ref([]),
   me = ref({});
+const changes=ref([]);
 const area = ref("templates"),
   showTemplate = ref(false),
   showRun = ref(false),
@@ -38,6 +40,7 @@ const states = {
   waiting: "发布中",
   waiting_next_batch: "等待下一批",
   queued: "排队中",
+  executing:'SQL 执行中 / 中断待核对',
 };
 const changeKinds = {
   code: "代码分支",
@@ -51,7 +54,7 @@ const changeKinds = {
 const kinds = [
   { value: "deploy", label: "发布应用" },
   { value: "manual", label: "人工确认" },
-  { value: "mysql", label: "SQL 变更（待接通）" },
+  { value: "mysql", label: "SQL 变更" },
   { value: "nacos", label: "Nacos 配置（待接通）" },
   { value: "data-sync", label: "数据同步（待接通）" },
   { value: "redis", label: "Redis 命令（待接通）" },
@@ -105,6 +108,7 @@ async function load() {
       versions.value,
       environments.value,
       artifacts.value,
+      changes.value,
     ] = await Promise.all([
       api("api/delivery/templates"),
       api("api/delivery/runs"),
@@ -112,6 +116,7 @@ async function load() {
       api("api/release-versions?limit=500"),
       api("api/environments"),
       api("api/artifacts?limit=500"),
+      api('api/changes?status=ready&limit=500'),
     ]);
   } catch (e) {
     toast(e.message, "error");
@@ -419,7 +424,8 @@ onMounted(async () => {
               type="textarea"
               :rows="2"
           /></label>
-          <p v-if="!['deploy', 'manual'].includes(n.kind)" class="notice">
+          <label v-if="n.kind==='mysql'">指定 SQL 变更（不选时执行版本内全部 SQL）<Sel v-model="n.change_ids" multiple :options="changes.filter(c=>c.kind==='mysql').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" width="100%" /></label>
+          <p v-if="!['deploy', 'manual','mysql'].includes(n.kind)" class="notice">
             可保存节点定义；执行器未接通，会阻止提交。
           </p>
         </div>
@@ -515,6 +521,7 @@ onMounted(async () => {
             :rows="2"
             placeholder="操作与确认说明"
           />
+          <label v-if="n.kind==='mysql'">本次 SQL 变更（版本模式仅允许版本内变更）<Sel v-model="n.change_ids" multiple :options="(version?.changes||changes).filter(c=>c.kind==='mysql').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" all-label="版本内全部 SQL" width="100%" /></label>
         </div>
         <ElButton @click="addNode(request.nodes)">＋ 增加本次节点</ElButton
         ><ElButton @click="resolve" :loading="busy">检查范围与配置</ElButton>
@@ -547,6 +554,7 @@ onMounted(async () => {
           <p v-if="!preview.blockers.length">
             ✓ 校验通过。提交后冻结制品、目标和节点；修改需另建执行单。
           </p>
+          <SQLPlanPreview :plans="preview.sql_plans" />
         </section>
         <div class="footer">
           <ElButton @click="showRun = false">取消</ElButton
@@ -581,7 +589,7 @@ onMounted(async () => {
         <section class="preview">
           <h4>审核快照：应用、制品与发布目标</h4>
           <p v-if="!selected.plan.services.length">
-            本次没有应用部署，仅执行人工确认节点。
+            本次没有应用部署，执行所选变更或人工确认节点。
           </p>
           <article v-for="app in selected.plan.services" :key="app.service">
             <b
@@ -628,6 +636,7 @@ onMounted(async () => {
               </p>
             </article>
           </template>
+          <SQLPlanPreview :plans="selected.plan.sql_plans" />
         </section>
         <div
           v-for="s in selected.steps"
@@ -649,6 +658,7 @@ onMounted(async () => {
               selected.plan.nodes.find((n) => n.id === s.node_id)?.instructions
             }}
           </p>
+          <p v-if="s.detail">{{s.detail}}</p>
           <template v-if="s.release_id"
             ><p>
               子发布单 #{{ s.release_id }} · 成功

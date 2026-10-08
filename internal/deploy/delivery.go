@@ -5,6 +5,7 @@ package deploy
 // manual gates require an explicit confirmation. Unimplemented executors fail
 // closed instead of marking configuration/database changes as successful.
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,11 +18,12 @@ import (
 )
 
 type DeliveryNode struct {
-	ID           string `json:"id"`
-	Kind         string `json:"kind"`
-	Name         string `json:"name"`
-	Service      string `json:"service,omitempty"`
-	Instructions string `json:"instructions,omitempty"`
+	ID           string  `json:"id"`
+	Kind         string  `json:"kind"`
+	Name         string  `json:"name"`
+	Service      string  `json:"service,omitempty"`
+	Instructions string  `json:"instructions,omitempty"`
+	ChangeIDs    []int64 `json:"change_ids,omitempty"`
 }
 type DeliveryTemplate struct {
 	ID       int64          `json:"id"`
@@ -47,14 +49,15 @@ type DeliveryService struct {
 	DestinationDigest string             `json:"destination_digest"`
 }
 type DeliveryPlan struct {
-	Template    DeliveryTemplate  `json:"template"`
-	Version     *ReleaseVersion   `json:"version,omitempty"`
-	Environment Environment       `json:"environment"`
-	Reason      string            `json:"reason"`
-	Services    []DeliveryService `json:"services"`
-	Nodes       []DeliveryNode    `json:"nodes"`
-	Blockers    []string          `json:"blockers"`
-	Warnings    []string          `json:"warnings"`
+	Template    DeliveryTemplate    `json:"template"`
+	Version     *ReleaseVersion     `json:"version,omitempty"`
+	Environment Environment         `json:"environment"`
+	Reason      string              `json:"reason"`
+	Services    []DeliveryService   `json:"services"`
+	Nodes       []DeliveryNode      `json:"nodes"`
+	Blockers    []string            `json:"blockers"`
+	Warnings    []string            `json:"warnings"`
+	SQLPlans    []*SQLExecutionPlan `json:"sql_plans,omitempty"`
 }
 type DeliveryStep struct {
 	NodeID    string `json:"node_id"`
@@ -63,6 +66,7 @@ type DeliveryStep struct {
 	Service   string `json:"service,omitempty"`
 	Status    string `json:"status"`
 	ReleaseID int64  `json:"release_id,omitempty"`
+	Detail    string `json:"detail,omitempty"`
 }
 type DeliveryRun struct {
 	ID         int64          `json:"id"`
@@ -86,6 +90,7 @@ func deliverySchema(dialect string) []string {
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS delivery_templates (id %s, document %s NOT NULL, owner VARCHAR(191) NOT NULL)`, identity, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS delivery_runs (id %s, plan %s NOT NULL, digest VARCHAR(80) NOT NULL, status VARCHAR(32) NOT NULL, execution %s NOT NULL, env_secrets %s NOT NULL, owner VARCHAR(191) NOT NULL, approver VARCHAR(191) NOT NULL, created_at BIGINT NOT NULL, revision BIGINT NOT NULL)`, identity, doc, doc, doc),
 	}
+	queries = append(queries, integrationSchema(identity, doc)...)
 	if dialect == "mysql" {
 		for i := range queries {
 			queries[i] += ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
@@ -251,7 +256,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 				} else {
 					services[c.Service] = true
 				}
-			} else if c.Kind != "manual" {
+			} else if c.Kind != "manual" && c.Kind != "mysql" {
 				p.Blockers = append(p.Blockers, "变更执行器尚未接通："+c.Title+"（"+c.Kind+"）")
 			}
 		}
@@ -295,7 +300,10 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 		p.Services = append(p.Services, DeliveryService{Service: name, Artifact: *artifact, Target: *target, DestinationDigest: destination})
 	}
 	allocated := map[string]int{}
+	sqlAllocated := map[int64]int{}
+	sqlConnections := map[string]bool{}
 	manualCount := 0
+	sqlCount := 0
 	for _, node := range nodes {
 		switch node.Kind {
 		case "deploy":
@@ -309,6 +317,51 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			}
 		case "manual":
 			manualCount++
+		case "mysql":
+			ids := append([]int64{}, node.ChangeIDs...)
+			if p.Version != nil {
+				allowed := map[int64]bool{}
+				for _, c := range p.Version.Changes {
+					if c.Kind == "mysql" {
+						allowed[c.ID] = true
+						if len(node.ChangeIDs) == 0 && (node.Service == "" || node.Service == c.Service) {
+							ids = append(ids, c.ID)
+						}
+					}
+				}
+				for _, id := range ids {
+					if !allowed[id] {
+						p.Blockers = append(p.Blockers, fmt.Sprintf("SQL 节点引用版本外变更 #%d", id))
+					}
+				}
+			}
+			ready := true
+			for _, id := range ids {
+				sqlAllocated[id]++
+				c := s.GetChange(id)
+				if c == nil || c.Status != ChangeReady {
+					p.Blockers = append(p.Blockers, fmt.Sprintf("SQL 变更 #%d 尚未就绪", id))
+					ready = false
+				}
+			}
+			if !ready {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			plan, err := s.prepareSQLNode(ctx, node.ID, ids, env.Name)
+			cancel()
+			if err != nil {
+				p.Blockers = append(p.Blockers, node.Name+"："+err.Error())
+				continue
+			}
+			if sqlConnections[plan.Connection] {
+				p.Blockers = append(p.Blockers, "同一数据库连接只允许一个 SQL 节点，避免基线被前序节点改变；DDL/DML 请分次交付")
+			} else {
+				sqlConnections[plan.Connection] = true
+			}
+			p.SQLPlans = append(p.SQLPlans, plan)
+			p.Warnings = append(p.Warnings, plan.Warnings...)
+			sqlCount++
 		default:
 			p.Blockers = append(p.Blockers, "节点仅支持设计与保存，执行器尚未接通："+node.Name)
 		}
@@ -320,12 +373,20 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	}
 	if p.Version != nil {
 		for _, c := range p.Version.Changes {
+			if c.Kind == "mysql" && sqlAllocated[c.ID] != 1 {
+				p.Blockers = append(p.Blockers, fmt.Sprintf("SQL 变更 #%d 必须且只能安排到一个 SQL 节点", c.ID))
+			}
 			if c.Kind == "manual" && manualCount == 0 {
 				p.Blockers = append(p.Blockers, "人工变更需要配置人工确认节点："+c.Title)
 			}
 		}
 	}
-	if len(names) == 0 && manualCount == 0 {
+	for id, count := range sqlAllocated {
+		if count != 1 {
+			p.Blockers = append(p.Blockers, fmt.Sprintf("SQL 变更 #%d 在多个节点中重复", id))
+		}
+	}
+	if len(names) == 0 && manualCount == 0 && sqlCount == 0 {
 		p.Blockers = append(p.Blockers, "交付范围没有可执行应用或人工确认节点")
 	}
 	return p, secrets, nil
@@ -452,10 +513,49 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 	if env == nil || (env.Protected && (v.Approver == "" || !allowedApprover(env.Approvers, v.Approver))) {
 		return nil, fmt.Errorf("环境保护策略已变化，请重新提交审核")
 	}
+	if env.RequireReason && v.Plan.Reason == "" {
+		return nil, fmt.Errorf("环境已要求发布原因，请重新提交执行单")
+	}
 	for i := range v.Steps {
 		step := &v.Steps[i]
 		if step.Status == "success" {
 			continue
+		}
+		if step.Kind == "mysql" {
+			if step.Status == "executing" {
+				return nil, fmt.Errorf("SQL 节点正在执行或上次执行中断，请检查执行台账；禁止自动重复执行")
+			}
+			var plan *SQLExecutionPlan
+			for _, candidate := range v.Plan.SQLPlans {
+				if candidate.NodeID == step.NodeID {
+					plan = candidate
+					break
+				}
+			}
+			if plan == nil {
+				return nil, fmt.Errorf("SQL 节点缺少已审核执行计划")
+			}
+			step.Status, v.Status = "executing", "running"
+			if err := s.saveDeliveryRun(v); err != nil {
+				return nil, err
+			}
+			ctx, cancel := sqlExecutionContext()
+			detail, err := s.executeSQLNode(ctx, v, plan)
+			cancel()
+			step.Detail = detail
+			if err != nil {
+				step.Status, v.Status = "failed", "failed"
+				if step.Detail == "" {
+					step.Detail = err.Error()
+				}
+			} else {
+				step.Status = "success"
+			}
+			if saveErr := s.saveDeliveryRun(v); saveErr != nil {
+				return nil, saveErr
+			}
+			s.Audit(actor, "execute-sql", "delivery-run", fmt.Sprint(id), map[string]any{"node": step.NodeID, "status": step.Status, "digest": v.Digest})
+			return v, nil
 		}
 		if step.ReleaseID > 0 {
 			child := s.GetReleaseOrder(step.ReleaseID)
