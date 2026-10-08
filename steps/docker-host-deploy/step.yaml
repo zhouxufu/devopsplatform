@@ -1,0 +1,15 @@
+apiVersion: deploy.logplatform.io/v1
+id: docker-host-deploy
+name: 部署 Docker 容器（SSH）
+description: 按镜像 digest 拉取并替换远程容器，失败恢复旧镜像
+category: 部署
+kind: deploy
+driver: docker-host
+accepts: [oci-image]
+params:
+  - {name: HOST, type: input, label: 目标主机（主机名）}
+  - {name: CONTAINER_NAME, type: input, label: 容器名，默认服务名, default: ""}
+  - {name: PORTS, type: input, label: 端口映射（逗号分隔）, default: ""}
+  - {name: ENV_FILE, type: input, label: 远程 env-file（可选）, default: ""}
+  - {name: RUN_ARGS, type: shell, label: 额外 docker run 参数（可选）, default: ""}
+  - {name: HEALTH_URL, type: input, label: 健康检查 URL（在目标主机执行）, default: ""}

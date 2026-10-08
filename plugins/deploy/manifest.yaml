@@ -1,0 +1,11 @@
+name: deploy
+display: 部署平台
+version: 0.1.0
+binary: ../../bin/deploy
+admin_addr: 127.0.0.1:19803
+args:
+  - -admin-addr
+  - 127.0.0.1:19803
+  - -data
+  - ../../runtime/deploy-data
+nav_icon: "🚀"

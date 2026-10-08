@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>监控大盘</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2128;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--dim:#6e7681;
+--brand:#2f81f7;--error:#f85149;--warn:#d29922;--info:#58a6ff;--ok:#3fb950;--mono:'SF Mono',Menlo,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,'PingFang SC',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{height:44px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0}
+header .logo{font-weight:600}
+select,button{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;outline:none;cursor:pointer}
+.seg{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.seg button{background:transparent;border:none;color:var(--muted);padding:5px 12px;border-right:1px solid var(--border)}
+.seg button:last-child{border-right:none}
+.seg button.on{background:#1f2937;color:var(--text)}
+.hint{margin-left:auto;color:var(--dim);font-size:11px}
+main{flex:1;overflow-y:auto;padding:14px 16px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+.card .t{color:var(--muted);font-size:12px}
+.card .v{font-size:22px;font-weight:600;font-family:var(--mono);margin-top:2px}
+.card .s{color:var(--dim);font-size:11px;margin-top:2px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+.panel h4{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center}
+.legend{display:inline-flex;gap:12px;font-size:11px;color:var(--dim);font-weight:400;margin-left:12px}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+svg text{fill:var(--dim);font-size:9px;font-family:var(--mono)}
+svg .grid{stroke:#21262d;stroke-width:1}
+.ctip{position:absolute;display:none;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:11px;pointer-events:none;z-index:5;color:var(--text);min-width:120px;line-height:1.7;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+.ctip i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.ctip b{font-family:var(--mono)}
+.empty{padding:60px;color:var(--dim);text-align:center}
+/* 嵌入模式（平台壳 iframe）：导航改竖向侧栏（与 logs 插件一致），服务选择由壳全局上下文驱动 */
+body.embedded{flex-direction:row}
+body.embedded header{flex-direction:column;width:46px;height:100vh;padding:10px 0;gap:6px;border-right:1px solid var(--border);border-bottom:none}
+body.embedded header .logo,body.embedded header select,body.embedded header .seg,body.embedded header .hint{display:none}
+body.embedded nav{flex-direction:column;gap:4px}
+nav a{display:flex;align-items:center;gap:6px}
+body.embedded nav a{flex-direction:column;gap:4px;padding:8px 0;width:100%;border-radius:8px;font-size:10px;justify-content:center}
+body.embedded nav .tx{font-size:10px}
+body.embedded main{flex:1;min-width:0;height:100vh}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">📈 监控大盘</span>
+  <nav id="nav" style="display:flex;gap:4px">
+    <a class="on" data-v="overview" style="padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)"><span class="ic">▣</span><span class="tx">总览</span></a>
+    <a data-v="alerts" style="padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)"><span class="ic">🔔</span><span class="tx">报警</span></a>
+    <a data-v="machines" style="padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)"><span class="ic">🖥</span><span class="tx">机器</span></a>
+    <a data-v="api" style="padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)"><span class="ic">⇄</span><span class="tx">接口</span></a>
+    <a data-v="jvm" style="padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)"><span class="ic">☕</span><span class="tx">JVM</span></a>
+    <a data-v="trace" style="padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)"><span class="ic">⇢</span><span class="tx">Trace</span></a>
+    <a data-v="rules" style="padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)"><span class="ic">⚙</span><span class="tx">规则</span></a>
+  </nav>
+  <select id="svc"></select>
+  <div class="seg" id="range">
+    <button class="on" data-m="60">1h</button><button data-m="180">3h</button><button data-m="360">6h</button><button data-m="1440">24h</button>
+  </div>
+  <span class="hint">总览可下钻 · 30s 自动刷新</span>
+</header>
+<main id="v-overview">
+  <div id="oCards" class="cards"></div>
+  <div class="panel"><h4>每分钟日志量 <span class="legend">
+      <span><i style="background:var(--error)"></i>ERROR</span>
+      <span><i style="background:var(--warn)"></i>WARN</span>
+      <span><i style="background:var(--info)"></i>INFO</span>
+      <span><i style="background:#8b949e"></i>其他</span></span>
+      <span style="margin-left:auto;color:var(--brand);cursor:pointer;font-size:11px" onclick="goTab('api')">接口分位 →</span></h4>
+    <div id="chart"></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="panel"><h4>机器 <span style="margin-left:auto;color:var(--brand);cursor:pointer;font-size:11px" onclick="goTab('machines')">详情 →</span></h4><div id="oMach" class="cards" style="grid-template-columns:repeat(3,1fr)"></div></div>
+    <div class="panel"><h4>JVM / OTLP <span style="margin-left:auto;color:var(--brand);cursor:pointer;font-size:11px" onclick="goTab('jvm')">详情 →</span></h4><div id="oJvm" class="cards" style="grid-template-columns:repeat(3,1fr)"></div></div>
+  </div>
+</main>
+
+<main id="v-alerts" style="display:none;flex-direction:column;overflow-y:auto;padding:16px">
+  <div style="display:flex;align-items:center;margin-bottom:12px">
+    <h3 style="font-size:14px;font-weight:600">报警规则</h3>
+    <button id="aNew" style="margin-left:auto;background:var(--brand);border-color:var(--brand);color:#fff">＋ 新建报警</button>
+  </div>
+  <table id="aTable" style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="color:var(--dim);text-align:left">
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">名称</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">服务</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">条件</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">状态</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">最近评估</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">已发送</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">操作</th></tr></thead>
+    <tbody id="aRows"></tbody></table>
+  <div id="aEmpty" class="empty" style="display:none">暂无报警规则</div>
+  <div class="page-head" style="margin-top:20px"><h2 style="font-size:14px">通知历史（7 天）</h2></div>
+  <table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="color:var(--dim);text-align:left">
+      <th style="padding:7px 10px;border-bottom:1px solid var(--border)">时间</th>
+      <th style="padding:7px 10px;border-bottom:1px solid var(--border)">规则</th>
+      <th style="padding:7px 10px;border-bottom:1px solid var(--border)">类型</th>
+      <th style="padding:7px 10px;border-bottom:1px solid var(--border)">详情</th></tr></thead>
+    <tbody id="nRows"></tbody></table>
+</main>
+
+<main id="v-machines" style="display:none;flex-direction:column;overflow-y:auto;padding:16px">
+  <div style="display:flex;align-items:center;margin-bottom:12px;gap:8px">
+    <h3 style="font-size:14px;font-weight:600">机器指标</h3>
+    <select id="mAgent" style="margin-left:12px"></select>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">agent 15s 采样 · 分钟均值展示 · 30s 刷新</span>
+  </div>
+  <div id="mCards" class="cards" style="grid-template-columns:repeat(4,1fr)"></div>
+  <div class="panel"><h4>CPU %</h4><div id="mCpu"></div></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div class="panel"><h4>内存 GB（已用）</h4><div id="mMem"></div></div>
+    <div class="panel"><h4>网络 KB/s <span class="legend"><span><i style="background:var(--info)"></i>入</span><span><i style="background:var(--ok)"></i>出</span></span></h4><div id="mNet"></div></div>
+  </div>
+</main>
+
+<main id="v-api" style="display:none;flex-direction:column;overflow-y:auto;padding:16px">
+  <div style="display:flex;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap">
+    <h3 style="font-size:14px;font-weight:600">接口分位</h3>
+    <select id="aSvc2" style="margin-left:8px"></select>
+    <select id="aMetric"></select>
+    <span style="color:var(--dim);font-size:11px">接口</span>
+    <select id="aIface" style="max-width:300px;font-family:var(--mono)"></select>
+    <select id="aMeth"></select>
+    <select id="aStatus"></select>
+    <button id="aRuleBtn" style="color:var(--warn)">⚙ 可用率规则</button>
+    <select id="aUnit" title="指标原始单位"><option value="auto">自动单位</option><option value="1000">源单位=秒</option><option value="1">源单位=毫秒</option></select>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">TP50 / TP95 / TP99 / max</span>
+  </div>
+  <div id="aCards" class="cards"></div>
+  <div class="panel"><h4 id="aTitle">耗时分位（毫秒）<span class="legend">
+    <span><i style="background:var(--info)"></i>P50</span><span><i style="background:var(--warn)"></i>P95</span>
+    <span><i style="background:var(--error)"></i>P99</span><span><i style="background:#8b949e"></i>max</span></span></h4>
+    <div id="aChart"></div></div>
+  <div class="panel"><h4>请求量 / 分钟</h4><div id="aCnt"></div></div>
+  <div class="panel"><h4>可用率 %（成功=2xx/3xx）</h4><div id="aAvail"></div></div>
+</main>
+
+<main id="v-trace" style="display:none;flex-direction:column;overflow-y:auto;padding:16px">
+  <div style="display:flex;align-items:center;margin-bottom:12px;gap:8px">
+    <h3 style="font-size:14px;font-weight:600">调用链</h3>
+    <input id="tId" placeholder="traceId（从日志紫色链接或最近列表进入）" style="flex:1;min-width:240px;font-family:var(--mono)">
+    <button onclick="loadTrace($('tId').value.trim())">查询</button>
+  </div>
+  <div id="tHead" class="cards" style="display:none"></div>
+  <div id="tGantt"></div>
+  <div class="panel" style="margin-top:12px"><h4>最近 Trace（2h，错误优先）</h4><div id="tRecent"></div></div>
+</main>
+
+<main id="v-jvm" style="display:none;flex-direction:column;overflow-y:auto;padding:16px">
+  <div style="display:flex;align-items:center;margin-bottom:12px;gap:8px">
+    <h3 style="font-size:14px;font-weight:600">服务指标（OTel javaagent / OTLP）</h3>
+    <select id="jSvc" style="margin-left:12px"></select>
+    <span style="color:var(--dim);font-size:11px;margin-left:auto">业务零侵入：JVM 加 -javaagent 直报 · 30s 刷新</span>
+  </div>
+  <div id="jHint" class="empty" style="display:none">暂无 OTLP 数据——给 Java 服务加 OTel javaagent 即出现（见部署文档接入指引）</div>
+  <div id="jBody">
+    <div id="jCards" class="cards"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="panel"><h4>CPU %（进程）</h4><div id="jCpu"></div></div>
+      <div class="panel"><h4>堆内存 GB（used）</h4><div id="jHeap"></div></div>
+      <div class="panel"><h4>请求量 / 分钟</h4><div id="jQps"></div></div>
+      <div class="panel"><h4>平均耗时 ms</h4><div id="jLat"></div></div>
+      <div class="panel"><h4>线程数</h4><div id="jThreads"></div></div>
+      <div class="panel"><h4>GC 次数/分钟</h4><div id="jGc"></div></div>
+    </div>
+    <div class="panel" style="margin-top:12px"><h4>全部指标 <select id="jName" style="margin-left:8px;font-size:11px" onchange="drawJvmName()"></select></h4><div id="jChart"></div></div>
+  </div>
+</main>
+
+<main id="v-rules" style="display:none;flex-direction:column;overflow-y:auto;padding:16px">
+  <div style="display:flex;align-items:center;margin-bottom:12px">
+    <h3 style="font-size:14px;font-weight:600">可用率规则</h3>
+    <button id="rlNew" style="margin-left:auto;background:var(--brand);border-color:var(--brand);color:#fff">＋ 新建规则</button>
+  </div>
+  <div style="color:var(--dim);font-size:11px;margin-bottom:10px">三级生效：本指标规则 → 服务默认（指标留空）→ 内置（2xx/3xx/0/OK 成功）。HTTP 类指标通常无需配置；Dubbo/业务码按服务配默认、个别指标再覆盖。</div>
+  <table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="color:var(--dim);text-align:left">
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">服务</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">指标</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">成功码</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">忽略码</th>
+      <th style="padding:8px 10px;border-bottom:1px solid var(--border)">操作</th></tr></thead>
+    <tbody id="rlRows"></tbody></table>
+  <div id="rlEmpty" class="empty" style="display:none">暂无规则——所有指标均走内置判定（2xx/3xx/0/OK=成功）</div>
+</main>
+
+<div id="rlMask" style="position:fixed;inset:0;background:rgba(1,4,9,.7);display:none;align-items:center;justify-content:center;z-index:52">
+  <div style="width:460px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px">
+    <h3 id="rlTitle" style="font-size:14px;margin-bottom:14px">新建规则</h3>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">服务</label>
+      <select id="rlSvc" style="width:100%"></select></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">指标（留空 = 服务默认，对该服务全部指标生效）</label>
+      <input id="rlName" list="rlNameList" style="width:100%" placeholder="如 rpc.server.duration / app.response"><datalist id="rlNameList"></datalist></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">算成功的 code（逗号分隔，留空=内置 0/空/2xx/OK）</label>
+      <input id="rlOk" style="width:100%" placeholder="如 0, 200"></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">忽略的 code（不计入可用率）</label>
+      <input id="rlIg" style="width:100%" placeholder="如 40001, 40101"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
+      <span id="rlMsg" style="color:var(--ok);font-size:12px;margin-right:auto"></span>
+      <button id="rlSave" style="background:var(--brand);border-color:var(--brand);color:#fff">保存</button></div>
+  </div>
+</div>
+
+<div id="rMask" style="position:fixed;inset:0;background:rgba(1,4,9,.7);display:none;align-items:center;justify-content:center;z-index:51">
+  <div style="width:480px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px">
+    <h3 style="font-size:14px;margin-bottom:6px">可用率判定规则</h3>
+    <div id="rScope" style="color:var(--dim);font-size:11px;font-family:var(--mono);margin-bottom:14px"></div>
+    <div style="margin-bottom:8px;color:var(--dim);font-size:11px">查找顺序：本指标规则 → 服务默认（指标名留空）→ 内置（2xx/3xx/0/OK 成功）。HTTP 类指标通常无需配置。</div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">算成功的 code（逗号分隔，留空=内置规则）</label>
+      <input id="rOk" style="width:100%" placeholder="如 0, 200"></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">忽略的 code（不计入可用率，如参数校验/未登录）</label>
+      <input id="rIg" style="width:100%" placeholder="如 40001, 40101"></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="rMsg" style="color:var(--ok);font-size:12px;margin-right:auto"></span>
+      <button id="rSave" style="background:var(--brand);border-color:var(--brand);color:#fff">保存</button></div>
+  </div>
+</div>
+<div id="aMask" style="position:fixed;inset:0;background:rgba(1,4,9,.7);display:none;align-items:center;justify-content:center;z-index:50">
+  <div style="width:440px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px">
+    <h3 style="font-size:14px;margin-bottom:14px" id="aMTitle">新建报警</h3>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">名称</label><input id="aName" style="width:100%" value="错误激增"></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">服务</label><select id="aSvc" style="width:100%"></select></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">条件（持续满足才触发，防毛刺）</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="aLv"><option>ERROR</option><option>WARN</option><option>INFO</option></select>
+        <span style="color:var(--dim);font-size:12px">连续</span><input id="aDur" type="number" value="3" style="width:60px">
+        <span style="color:var(--dim);font-size:12px">分钟，每分钟 ≥</span><input id="aThr" type="number" value="10" style="width:70px"><span style="color:var(--dim);font-size:12px">条</span>
+      </div></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">关键字（可选，空 = 按级别全量计数；支持 -排除）</label>
+      <input id="aKw" style="width:100%" placeholder='如  timeout -heartbeat  "order failed"'></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">依赖抑制（可选：这些规则报警中时，本规则不重复通知）</label>
+      <input id="aSup" style="width:100%" placeholder="规则名逗号分隔，如：数据库异常,主机宕机"></div>
+    <div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">Webhook（钉钉/企微/通用）</label><input id="aUrl" style="width:100%" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."></div>
+    <div style="margin-bottom:8px"><label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">静默期（持续中按窗口汇总）</label>
+      <div style="display:flex;gap:6px;align-items:center"><input id="aSil" type="number" value="5" style="width:70px"><span style="color:var(--dim);font-size:12px">分钟</span></div></div>
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
+      <span id="aMsg" style="color:var(--ok);font-size:12px;margin-right:auto"></span>
+      <button id="aTest">发送测试</button>
+      <button id="aSave" style="background:var(--brand);border-color:var(--brand);color:#fff">保存</button></div>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+if(window.parent!==window)document.body.classList.add('embedded');
+let timer=null;
+const LV=[['ERROR','var(--error)'],['WARN','var(--warn)'],['INFO','var(--info)'],['OTHER','#8b949e']];
+/* ---------- 通用图表：Y 轴刻度 + 悬停吸附提示 ---------- */
+const CH={W:920,P:46,PB:20};
+const fmtMin=t=>{const d=new Date(t);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+const fmtTick=v=>v>=10000?(v/1000).toFixed(0)+'k':v>=1000?(v/1000).toFixed(1)+'k':Math.round(v*10)/10;
+function renderChart(el,cfg){
+  const n=cfg.times.length;
+  if(!n){el.innerHTML='<div class="empty">区间内无数据</div>';return}
+  const H=cfg.height||210,W=CH.W,P=CH.P,PB=CH.PB;
+  let max=cfg.yMax;
+  if(!max){max=0;
+    if(cfg.stacked){for(let i=0;i<n;i++){let t=0;cfg.series.forEach(s=>t+=s.vals[i]||0);if(t>max)max=t}}
+    else cfg.series.forEach(s=>s.vals.forEach(v=>{if(v>max)max=v}));
+    max=Math.max(max*1.15,1)}
+  const X=i=>P+(W-P*1.2)*i/(n-1||1), Y=v=>P+(H-P-PB)*(1-Math.min(v/max,1));
+  let g='';
+  for(let k=0;k<=4;k++){const y=P+(H-P-PB)*k/4,v=max*(1-k/4);
+    g+=`<line class="grid" x1="${P}" y1="${y}" x2="${W-10}" y2="${y}"/>`+
+       `<text x="${P-6}" y="${y+3}" text-anchor="end">${fmtTick(v)}</text>`}
+  let xl='';const step=Math.max(1,Math.round(n/7));
+  cfg.times.forEach((t,i)=>{if(i%step===0||i===n-1)xl+=`<text x="${X(i)}" y="${H-5}" text-anchor="middle">${fmtMin(t)}</text>`});
+  // 堆叠或折线几何
+  let cum=new Array(n).fill(0);
+  const geoms=cfg.series.map(s=>{
+    const topV=s.vals.map((v,i)=>cum[i]+(v||0)), baseV=cum.slice();
+    if(cfg.stacked)cum=topV.slice();
+    return{s,topV,baseV}});
+  let body='';
+  geoms.forEach(gm=>{
+    const pts=gm.topV.map((v,i)=>`${X(i)},${Y(v)}`).join(' ');
+    if(cfg.stacked){
+      const bpts=gm.baseV.map((v,i)=>`${X(i)},${Y(v)}`).reverse().join(' ');
+      body+=`<polygon fill="${gm.s.color}" fill-opacity="0.13" points="${pts} ${bpts}"/>`}
+    body+=`<polyline fill="none" stroke="${gm.s.color}" stroke-width="1.6" points="${pts}"/>`});
+  const dots=geoms.map(()=> '').join('');
+  el.innerHTML=`<div style="position:relative"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">
+    ${g}${xl}${body}
+    <line class="cross" x1="0" x2="0" y1="${P-4}" y2="${H-PB}" stroke="var(--muted)" stroke-dasharray="3 3" style="display:none"/>
+    ${geoms.map(()=>`<circle r="3.5" fill="var(--text)" style="display:none"/>`).join('')}
+    <rect x="${P}" y="0" width="${W-P-12}" height="${H}" fill="transparent"/>
+  </svg><div class="ctip"></div></div>`;
+  // 悬停吸附：贴最近数据点
+  const svg=el.querySelector('svg'),tip=el.querySelector('.ctip'),
+        cross=el.querySelector('.cross'),hd=[...el.querySelectorAll('circle')];
+  svg.addEventListener('mousemove',ev=>{
+    const r=svg.getBoundingClientRect(),mx=(ev.clientX-r.left)*(W/r.width);
+    let idx=Math.round((mx-P)/((W-P*1.2)/Math.max(n-1,1)));
+    idx=Math.max(0,Math.min(n-1,idx));
+    cross.setAttribute('x1',X(idx));cross.setAttribute('x2',X(idx));cross.style.display='';
+    hd.forEach((d,si)=>{d.setAttribute('cx',X(idx));d.setAttribute('cy',Y(geoms[si].topV[idx]||0));d.style.display=''});
+    tip.innerHTML=`<b>${fmtMin(cfg.times[idx])}</b>`+geoms.map(gm=>
+      `<div><i style="background:${gm.s.color}"></i>${gm.s.name} <b>${gm.s.vals[idx]||0}</b>${cfg.unit||''}</div>`).join('');
+    tip.style.display='block';
+    const px=X(idx)/W*r.width;
+    tip.style.left=Math.max(0,Math.min(r.width-150,px+14))+'px';tip.style.top='8px'});
+  svg.addEventListener('mouseleave',()=>{cross.style.display='none';hd.forEach(d=>d.style.display='none');tip.style.display='none'});
+}
+
+
+async function load(){
+  const svc=$('svc').value;
+  if(!svc){$('chart').innerHTML='<div class="empty">暂无服务数据（等待第一分钟指标发布…约 1-2 分钟）</div>';return}
+  const m=+document.querySelector('#range .on').dataset.m;
+  const end=Date.now(),start=end-m*60000;
+  const d=await(await fetch(`api/metrics?service=${encodeURIComponent(svc)}&start=${start}&end=${end}`)).json();
+  draw(d.points||[]);
+}
+/* ---------- 总览（总-分结构的"总"） ---------- */
+let curSvc='';
+function goTab(v){document.querySelector(`#nav a[data-v=${v}]`).click()}
+async function loadOverview(){
+  if(!curSvc)return;
+  const m=+document.querySelector('#range .on').dataset.m;
+  const end=Date.now(),start=end-m*60000;
+  const p=new URLSearchParams({service:curSvc,start,end});
+  const [metric,alerts,machines,otlp]=await Promise.all([
+    fetch('api/metrics?'+p).then(r=>r.json()).catch(()=>({points:[]})),
+    fetch('api/alerts').then(r=>r.json()).catch(()=>[]),
+    fetch('api/machines').then(r=>r.json()).catch(()=>[]),
+    fetch(`api/otlp/names?service=${encodeURIComponent(curSvc)}`).then(r=>r.json()).then(d=>d||[]).catch(()=>[]),
+  ]);
+  draw(metric.points||[]);
+  // 报警状态
+  let firing=0;
+  const st=await fetch('api/alerts/status').then(r=>r.json()).catch(()=>{});
+  for(const a of alerts||[]) if(a.enabled&&st[a.id]&&st[a.id].firing)firing++;
+  // OTLP 关键值
+  const pickN=(...c)=>c.find(n=>otlp&&otlp.includes(n))||'';
+  const [cpu,heap,qps]=await Promise.all(['process_cpu_utilization','jvm_memory_used_bytes_heap','jvm.memory.used'].slice(0,2).concat([pickN('http_server_request_duration_seconds','http.server.request.duration','http.client.request.duration')])
+    .filter(Boolean).map(n=>fetch(`api/otlp/series?service=${encodeURIComponent(curSvc)}&name=${n}`).then(r=>r.json()).catch(()=>[])));
+  const last=a=>a&&a.length?a[a.length-1]:null;
+  const heapPts=heap&&heap.length?heap:await fetch(`api/otlp/series?service=${encodeURIComponent(curSvc)}&name=jvm.memory.used`).then(r=>r.json()).catch(()=>[]);
+  const me=(machines||[])[0];
+  const pts=metric.points||[];
+  const tot=lv=>pts.reduce((s,x)=>s+(x.counts[lv]||0),0);
+  const sums=pts.map(x=>['ERROR','WARN','INFO','OTHER'].reduce((s,l)=>s+(x.counts[l]||0),0));
+  const card=(t,v,s,color,tab)=>`<div class="card" ${tab?`style="cursor:pointer" onclick="goTab('${tab}')"`:''}>
+    <div class="t">${t}${tab?' ↗':''}</div><div class="v" ${color?`style="color:${color}"`:''}>${v}</div><div class="s">${s||''}</div></div>`;
+  const cpuL=last(cpu),heapL=last(heapPts),qpsL=last(qps);
+  $('oCards').innerHTML=
+    card('ERROR（区间）',tot('ERROR'),'错误日志','var(--error)','alerts')+
+    card('WARN（区间）',tot('WARN'),'告警日志','var(--warn)','alerts')+
+    card('报警中',firing,firing?'点击处理':'规则正常',firing?'var(--error)':'var(--ok)','alerts')+
+    card('请求量/分钟',qpsL?Math.round(qpsL.cnt):'—','最近一分钟','var(--info)','api')+
+    card('进程 CPU',cpuL?(cpuL.val*100).toFixed(1)+'%':'—','OTLP','var(--brand)','jvm')+
+    card('堆/内存',heapL?(heapL.val/1e9).toFixed(2)+' G':'—','OTLP','var(--brand)','jvm')+
+    (me?card('机器 CPU',me.cpu+'%',me.agent_id,me.cpu>80?'var(--error)':'var(--ok)','machines')+
+        card('机器内存',Math.round(me.mem_used/me.mem_total*100)+'%',me.mem_used+'/'+me.mem_total+'G','','machines'):'')+
+    card('日志峰值/分',sums.length?Math.max(...sums):'—','全级别','','');
+  $('oMach').innerHTML=me?`
+    <div class="card"><div class="t">磁盘</div><div class="v" style="font-size:16px">${Math.round(me.disk_used/me.disk_total*100)}%</div><div class="s">${me.disk_used}/${me.disk_total}G</div></div>
+    <div class="card"><div class="t">网络 ↓↑</div><div class="v" style="font-size:16px">${me.net_rx_kbs}/${me.net_tx_kbs}</div><div class="s">KB/s</div></div>
+    <div class="card"><div class="t">Agent</div><div class="v" style="font-size:16px;color:var(--ok)">在线</div><div class="s">${me.agent_id}</div></div>`:'<div class="empty" style="padding:20px">暂无机器数据</div>';
+  const thrN=pickN('jvm_threads_count','jvm.thread.count'),gcN=pickN('jvm_gc_collection_seconds','jvm.gc.duration');
+  const [thr,gc]=await Promise.all([thrN,gcN].filter(Boolean).map(n=>
+    fetch(`api/otlp/series?service=${encodeURIComponent(curSvc)}&name=${n}`).then(r=>r.json()).catch(()=>[])));
+  $('oJvm').innerHTML=(cpuL||heapL)?
+    card('线程',last(thr)?Math.round(last(thr).val):'—','jvm threads')+
+    card('GC/分',last(gc)?Math.round(last(gc).cnt):'—','garbage collection')+
+    card('指标数',otlp.length,'otlp metrics'):'<div class="empty" style="padding:20px">暂无 OTLP 数据（接入 javaagent / Micrometer 后出现）</div>';
+}
+function draw(pts){
+  if(!pts.length){$('chart').innerHTML='<div class="empty">区间内无数据</div>';return}
+  const cs=getComputedStyle(document.body);
+  const col=n=>cs.getPropertyValue('--'+n).trim()||'#8b949e';
+  const order=['OTHER','INFO','WARN','ERROR'];
+  renderChart($('chart'),{times:pts.map(p=>p.minute),stacked:true,unit:' 条',
+    series:order.map(lv=>({name:lv,color:lv==='OTHER'?'#8b949e':col(lv.toLowerCase()),vals:pts.map(p=>p.counts[lv]||0)}))});
+}
+async function initSvc(){
+  const list=await(await fetch('api/services')).json()||[];
+  if(!list.length){$('svc').innerHTML='';reloadTab();return}
+  const keep=curSvc&&list.includes(curSvc)?curSvc:list[0];
+  $('svc').innerHTML=list.map(s=>`<option${s===keep?' selected':''}>${s}</option>`).join('');
+  setSvc(keep,curSvc!==keep); // 首次进入渲染总览；服务未变时（周期刷新）不重复触发
+}
+function svcsHas(sel,v){return sel&&[...sel.options].some(o=>o.value===v||o.text===v)}
+// 全局服务：独立模式=顶栏下拉；嵌入模式=壳广播；OTLP 页（接口/JVM）同名跟随、异名独立
+function setSvc(s,reload=true){
+  curSvc=s;$('svc').value=s;
+  if(svcsHas($('aSvc2'),s))$('aSvc2').value=s;   // OTLP 服务名与日志服务名同源时跟随
+  if(svcsHas($('jSvc'),s))$('jSvc').value=s;
+  
+  if(reload)reloadTab();
+}
+$('svc').onchange=()=>setSvc($('svc').value);
+document.querySelectorAll('#range button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#range button').forEach(x=>x.classList.remove('on'));b.classList.add('on');reloadTab()});
+// 平台壳全局上下文（服务切换跟随——单一服务选择层级）
+window.addEventListener('message',e=>{const d=e.data;if(!d||d.type!=='context.sync')return;
+  if(typeof d.service==='string'&&d.service&&d.service!==curSvc)setSvc(d.service)});
+try{if(window.parent!==window)window.parent.postMessage({type:'context.request'},'*')}catch(e){}
+initSvc();
+timer=setInterval(()=>{initSvc()},30000);
+
+/* ---------- 视图切换（总-分：总览 + 五个分页） ---------- */
+let curTab='overview';
+function switchView(v){
+  curTab=v;
+  document.querySelectorAll('#nav a').forEach(x=>{x.classList.remove('on');x.style.color='var(--muted)';x.style.background='transparent'});
+  const a=document.querySelector(`#nav a[data-v=${v}]`);
+  a.classList.add('on');a.style.color='var(--text)';a.style.background='var(--panel2)';
+  // overview 是块流布局（内部自用 grid），其余页为 flex 列布局——显式类型切换
+  ['overview','alerts','machines','jvm','api','trace','rules'].forEach(t=>{$('v-'+t).style.display=t===v?(t==='overview'?'block':'flex'):'none'});
+  $('aMask').style.display='none';$('rMask').style.display='none';editingAlert=null; // fixed 弹层随模块切换强制收起
+  reloadTab();
+}
+function reloadTab(){
+  if(curTab==='overview')loadOverview();
+  if(curTab==='alerts')loadAlerts();
+  if(curTab==='machines')loadMachines();
+  if(curTab==='jvm')loadJvm();
+  if(curTab==='api')loadApiTab();
+  if(curTab==='trace')loadRecentTraces();
+  if(curTab==='rules')loadRules();
+}
+document.querySelectorAll('#nav a').forEach(a=>a.onclick=()=>switchView(a.dataset.v));
+
+/* ---------- JVM / OTLP ---------- */
+async function loadJvm(){
+  const svcs=await(await fetch('api/otlp/services')).json()||[];
+  if(!svcs.length){$('jHint').style.display='block';$('jBody').style.display='none';return}
+  $('jHint').style.display='none';$('jBody').style.display='block';
+  if(!$('jSvc').value||!svcs.includes($('jSvc').value))$('jSvc').value=svcs.includes(curSvc)?curSvc:svcs[0];
+  $('jSvc').innerHTML=svcs.map(s=>`<option${s===$('jSvc').value?' selected':''}>${s}</option>`).join('');
+  const svc=$('jSvc').value;
+  const get=async name=>{
+    const d=await(await fetch(`api/otlp/series?service=${encodeURIComponent(svc)}&name=${encodeURIComponent(name)}`)).json();
+    return d||[]};
+  // 指标名双命名兼容：OTel javaagent（jvm_memory_used_bytes）与 Micrometer OTLP registry（jvm.memory.used）
+  const names=await(await fetch(`api/otlp/names?service=${encodeURIComponent(svc)}`)).json()||[];
+  const pick=(...cands)=>{for(const c of cands)if(names.includes(c))return c;return ''};
+  const nCpu=pick('process_cpu_utilization','jvm.cpu.recent_utilization','system_cpu_utilization');
+  const nHeap=pick('jvm_memory_used_bytes_heap','jvm.memory.used');
+  const nThr=pick('jvm_threads_count','jvm.thread.count');
+  const nHttp=pick('http_server_request_duration_seconds','http.server.request.duration','http.client.request.duration');
+  const nGc=pick('jvm_gc_collection_seconds','jvm.gc.duration');
+  const [cpu,heap,thr,qps,gc]=await Promise.all([get(nCpu),get(nHeap),get(nThr),get(nHttp),get(nGc)]);
+  const fmtGB=b=>(b/1e9).toFixed(2);
+  const last=arr=>arr.length?arr[arr.length-1].val:0;
+  $('jCards').innerHTML=`
+    <div class="card"><div class="t">进程 CPU</div><div class="v">${(last(cpu)*100).toFixed(1)}%</div><div class="s">${nCpu||'—'}</div></div>
+    <div class="card"><div class="t">堆/内存已用</div><div class="v">${fmtGB(last(heap))}<small style="font-size:12px;color:var(--dim)"> GB</small></div><div class="s">${nHeap||'—'}</div></div>
+    <div class="card"><div class="t">线程数</div><div class="v">${Math.round(last(thr))}</div><div class="s">${nThr||'—'}</div></div>
+    <div class="card"><div class="t">请求量/分钟</div><div class="v">${qps.length?Math.round(qps[qps.length-1].cnt):'—'}</div><div class="s">${nHttp||'—'}</div></div>`;
+  const chart=(el,pts,unit,fn,yMax)=>{if(!pts.length){el.innerHTML=`<div class="empty">无数据</div>`;return}
+    renderChart(el,{times:pts.map(p=>p.minute),unit,yMax,series:[{name:'v',color:'var(--brand)',vals:pts.map(fn)}]})};
+  chart($('jCpu'),cpu,'%',p=>p.val*100,100);
+  chart($('jHeap'),heap,' G',p=>p.val/1e9);
+  chart($('jQps'),qps,' 次/分',p=>p.cnt);
+  chart($('jLat'),qps,' ms',p=>p.cnt>0?p.val/p.cnt*1000:0);
+  chart($('jThreads'),thr,'',p=>p.val);
+  chart($('jGc'),gc,' 次/分',p=>p.cnt);
+  // 全量指标目录：任选指标画大图
+  const sel=$('jName');
+  const prefer=['jvm.memory.used','jvm.thread.count','http.client.request.duration','db.client.connections.usage','processedLogs','queueSize'];
+  if(!sel.value)sel.value=nHeap||prefer.find(p=>names.includes(p))||names[0]||'';
+  sel.innerHTML=names.map(n=>`<option${n===sel.value?' selected':''}>${n}</option>`).join('');
+  drawJvmName();
+}
+async function drawJvmName(){
+  const svc=$('jSvc').value,name=$('jName').value;
+  if(!name){$('jChart').innerHTML='<div class="empty">无指标</div>';return}
+  const pts=await(await fetch(`api/otlp/series?service=${encodeURIComponent(svc)}&name=${encodeURIComponent(name)}`)).json()||[];
+  if(!pts.length){$('jChart').innerHTML='<div class="empty">该指标暂无数据</div>';return}
+  const isCnt=pts.some(p=>p.cnt>0);
+  renderChart($('jChart'),{times:pts.map(p=>p.minute),unit:isCnt?' 次':'',series:[
+    {name:'值',color:'var(--brand)',vals:pts.map(p=>p.val)},
+    ...(isCnt?[{name:'次数',color:'var(--ok)',vals:pts.map(p=>p.cnt)}]:[])]});
+}
+$('jSvc').onchange=()=>{$('jName').value='';loadJvm()};
+
+/* ---------- 接口分位：服务→指标→接口→（方法/状态细分） ---------- */
+async function loadApiTab(){
+  const svcs=await(await fetch('api/otlp/services')).json()||[];
+  if(!svcs.length)return;
+  if(!$('aSvc2').value||!svcs.includes($('aSvc2').value))$('aSvc2').value=svcs.includes(curSvc)?curSvc:svcs[0];
+  $('aSvc2').innerHTML=svcs.map(s=>`<option${s===$('aSvc2').value?' selected':''}>${s}</option>`).join('');
+  const svc=$('aSvc2').value;
+  const names=await(await fetch(`api/otlp/names?service=${encodeURIComponent(svc)}`)).json()||[];
+  const hists=names.filter(n=>/duration|latency|time$|code|result|outcome/.test(n));
+  const opts=hists.length?hists:names;
+  if(!$('aMetric').value||!opts.includes($('aMetric').value))$('aMetric').value=opts[0]||'';
+  $('aMetric').innerHTML=opts.map(n=>`<option${n===$('aMetric').value?' selected':''}>${n}</option>`).join('');
+  await loadIfaces();
+}
+async function loadIfaces(){
+  const svc=$('aSvc2').value,name=$('aMetric').value;
+  if(!svc||!name)return;
+  const list=await(await fetch(`api/otlp/interfaces?service=${encodeURIComponent(svc)}&name=${encodeURIComponent(name)}`)).json()||[];
+  if(!list.length){$('aIface').innerHTML='';$('aMeth').innerHTML='';$('aStatus').innerHTML='';
+    $('aCards').innerHTML='';$('aChart').innerHTML='<div class="empty">该指标暂无直方图数据</div>';$('aCnt').innerHTML='';return}
+  if(!$('aIface').value)$('aIface').value=list[0].iface;
+  $('aIface').innerHTML=list.map(d=>`<option value="${d.iface}"${d.iface===$('aIface').value?' selected':''}>${d.iface||'（无接口维度，按方法/状态）'} · ${Math.round(d.cnt)}/h</option>`).join('');
+  await loadIfaceAttrs();
+}
+async function loadIfaceAttrs(){
+  const svc=$('aSvc2').value,name=$('aMetric').value,iface=$('aIface').value;
+  const attrs=await(await fetch(`api/otlp/iface-attrs?service=${encodeURIComponent(svc)}&name=${encodeURIComponent(name)}&iface=${encodeURIComponent(iface)}`)).json()||[];
+  const meths=[...new Set(attrs.map(a=>a.meth).filter(Boolean))];
+  const sts=[...new Set(attrs.map(a=>a.status).filter(Boolean))];
+  $('aMeth').innerHTML='<option value="">全部方法</option>'+meths.map(m=>`<option>${m}</option>`).join('');
+  $('aStatus').innerHTML='<option value="">全部状态</option>'+sts.map(s=>`<option>${s}</option>`).join('');
+  await loadQuantiles();
+}
+async function loadQuantiles(){
+  const svc=$('aSvc2').value,name=$('aMetric').value,iface=$('aIface').value;
+  const meth=$('aMeth').value,status=$('aStatus').value;
+  const p=new URLSearchParams({service:svc,name,iface,meth,status});
+  const [pts,avail]=await Promise.all([
+    fetch('api/otlp/quantiles?'+p).then(r=>r.json()).catch(()=>[]),
+    fetch('api/otlp/availability?'+p).then(r=>r.json()).catch(()=>[])]);
+  if(!pts.length){$('aChart').innerHTML='<div class="empty">区间内无数据</div>';$('aCards').innerHTML='';$('aAvail').innerHTML='';return}
+  // 单位识别：OTel 语义 duration/latency 系列为秒；Micrometer *_time 系列本身是毫秒；未知按原值
+  const autoFactor=/duration|latency/.test(name)?1000:1;
+  const F=$('aUnit').value==='auto'?autoFactor:+$('aUnit').value;
+  const ms=v=>v*F;
+  const last=pts[pts.length-1];
+  const sub=[meth||'全部方法',status||'全部状态'].join(' · ');
+  const unitName=$('aUnit').value==='auto'?(autoFactor===1000?'源单位:秒':'源单位:毫秒'):(F===1000?'源单位:秒':'源单位:毫秒');
+  $('aTitle').firstChild.textContent=`${iface||name}（${sub}）`;
+  $('aCards').innerHTML=`
+    <div class="card"><div class="t">请求量</div><div class="v">${Math.round(last.cnt)}<small style="font-size:12px;color:var(--dim)"> 次/分</small></div><div class="s">${sub}</div></div>
+    <div class="card"><div class="t">平均耗时</div><div class="v">${ms(last.avg).toFixed(1)}<small style="font-size:12px;color:var(--dim)"> ms</small></div><div class="s">${unitName}</div></div>
+    <div class="card"><div class="t">TP95</div><div class="v" style="color:var(--warn)">${ms(last.p95).toFixed(1)}<small style="font-size:12px;color:var(--dim)"> ms</small></div></div>
+    <div class="card"><div class="t">TP99</div><div class="v" style="color:var(--error)">${ms(last.p99).toFixed(1)}<small style="font-size:12px;color:var(--dim)"> ms</small></div></div>`+
+    (avail&&avail.length?(()=>{const tot=avail.reduce((s,x)=>s+x.total,0),ok=avail.reduce((s,x)=>s+x.ok,0);
+      const r=tot?ok/tot*100:100,rc=r>=99.5?'var(--ok)':r>=99?'var(--warn)':'var(--error)';
+      return `<div class="card"><div class="t">可用率</div><div class="v" style="color:${rc}">${r.toFixed(2)}<small style="font-size:12px;color:var(--dim)"> %</small></div><div class="s">${Math.round(ok)}/${Math.round(tot)} 成功</div></div>`})():
+      `<div class="card"><div class="t">可用率</div><div class="v">—</div><div class="s">无状态维度</div></div>`);
+  renderChart($('aChart'),{times:pts.map(p=>p.minute),unit:' ms',series:[
+    {name:'P50',color:'var(--info)',vals:pts.map(p=>ms(p.p50))},
+    {name:'P95',color:'var(--warn)',vals:pts.map(p=>ms(p.p95))},
+    {name:'P99',color:'var(--error)',vals:pts.map(p=>ms(p.p99))},
+    {name:'max',color:'#8b949e',vals:pts.map(p=>ms(p.max))}]});
+  renderChart($('aCnt'),{times:pts.map(p=>p.minute),unit:' 次/分',series:[{name:'次数',color:'var(--ok)',vals:pts.map(p=>p.cnt)}]});
+  $('aAvail').innerHTML=avail&&avail.length?
+    (()=>{let html='<div style="position:relative">';
+      html+=renderAvailSVG(avail);return html+'</div>'})():'<div class="empty">该指标无状态维度，无法计算可用率（需业务侧指标带 status tag）</div>';
+}
+function renderAvailSVG(avail){
+  const W=920,H=140,P=46,PB=18,n=avail.length;
+  const lo=Math.min(...avail.map(a=>a.rate))*100,hi=100;
+  const pad=(hi-lo)>0.5?(hi-lo)*0.3:0.3,yl=Math.max(lo-pad,0);
+  const X=i=>P+(W-P*1.2)*i/(n-1||1),Y=v=>P+(H-P-PB)*(1-(v*100-yl)/(hi-yl||1));
+  let g='';for(let k=0;k<=3;k++){const y=P+(H-P-PB)*k/3,v=hi-(hi-yl)*k/3;
+    g+=`<line class="grid" x1="${P}" y1="${y}" x2="${W-10}" y2="${y}"/><text x="${P-6}" y="${y+3}" text-anchor="end">${v.toFixed(2)}</text>`}
+  const line=`<polyline fill="none" stroke="var(--ok)" stroke-width="1.8" points="${avail.map((a,i)=>`${X(i)},${Y(a.rate)}`).join(' ')}"/>`;
+  const bad=avail.filter(a=>a.rate<0.99);
+  const dots=bad.map(a=>{const i=avail.indexOf(a);return `<circle cx="${X(i)}" cy="${Y(a.rate)}" r="3.5" fill="var(--error)" title="${(a.rate*100).toFixed(2)}% ${Math.round(a.ok)}/${Math.round(a.total)}"/>`}).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${g}${line}${dots}</svg>`;
+}
+/* ---------- 规则页 ---------- */
+let ruleCache=[];
+async function loadRules(){
+  const [rules,logSvcs,otlpSvcs]=await Promise.all([
+    fetch('api/avail-rules').then(r=>r.json()).catch(()=>[]),
+    fetch('api/services').then(r=>r.json()).catch(()=>[]),
+    fetch('api/otlp/services').then(r=>r.json()).catch(()=>[])]);
+  ruleCache=rules||[];
+  const svcs=[...new Set([...(logSvcs||[]),...(otlpSvcs||[])])];
+  const tb=$('rlRows');tb.innerHTML='';
+  $('rlEmpty').style.display=ruleCache.length?'none':'block';
+  ruleCache.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td style="padding:8px 10px;border-bottom:1px solid #21262d">${r.service}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d;color:${r.name?'var(--text)':'var(--dim)'}">${r.name||'（服务默认）'}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d;color:var(--ok)">${(r.ok_codes||[]).join(', ')||'内置'}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d;color:var(--warn)">${(r.ignore_codes||[]).join(', ')||'—'}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d">
+        <span class="op" style="color:var(--brand);cursor:pointer;margin-right:10px" onclick="editRule(ruleCache[${i}])">编辑</span>
+        <span class="op" style="color:var(--error);cursor:pointer" onclick="delRule('${r.service}','${r.name||''}')">删除</span></td>`;
+    tb.appendChild(tr)});
+  // 新建弹窗的服务下拉与指标建议
+  $('rlSvc').innerHTML=svcs.map(s=>`<option>${s}</option>`).join('');
+  const names=new Set();ruleCache.forEach(r=>r.name&&names.add(r.name));
+  ['rpc.server.duration','rpc.client.duration','app.response','http.server.request.duration','http.client.request.duration'].forEach(n=>names.add(n));
+  $('rlNameList').innerHTML=[...names].map(n=>`<option value="${n}">`).join('');
+}
+window.editRule=r=>{ $('rlTitle').textContent='编辑规则';
+  $('rlSvc').value=r.service;$('rlName').value=r.name||'';
+  $('rlOk').value=(r.ok_codes||[]).join(', ');$('rlIg').value=(r.ignore_codes||[]).join(', ');
+  $('rlMsg').textContent='';$('rlMask').style.display='flex'};
+window.delRule=async(svc,name)=>{
+  if(!confirm(`删除规则：${svc}${name?' · '+name:'（服务默认）'}？`))return;
+  await fetch(`api/avail-rule?service=${encodeURIComponent(svc)}&name=${encodeURIComponent(name)}`,{method:'DELETE'});
+  loadRules()};
+$('rlNew').onclick=()=>{$('rlTitle').textContent='新建规则';
+  $('rlName').value='';$('rlOk').value='';$('rlIg').value='';
+  $('rlMsg').textContent='';$('rlMask').style.display='flex'};
+$('rlMask').onclick=e=>{if(e.target.id==='rlMask')$('rlMask').style.display='none'};
+$('rlSave').onclick=async()=>{
+  const body={service:$('rlSvc').value,name:$('rlName').value.trim(),
+    ok_codes:$('rlOk').value.split(',').map(x=>x.trim()).filter(Boolean),
+    ignore_codes:$('rlIg').value.split(',').map(x=>x.trim()).filter(Boolean)};
+  if(!body.service){$('rlMsg').textContent='请选服务';return}
+  const r=await fetch('api/avail-rule',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){$('rlMask').style.display='none';toast('规则已保存');loadRules()}else $('rlMsg').textContent='保存失败'};
+$('aUnit').onchange=loadQuantiles;
+// 可用率规则（服务×指标）
+$('aRuleBtn').onclick=async()=>{
+  const svc=$('aSvc2').value,name=$('aMetric').value;
+  if(!svc||!name){toast('先选择服务与指标');return}
+  const r=await(await fetch(`api/avail-rule?service=${encodeURIComponent(svc)}&name=${encodeURIComponent(name)}`)).json();
+  $('rScope').textContent=`${svc} · ${name||'(服务默认)'}`;
+  $('rOk').value=(r.ok_codes||[]).join(', ');
+  $('rIg').value=(r.ignore_codes||[]).join(', ');
+  $('rMsg').textContent=r.builtin?'当前：内置规则（2xx/3xx/0/OK=成功）':(r.inherited?'当前：继承服务默认规则':'当前：本指标专属规则');
+  $('rMask').style.display='flex'};
+$('rMask').onclick=e=>{if(e.target.id==='rMask')$('rMask').style.display='none'};
+$('rSave').onclick=async()=>{
+  const svc=$('aSvc2').value,name=$('aMetric').value;
+  const body={service:svc,name,ok_codes:$('rOk').value.split(',').map(x=>x.trim()).filter(Boolean),
+    ignore_codes:$('rIg').value.split(',').map(x=>x.trim()).filter(Boolean)};
+  const r=await fetch('api/avail-rule',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){$('rMsg').textContent='✓ 已保存并生效';setTimeout(()=>{$('rMask').style.display='none';loadQuantiles()},600)}
+  else $('rMsg').textContent='保存失败'};
+
+$('aSvc2').onchange=()=>{$('aMetric').value='';$('aIface').value='';loadApiTab()};
+$('aMetric').onchange=()=>{$('aIface').value='';loadIfaces()};
+$('aIface').onchange=loadIfaceAttrs;
+$('aMeth').onchange=loadQuantiles;
+$('aStatus').onchange=loadQuantiles;
+
+/* ---------- Trace 调用链 ---------- */
+const SVC_COLORS=['#2f81f7','#3fb950','#d29922','#f85149','#a371f7','#39c5cf'];
+const svcColor=s=>{let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))>>>0;return SVC_COLORS[h%SVC_COLORS.length]};
+async function loadTrace(id){
+  if(!id)return;
+  const spans=await(await fetch(`api/otlp/trace?id=${encodeURIComponent(id)}`)).json()||[];
+  if(!spans.length){$('tHead').style.display='none';$('tGantt').innerHTML='<div class="empty">未找到该 trace（未开启 traces 导出，或已过 6h 保留期）</div>';return}
+  const t0=Math.min(...spans.map(s=>s.start_ms));
+  const t1=Math.max(...spans.map(s=>s.start_ms+s.dur_ms));
+  const total=Math.max(t1-t0,1);
+  const errs=spans.filter(s=>s.status===2).length;
+  $('tHead').style.display='grid';
+  $('tHead').innerHTML=`
+    <div class="card"><div class="t">TraceID</div><div class="v" style="font-size:13px;font-family:var(--mono)">${id.slice(0,16)}…</div></div>
+    <div class="card"><div class="t">Span 数</div><div class="v">${spans.length}</div></div>
+    <div class="card"><div class="t">总耗时</div><div class="v">${total}<small style="font-size:12px;color:var(--dim)"> ms</small></div></div>
+    <div class="card"><div class="t">状态</div><div class="v" style="color:${errs?'var(--error)':'var(--ok)'}">${errs?errs+' 个错误':'正常'}</div></div>`;
+  // 深度缩进
+  const byId={};spans.forEach(s=>byId[s.span_id]=s);
+  const depth=s=>{let d=0,p=s;while(p&&p.parent_id&&byId[p.parent_id]){d++;p=byId[p.parent_id]}return d};
+  let rows='';
+  spans.forEach(s=>{
+    const d=depth(s),c=svcColor(s.service);
+    const left=(s.start_ms-t0)/total*100,w=Math.max(s.dur_ms/total*100,0.6);
+    const hasDetail=s.attrs&&Object.keys(s.attrs).length||s.err;
+    rows+=`<div style="border-bottom:1px dashed #21262d">
+      <div class="spRow" data-sid="${s.span_id}" style="display:flex;align-items:center;height:26px;${hasDetail?'cursor:pointer;':''}" ${hasDetail?`onclick="toggleSpanDetail('${s.span_id}')"`:''}>
+        <div style="width:260px;flex-shrink:0;padding-left:${d*14}px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:11px;font-family:var(--mono)">
+          <span style="color:${c}">●</span> ${s.name} <span style="color:var(--dim)">${s.dur_ms}ms</span>${s.err?' <span style="color:var(--error)">!</span>':''}</div>
+        <div style="flex:1;position:relative;height:100%">
+          <div title="${s.service} · ${s.name} · ${s.dur_ms}ms" style="position:absolute;top:6px;left:${left}%;width:${w}%;height:13px;border-radius:3px;background:${c}${s.status===2?';outline:2px solid var(--error)':''};opacity:.85"></div>
+        </div></div>
+      <div id="sd-${s.span_id}" style="display:none;padding:8px 12px 10px 270px;background:#11161d">
+        ${s.err?`<div style="color:var(--error);font-family:var(--mono);font-size:11px;margin-bottom:6px">⛔ ${s.err.replace(/</g,'&lt;')}</div>`:''}
+        ${s.attrs?Object.entries(s.attrs).map(([k,v])=>
+          `<div style="display:flex;gap:10px;font-size:11px;font-family:var(--mono)"><span style="color:var(--info);min-width:180px">${k}</span><span style="color:#c9d1d9;word-break:break-all">${String(v).replace(/</g,'&lt;')}</span></div>`).join(''):''}
+      </div></div>`});
+    window._spans=spans;
+  $('tGantt').innerHTML=`<div class="panel"><div style="border-bottom:1px solid var(--border);color:var(--dim);font-size:10px;font-family:var(--mono);display:flex"><div style="width:260px;flex-shrink:0">span</div><div style="flex:1;position:relative"><span style="position:absolute;left:0">0</span><span style="position:absolute;left:25%">${(total/4).toFixed(0)}ms</span><span style="position:absolute;left:50%">${(total/2).toFixed(0)}ms</span><span style="position:absolute;right:0">${total}ms</span></div></div>${rows}</div>`;
+}
+async function loadRecentTraces(){
+  const list=await(await fetch('api/otlp/traces/recent')).json()||[];
+  $('tRecent').innerHTML=list.length?list.map(t=>`
+    <div style="display:flex;gap:14px;padding:5px 0;border-bottom:1px solid #21262d;font-size:12px;cursor:pointer" onclick="loadTrace('${t.trace_id}');$('tId').value='${t.trace_id}'">
+      <span style="font-family:var(--mono);color:var(--trace)">${t.trace_id.slice(0,20)}…</span>
+      <span style="color:var(--dim)">${t.spans} spans</span>
+      <span style="color:${t.errors?'var(--error)':'var(--dim)'}">${t.errors?t.errors+' 错误':'—'}</span>
+      <span style="color:var(--dim);margin-left:auto">${t.total_ms}ms · ${new Date(t.start_ms).toLocaleTimeString('zh-CN',{hour12:false})}</span>
+    </div>`).join(''):'<div class="empty">暂无 trace（给服务开启 traces 导出后出现）</div>';
+}
+$('tId').onkeydown=e=>{if(e.key==='Enter')loadTrace($('tId').value.trim())};
+window.toggleSpanDetail=sid=>{const el=$('sd-'+sid);if(el)el.style.display=el.style.display==='none'?'block':'none'};
+// #trace=<id> 哈希直达（logs 插件跳转入口）
+(function(){const m=location.hash.match(/trace=([0-9a-fA-F]+)/);if(m){document.querySelector('#nav a[data-v=trace]').click();$('tId').value=m[1];loadTrace(m[1])}})();
+
+
+
+/* ---------- 机器指标 ---------- */
+async function loadMachines(){
+  const [latest,series]=await Promise.all([
+    fetch('api/machines').then(r=>r.json()),
+    fetch(`api/machine-series?agent=${encodeURIComponent($('mAgent').value||'')}&start=${Date.now()-3600000}`).then(r=>r.json())]);
+  const list=latest||[];
+  if(!$('mAgent').value&&list.length)$('mAgent').value=list[0].agent_id;
+  $('mAgent').innerHTML=list.map(a=>`<option${a.agent_id===$('mAgent').value?' selected':''}>${a.agent_id}</option>`).join('');
+  const me=list.find(a=>a.agent_id===$('mAgent').value)||list[0];
+  const pct=(u,t)=>t?Math.round(u/t*100):0;
+  $('mCards').innerHTML=me?`
+    <div class="card"><div class="t">CPU</div><div class="v" style="color:${me.cpu>80?'var(--error)':me.cpu>50?'var(--warn)':'var(--ok)'}">${me.cpu}%</div><div class="s">${me.agent_id}</div></div>
+    <div class="card"><div class="t">内存</div><div class="v">${me.mem_used}<small style="font-size:12px;color:var(--dim)"> / ${me.mem_total}G</small></div><div class="s">${pct(me.mem_used,me.mem_total)}%</div><div class="bar"><i style="width:${pct(me.mem_used,me.mem_total)}%"></i></div></div>
+    <div class="card"><div class="t">磁盘 /</div><div class="v">${me.disk_used}<small style="font-size:12px;color:var(--dim)"> / ${me.disk_total}G</small></div><div class="s">${pct(me.disk_used,me.disk_total)}%</div><div class="bar"><i style="width:${pct(me.disk_used,me.disk_total)}%"></i></div></div>
+    <div class="card"><div class="t">网络 ↓ / ↑</div><div class="v" style="font-size:18px">${me.net_rx_kbs} / ${me.net_tx_kbs}<small style="font-size:12px;color:var(--dim)"> KB/s</small></div><div class="s">15s 采样</div></div>`:'<div class="empty">暂无机器数据（agent 配置 monitor_url 后 15 秒内出现）</div>';
+  const pts=series||[];
+  const times=pts.map(p=>p.minute);
+  if(times.length){
+    renderChart($('mCpu'),{times,unit:'%',yMax:100,series:[{name:'CPU',color:'var(--brand)',vals:pts.map(p=>p.cpu)}]});
+    renderChart($('mMem'),{times,unit:' G',series:[{name:'内存',color:'var(--warn)',vals:pts.map(p=>p.mem_used)}]});
+    renderChart($('mNet'),{times,unit:' KB/s',series:[
+      {name:'入',color:'var(--info)',vals:pts.map(p=>p.net_rx_kbs)},
+      {name:'出',color:'var(--ok)',vals:pts.map(p=>p.net_tx_kbs)}]});
+  }else{
+    ['mCpu','mMem','mNet'].forEach(id=>$(id).innerHTML='<div class="empty">暂无数据</div>');
+  }
+}
+$('mAgent').onchange=loadMachines;
+
+
+/* ---------- 报警规则 ---------- */
+let alertCache=[],editingAlert=null;
+async function loadAlerts(){
+  const [rules,status]=await Promise.all([fetch('api/alerts').then(r=>r.json()),fetch('api/alerts/status').then(r=>r.json())]);
+  alertCache=rules||[];
+  const tb=$('aRows');tb.innerHTML='';
+  $('aEmpty').style.display=alertCache.length?'none':'block';
+  alertCache.forEach((r,i)=>{
+    const st=status[r.id]||{};
+    const tr=document.createElement('tr');
+    const cond=`<span style="color:var(--warn)">${r.level}</span> 连续 ${r.duration_min} 分钟 ≥ ${r.threshold} 条/分`+
+      (r.keyword?` <code style="background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:0 5px;font-size:11px;color:var(--info)">${r.keyword}</code>`:'')+
+      (r.suppress_by?`<div style="color:var(--dim);font-size:11px">⏸ 抑制于: ${r.suppress_by}</div>`:'');
+    let state=!r.enabled?'<span style="color:var(--dim)">已停用</span>':
+      st.firing?`<span style="color:var(--error)">● 报警中</span>`:'<span style="color:var(--ok)">● 正常</span>';
+    if(st.silenced)state+=`<div style="color:var(--dim);font-size:11px">🔕 静默至 ${st.silence_until}</div>`;
+    else if(st.suppressed_by)state+=`<div style="color:var(--dim);font-size:11px">⏸ 被「${st.suppressed_by}」抑制</div>`;
+    else if(st.suppressed)state+=' <span style="color:var(--warn)">(限流)</span>';
+    tr.innerHTML=`<td style="padding:8px 10px;border-bottom:1px solid #21262d">${r.name}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d">${r.service}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d">${cond}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d">${state}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d;color:var(--dim)">${st.last_eval||'—'}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d">${st.sent||0}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #21262d">
+        <span class="op" style="color:var(--brand);cursor:pointer;margin-right:10px" onclick="testAlert(${r.id})">测试</span>
+        <span class="op" style="color:var(--brand);cursor:pointer;margin-right:10px" onclick="editAlert(alertCache[${i}])">编辑</span>
+        <span class="op" style="color:var(--warn);cursor:pointer;margin-right:10px" onclick="silenceAlert(${r.id},${st.silenced?0:3600000})">${st.silenced?'解除静默':'静默1h'}</span>
+        <span class="op" style="color:var(--error);cursor:pointer" onclick="toggleAlert(${r.id})">${r.enabled?'停用':'启用'}</span></td>`;
+    tb.appendChild(tr);
+  });
+  setTimeout(()=>{if($('v-alerts').style.display==='flex')loadAlerts()},15000);
+  loadNotifHistory();
+}
+async function loadNotifHistory(){
+  const list=await(await fetch('api/alert-notifications?limit=50')).json()||[];
+  const kc=k=>({'触发':'var(--error)','持续中':'var(--warn)','已恢复':'var(--ok)','汇总':'var(--info)','被抑制':'var(--dim)','静默':'var(--dim)','限流':'var(--dim)','测试':'var(--muted)'}[k]||'var(--muted)');
+  $('nRows').innerHTML=list.length?list.map(n=>`<tr>
+    <td style="padding:7px 10px;border-bottom:1px solid #21262d;color:var(--dim);font-family:var(--mono)">${new Date(n.at*1000).toLocaleString('zh-CN',{hour12:false})}</td>
+    <td style="padding:7px 10px;border-bottom:1px solid #21262d">${n.rule}</td>
+    <td style="padding:7px 10px;border-bottom:1px solid #21262d;color:${kc(n.kind)}">${n.kind}</td>
+    <td style="padding:7px 10px;border-bottom:1px solid #21262d;color:var(--dim)">${n.detail}</td></tr>`).join(''):'<tr><td colspan=4 style="padding:20px;color:var(--dim);text-align:center">暂无通知记录</td></tr>';
+}
+window.testAlert=async id=>{const r=await fetch(`api/alerts/${id}/test`,{method:'POST'});toast(r.ok?'测试通知已发送':'发送失败')};
+window.editAlert=r=>{editingAlert=r;$('aMTitle').textContent='编辑报警';
+  $('aName').value=r.name;$('aSvc').value=r.service;$('aLv').value=r.level;
+  $('aDur').value=r.duration_min;$('aThr').value=r.threshold;$('aUrl').value=r.webhook;$('aSil').value=r.silence_sec/60;
+  $('aKw').value=r.keyword||'';$('aSup').value=r.suppress_by||'';
+  $('aMsg').textContent='';$('aMask').style.display='flex'};
+window.silenceAlert=async(id,ms)=>{const cur=alertCache.find(x=>x.id===id);if(!cur)return;
+  const r=await fetch(`api/alerts/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...cur,silence_until:ms>0?Date.now()+ms:0})});
+  toast(r.ok?(ms>0?'已静默 1 小时':'已解除静默'):'操作失败');loadAlerts()};
+window.toggleAlert=async id=>{const cur=alertCache.find(x=>x.id===id);
+  const r=await fetch(`api/alerts/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...cur,enabled:!cur.enabled})});
+  toast(r.ok?(cur.enabled?'已停用':'已启用'):'操作失败');loadAlerts()};
+$('aNew').onclick=()=>{editingAlert=null;$('aMTitle').textContent='新建报警';
+  $('aName').value='错误激增';$('aSvc').value=$('svc').value||'';$('aLv').value='ERROR';
+  $('aDur').value=3;$('aThr').value=10;$('aUrl').value='';$('aSil').value=5;
+  $('aKw').value='';$('aSup').value='';
+  $('aMsg').textContent='';$('aMask').style.display='flex'};
+$('aMask').onclick=e=>{if(e.target.id==='aMask'){$('aMask').style.display='none';editingAlert=null}};
+$('aSave').onclick=async()=>{
+  const body={name:$('aName').value.trim(),service:$('aSvc').value,level:$('aLv').value,
+    keyword:$('aKw').value.trim(),suppress_by:$('aSup').value.trim(),
+    silence_until:editingAlert?editingAlert.silence_until||0:0,
+    duration_min:+$('aDur').value||1,threshold:+$('aThr').value||1,
+    webhook:$('aUrl').value.trim(),silence_sec:(+$('aSil').value||5)*60,enabled:true};
+  if(!body.name||!body.webhook||!body.service){$('aMsg').style.color='var(--warn)';$('aMsg').textContent='名称/服务/Webhook 必填';return}
+  const r=await fetch(editingAlert?`api/alerts/${editingAlert.id}`:'api/alerts',{
+    method:editingAlert?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('aMsg').style.color='var(--ok)';
+  if(r.ok){$('aMask').style.display='none';toast('已保存');loadAlerts()}else{$('aMsg').textContent='保存失败'}
+};
+$('aTest').onclick=async()=>{
+  if(!editingAlert){$('aMsg').textContent='（保存后可发测试）';return}
+  const r=await fetch(`api/alerts/${editingAlert.id}/test`,{method:'POST'});
+  $('aMsg').textContent=r.ok?'✓ 测试通知已送达':'发送失败';
+};
+// 报警页服务下拉跟随图表页/全局上下文
+function refreshAlertSvc(){const cur=$('aSvc').value;const svcs=[...$('svc').options].map(o=>o.value);
+  $('aSvc').innerHTML=svcs.map(s=>`<option${s===cur?' selected':''}>${s}</option>`).join('')}
+
+</script>
+</body>
+</html>

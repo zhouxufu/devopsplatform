@@ -1,0 +1,15 @@
+name: monitor
+display: 监控大盘
+version: 0.1.0
+binary: ../../bin/monitor
+admin_addr: 127.0.0.1:19802
+args:
+  - -addr
+  - :9802
+  - -admin-addr
+  - 127.0.0.1:19802
+  - -data
+  - ../../runtime/monitor-data
+  - -bus
+  - http://127.0.0.1:9800
+nav_icon: "📈"

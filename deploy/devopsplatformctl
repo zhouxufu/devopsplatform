@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir=${DEVOPSPLATFORM_ROOT:-/home/devopsplatform}
+service_user=${DEVOPSPLATFORM_USER:-devopsplatform}
+service_name=${DEVOPSPLATFORM_SERVICE:-devopsplatform}
+releases_dir="$root_dir/releases"
+data_dir="$root_dir/data"
+config_dir="$root_dir/config"
+config_file="$config_dir/devopsplatform.env"
+current_link="$root_dir/current"
+previous_link="$root_dir/previous"
+unit_file="/etc/systemd/system/${service_name}.service"
+installed_ctl="/usr/local/bin/devopsplatformctl"
+
+die() { echo "错误: $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "该操作需要 root，请使用 sudo"; }
+
+machine_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    *) die "不支持的服务器架构: $(uname -m)" ;;
+  esac
+}
+
+random_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+  fi
+}
+
+ensure_user() {
+  if ! id "$service_user" >/dev/null 2>&1; then
+    nologin=/usr/sbin/nologin
+    [ -x "$nologin" ] || nologin=/sbin/nologin
+    useradd --system --create-home --home-dir "$root_dir" --shell "$nologin" "$service_user"
+  fi
+}
+
+ensure_layout() {
+  mkdir -p "$releases_dir" "$data_dir" "$config_dir"
+  chown -R "$service_user:$service_user" "$releases_dir" "$data_dir"
+  chown root:"$service_user" "$config_dir"
+  chmod 0750 "$root_dir" "$releases_dir" "$data_dir" "$config_dir"
+}
+
+ensure_config() {
+  local admin_password="" data_token="" legacy_manifest legacy_token=""
+  if [ ! -f "$config_file" ]; then
+    umask 0077
+    : > "$config_file"
+  fi
+  if ! grep -q '^DEVOPSPLATFORM_ADDR=' "$config_file"; then
+    echo "DEVOPSPLATFORM_ADDR=0.0.0.0:9800" >> "$config_file"
+  fi
+  if ! grep -Eq '^(DEVOPSPLATFORM_AUTH|LOGPLATFORM_AUTH)=' "$config_file"; then
+    admin_password=$(random_secret)
+    echo "DEVOPSPLATFORM_AUTH=$admin_password" >> "$config_file"
+  fi
+  if ! grep -q '^DEVOPSPLATFORM_DATA_TOKEN=' "$config_file"; then
+    legacy_manifest="$root_dir/app/plugins/logs/manifest.yaml"
+    if [ -f "$legacy_manifest" ]; then
+      legacy_token=$(awk '
+        found { sub(/^[[:space:]]*-[[:space:]]*/, ""); print; exit }
+        /^[[:space:]]*-[[:space:]]+-token[[:space:]]*$/ { found=1 }
+      ' "$legacy_manifest")
+    fi
+    if [ -n "$legacy_token" ]; then
+      data_token=$legacy_token
+      echo "已从旧版日志插件迁移数据面 Token"
+      [ "$data_token" != "demo-token" ] || echo "警告：当前仍为 demo-token，请安装后立即修改配置" >&2
+    else
+      data_token=$(random_secret)
+    fi
+    echo "DEVOPSPLATFORM_DATA_TOKEN=$data_token" >> "$config_file"
+  fi
+  chown root:"$service_user" "$config_file"
+  chmod 0640 "$config_file"
+  if [ -n "$admin_password" ]; then
+    echo "已生成控制台密码：$config_file"
+    echo "首次登录密码：$admin_password"
+  fi
+  if [ -n "$data_token" ]; then
+    echo "已生成日志和 OTLP 数据面 Token：$config_file"
+  fi
+}
+
+install_unit() {
+  cat > "$unit_file" <<EOF
+[Unit]
+Description=DevOps Platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$service_user
+Group=$service_user
+WorkingDirectory=$current_link
+Environment=HOME=$root_dir
+EnvironmentFile=$config_file
+ExecStart=$current_link/bin/devopsplatform -plugins $current_link/plugins -data $data_dir/platform-data
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 0644 "$unit_file"
+  systemctl daemon-reload
+}
+
+verify_archive() {
+  local archive=$1 expected_arch
+  [ -f "$archive" ] || die "发布包不存在: $archive"
+  expected_arch=$(machine_arch)
+  case "$(basename "$archive")" in
+    *-linux-"$expected_arch".tar.gz) ;;
+    *) die "发布包架构与服务器不一致：服务器需要 $expected_arch" ;;
+  esac
+
+  local checksum_file="${archive}.sha256"
+  if [ -f "$checksum_file" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      (cd "$(dirname "$archive")" && sha256sum -c "$(basename "$checksum_file")")
+    else
+      (cd "$(dirname "$archive")" && shasum -a 256 -c "$(basename "$checksum_file")")
+    fi
+  else
+    echo "警告：未找到 $checksum_file，跳过发布包外层校验" >&2
+  fi
+
+  if tar -tzf "$archive" | awk '$0 ~ /^\// || $0 ~ /(^|\/)\.\.(\/|$)/ { found=1 } END { exit !found }'; then
+    die "发布包包含不安全路径"
+  fi
+}
+
+atomic_link() {
+  local target=$1 link=$2 temporary
+  temporary="${link}.new.$$"
+  ln -s "$target" "$temporary"
+  mv -Tf "$temporary" "$link"
+}
+
+config_port() {
+  local value
+  value=$(sed -n 's/^DEVOPSPLATFORM_ADDR=//p' "$config_file" | tail -n 1)
+  value=${value%\"}; value=${value#\"}
+  value=${value##*:}
+  case "$value" in *[!0-9]*|'') value=9800 ;; esac
+  echo "$value"
+}
+
+healthy() {
+  local port body i
+  port=$(config_port)
+  for i in $(seq 1 30); do
+    if command -v curl >/dev/null 2>&1; then
+      body=$(curl -fsS --max-time 2 "http://127.0.0.1:${port}/api/health" 2>/dev/null || true)
+    else
+      body=$(wget -qO- -T 2 "http://127.0.0.1:${port}/api/health" 2>/dev/null || true)
+    fi
+    case "$body" in *'"ok":true'*) return 0 ;; esac
+    sleep 1
+  done
+  return 1
+}
+
+install_control_command() {
+  local source=${BASH_SOURCE[0]}
+  if [ "$source" != "$installed_ctl" ]; then
+    install -m 0755 "$source" "$installed_ctl"
+  fi
+}
+
+apply_archive() {
+  local archive=$1 mode=$2 staging top_count source_dir version target old_target restart_ok
+  need_root
+  if [ "$mode" = "upgrade" ] && [ ! -L "$current_link" ]; then
+    die "尚未安装，请先使用 install"
+  fi
+  verify_archive "$archive"
+  ensure_user
+  ensure_layout
+  ensure_config
+
+  staging="$releases_dir/.staging-$$"
+  mkdir -p "$staging"
+  tar -xzf "$archive" -C "$staging"
+  top_count=$(find "$staging" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+  [ "$top_count" = "1" ] || die "发布包必须只有一个顶层目录"
+  source_dir=$(find "$staging" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+  [ -f "$source_dir/VERSION" ] || die "发布包缺少 VERSION"
+  version=$(tr -d '\r\n' < "$source_dir/VERSION")
+  case "$version" in *[!0-9A-Za-z._-]*|'') die "发布包版本无效" ;; esac
+
+  target="$releases_dir/$version"
+  [ ! -e "$target" ] || die "版本 $version 已存在；请使用新版本号重新打包"
+  [ -x "$source_dir/bin/devopsplatform" ] || die "发布包缺少主程序"
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$source_dir" && sha256sum -c SHA256SUMS)
+  else
+    (cd "$source_dir" && shasum -a 256 -c SHA256SUMS)
+  fi
+
+  mv "$source_dir" "$target"
+  case "$staging" in
+    "$releases_dir"/.staging-*) rm -rf "$staging" ;;
+    *) die "拒绝清理异常临时目录: $staging" ;;
+  esac
+  ln -s "$data_dir" "$target/runtime"
+  chown -R "$service_user:$service_user" "$target"
+
+  old_target=""
+  if [ -L "$current_link" ]; then
+    old_target=$(readlink -f "$current_link")
+    atomic_link "$old_target" "$previous_link"
+  fi
+
+  atomic_link "$target" "$current_link"
+  install_unit
+  install_control_command
+  systemctl enable "$service_name" >/dev/null
+  restart_ok=true
+  systemctl restart "$service_name" || restart_ok=false
+
+  if [ "$restart_ok" = "true" ] && healthy; then
+    echo "✅ DevOpsPlatform $version 已启动"
+    echo "   控制台：http://服务器内网IP:$(config_port)"
+    echo "   配置：$config_file"
+    return
+  fi
+
+  echo "新版本健康检查失败" >&2
+  if [ -n "$old_target" ]; then
+    echo "正在自动回滚到 $(basename "$old_target")" >&2
+    atomic_link "$old_target" "$current_link"
+    systemctl restart "$service_name" || true
+    healthy || true
+  fi
+  systemctl status "$service_name" --no-pager -l || true
+  journalctl -u "$service_name" -n 80 --no-pager || true
+  return 1
+}
+
+rollback_release() {
+  local current_target previous_target restart_ok
+  need_root
+  [ -L "$current_link" ] || die "当前没有已安装版本"
+  [ -L "$previous_link" ] || die "没有可回滚的上一版本"
+  current_target=$(readlink -f "$current_link")
+  previous_target=$(readlink -f "$previous_link")
+  [ -d "$previous_target" ] || die "上一版本目录不存在"
+  atomic_link "$previous_target" "$current_link"
+  atomic_link "$current_target" "$previous_link"
+  restart_ok=true
+  systemctl restart "$service_name" || restart_ok=false
+  if [ "$restart_ok" = "true" ] && healthy; then
+    echo "✅ 已回滚到 $(basename "$previous_target")"
+    return
+  fi
+  echo "回滚版本健康检查失败，恢复原版本" >&2
+  atomic_link "$current_target" "$current_link"
+  atomic_link "$previous_target" "$previous_link"
+  systemctl restart "$service_name" || true
+  return 1
+}
+
+usage() {
+  cat <<'EOF'
+用法：
+  devopsplatformctl install  <发布包.tar.gz>   首次安装
+  devopsplatformctl upgrade  <发布包.tar.gz>   升级，失败自动回滚
+  devopsplatformctl apply    <发布包.tar.gz>   自动判断安装或升级
+  devopsplatformctl rollback                    回滚上一版本
+  devopsplatformctl restart                     重启
+  devopsplatformctl status                      查看状态
+  devopsplatformctl logs                        跟踪日志
+  devopsplatformctl version                     查看当前版本
+EOF
+}
+
+command_name=${1:-help}
+case "$command_name" in
+  install) [ "$#" -eq 2 ] || die "install 需要发布包路径"; apply_archive "$2" install ;;
+  upgrade) [ "$#" -eq 2 ] || die "upgrade 需要发布包路径"; apply_archive "$2" upgrade ;;
+  apply)
+    [ "$#" -eq 2 ] || die "apply 需要发布包路径"
+    if [ -L "$current_link" ]; then apply_archive "$2" upgrade; else apply_archive "$2" install; fi
+    ;;
+  rollback) rollback_release ;;
+  restart) need_root; systemctl restart "$service_name"; healthy && echo "✅ 服务正常" ;;
+  status) systemctl status "$service_name" --no-pager -l ;;
+  logs) journalctl -u "$service_name" -f ;;
+  version)
+    if [ -f "$current_link/VERSION" ]; then cat "$current_link/VERSION"; else echo "未安装"; fi
+    ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 2 ;;
+esac

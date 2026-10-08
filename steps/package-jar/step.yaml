@@ -1,0 +1,9 @@
+apiVersion: deploy.logplatform.io/v1
+id: package-jar
+name: 打包 jar
+description: glob 匹配构建产物归档到制品库
+category: 打包
+kind: package
+produces: jar
+params:
+  - {name: GLOB, type: input, label: 产物匹配, default: "build/libs/*.jar"}

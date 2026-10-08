@@ -1,0 +1,9 @@
+apiVersion: deploy.logplatform.io/v1
+id: npm-build
+name: 前端构建
+description: npm/yarn/pnpm 构建
+category: 构建
+kind: build
+params:
+  - {name: INSTALL, type: shell, label: 安装依赖, default: "npm ci"}
+  - {name: COMMAND, type: shell, label: 构建命令, default: "npm run build"}

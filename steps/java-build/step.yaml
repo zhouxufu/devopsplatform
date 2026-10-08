@@ -1,0 +1,9 @@
+apiVersion: deploy.logplatform.io/v1
+id: java-build
+name: Java 构建
+description: gradle/maven 构建
+category: 构建
+kind: build
+params:
+  - {name: COMMAND, type: shell, label: 构建命令, default: "./gradlew build -x test --console=plain -q"}
+  - {name: PRE, type: shell, label: 前置命令, default: ""}

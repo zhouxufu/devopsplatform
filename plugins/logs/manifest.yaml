@@ -1,0 +1,16 @@
+name: logs
+display: 日志查询
+version: 0.2.0
+binary: ../../bin/logserver
+# 管理面：仅 127.0.0.1，供平台网关转发
+admin_addr: 127.0.0.1:19801
+args:
+  - -addr
+  - :9801              # 数据面：agent 上报（X-Token 鉴权）+ CLI tail
+  - -admin-addr
+  - 127.0.0.1:19801
+  - -data
+  - ../../runtime/data
+  - -bus
+  - http://127.0.0.1:9800   # 事件总线（衍生指标发布）
+nav_icon: "▤"

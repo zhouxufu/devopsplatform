@@ -1,0 +1,14 @@
+apiVersion: deploy.logplatform.io/v1
+id: ssh-jar-deploy
+name: 部署 jar（SSH）
+description: 上传/备份/停/换/启/健康检查，失败自动回滚
+category: 部署
+kind: deploy
+driver: ssh-jar
+accepts: [jar]
+params:
+  - {name: HOST, type: input, label: 目标主机（主机名）}
+  - {name: REMOTE_DIR, type: input, label: 远端目录}
+  - {name: START_CMD, type: shell, label: 启动命令}
+  - {name: STOP_CMD, type: shell, label: 停止命令, default: ""}
+  - {name: HEALTH_URL, type: input, label: 健康检查 URL, default: ""}

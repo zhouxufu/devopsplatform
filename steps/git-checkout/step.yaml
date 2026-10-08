@@ -1,0 +1,9 @@
+apiVersion: deploy.logplatform.io/v1
+id: git-checkout
+name: 拉取源码
+description: clone 或 fetch+reset 到工作区（干净可重复）
+category: 源码
+kind: source
+params:
+  - {name: GIT_URL, type: input, label: Git 地址}
+  - {name: BRANCH, type: input, label: 分支, default: ""}

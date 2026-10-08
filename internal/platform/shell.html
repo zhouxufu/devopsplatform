@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>LogPlatform 控制台</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2128;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--dim:#6e7681;--brand:#2f81f7;--ok:#3fb950;--mono:'SF Mono',Menlo,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,'PingFang SC',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{height:48px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid var(--border);background:var(--panel);gap:12px;flex-shrink:0}
+.logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
+.logo .mark{width:22px;height:22px;border-radius:5px;background:linear-gradient(135deg,var(--brand),#1f6feb);display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700}
+.gctx{display:flex;align-items:center;gap:8px;margin-left:auto;padding-left:16px;border-left:1px solid var(--border)}
+.gctx .lbl{font-size:11px;color:var(--dim)}
+select,input,button{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;outline:none}
+.seg{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.seg button{background:transparent;border:none;color:var(--muted);padding:5px 12px;font-size:12px;cursor:pointer;border-right:1px solid var(--border)}
+.seg button:last-child{border-right:none}
+.seg button.on{background:#1f2937;color:var(--text)}
+.top-r{margin-left:auto;font-size:11px;color:var(--dim)}
+.wstabs{display:flex;align-items:center;padding:0;gap:2px;align-self:stretch;margin-left:4px}
+.wstab{display:flex;align-items:center;gap:6px;padding:0 10px;font-size:12px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+.wstab:hover{color:var(--text);background:var(--panel2)}
+.wstab.on{color:var(--text);border-bottom-color:var(--brand)}
+.wstab .x{opacity:.5;font-size:14px;padding:0 2px;border-radius:3px}
+.wstab .x:hover{opacity:1;background:var(--panel2)}
+.wsplus{position:relative;display:flex;align-items:center;padding:0 12px;color:var(--muted);cursor:pointer;font-size:14px}
+.wsplus:hover{color:var(--text)}
+.plusmenu{position:absolute;top:34px;left:0;background:var(--panel);border:1px solid var(--border);border-radius:8px;min-width:150px;display:none;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.plusmenu.show{display:block}
+.plusmenu div{padding:8px 14px;font-size:12px;color:var(--muted);cursor:pointer}
+.plusmenu div:hover{background:var(--panel2);color:var(--text)}
+.wsarea{flex:1;position:relative;overflow:hidden;background:var(--bg)}
+.ws{position:absolute;inset:0;border:none;width:100%;height:100%;display:none}
+.ws.on{display:block}
+#login{position:fixed;inset:0;background:var(--bg);z-index:100;display:none;align-items:center;justify-content:center}
+#login.show{display:flex}
+#login .box{width:320px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:24px;text-align:center}
+#login h3{margin-bottom:16px}
+#login input{width:100%;margin-bottom:12px;padding:8px 10px}
+#login button{width:100%;background:var(--brand);border-color:var(--brand);color:#fff;padding:8px}
+#toast{position:fixed;top:60px;right:20px;background:#1f2937;border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--ok);display:none;z-index:99}
+.empty-ws{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><div class="mark">LP</div>LogPlatform 控制台</div>
+  <div class="wstabs" id="wstabs">
+    <div class="wsplus" onclick="togglePlus(event)">＋
+      <div class="plusmenu" id="plusMenu"></div>
+    </div>
+  </div>
+  <div class="gctx">
+    <span class="lbl">全局上下文</span>
+    <input id="gSvc" list="svcList" placeholder="服务（全部）" style="width:150px">
+    <datalist id="svcList"></datalist>
+    <div class="seg" id="gRange">
+      <button class="on" data-m="15">15m</button><button data-m="60">1h</button><button data-m="360">6h</button><button data-m="1440">24h</button>
+    </div>
+  </div>
+  <div class="top-r" id="plugCount"></div>
+</header>
+<div class="wsarea" id="wsarea"><div class="empty-ws">点击 ＋ 打开一个插件工作区</div></div>
+
+<div id="login"><div class="box">
+  <h3>LogPlatform 登录</h3>
+  <input type="password" id="pwd" placeholder="管理密码" onkeydown="if(event.key==='Enter')doLogin()">
+  <button onclick="doLogin()">登录</button>
+</div></div>
+<div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+let pluginList=[],wsSeq=0,workspaces=[],activeWs=0;
+const ctx={service:'',rangeMin:15};
+function toast(t){const el=$('toast');el.textContent=t;el.style.display='block';clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',2400)}
+
+/* ---------- 插件工作区 ---------- */
+function openWorkspace(pi){
+  const ws={id:++wsSeq,plugin:pi,el:document.createElement('iframe')};
+  ws.el.className='ws';
+  ws.el.src=(pi.url||('/api/plugins/'+pi.name+'/ui'))+'#ws='+ws.id;
+  $('wsarea').appendChild(ws.el);
+  workspaces.push(ws);renderTabs();switchWorkspace(ws.id);
+  setTimeout(()=>ctxSync([ws]),1500); // iframe 加载后推送上下文
+}
+function closeWorkspace(id){
+  const i=workspaces.findIndex(w=>w.id===id);if(i<0)return;
+  workspaces[i].el.remove();workspaces.splice(i,1);
+  if(!workspaces.length){renderTabs();return}
+  if(!workspaces.some(w=>w.id===activeWs))switchWorkspace(workspaces[Math.max(0,i-1)].id);
+  else renderTabs(activeWs);
+}
+function switchWorkspace(id){activeWs=id;workspaces.forEach(w=>w.el.classList.toggle('on',w.id===id));renderTabs(id)}
+function renderTabs(on){
+  const t=$('wstabs');t.querySelectorAll('.wstab').forEach(e=>e.remove());
+  workspaces.forEach(w=>{
+    const d=document.createElement('div');d.className='wstab'+(w.id===on?' on':'');
+    d.onclick=e=>{if(!e.target.classList.contains('x'))switchWorkspace(w.id)};
+    d.innerHTML=`<span>${w.plugin.nav_icon||'▪'}</span>${w.plugin.display}<span class="x" onclick="event.stopPropagation();closeWorkspace(${w.id})">×</span>`;
+    t.insertBefore(d,t.lastElementChild)});
+  document.querySelector('.empty-ws').style.display=workspaces.length?'none':'flex';
+}
+function togglePlus(e){e.stopPropagation();$('plusMenu').classList.toggle('show')}
+document.addEventListener('click',()=>$('plusMenu').classList.remove('show'));
+// 菜单项用事件绑定捕获对象——不用内联 onclick 引用全局变量
+// （内联处理器作用域链里的 document.plugins 会遮蔽同名全局变量）
+function renderPlusMenu(){
+  $('plusMenu').innerHTML='';
+  pluginList.forEach(p=>{
+    const d=document.createElement('div');
+    d.innerHTML=`${p.nav_icon||'▪'} ${p.display}`;
+    d.onclick=e=>{e.stopPropagation();openWorkspace(p);$('plusMenu').classList.remove('show')}; // 阻止冒泡到＋的 toggle
+    $('plusMenu').appendChild(d);
+  });
+}
+
+/* ---------- 全局上下文广播（context.sync） ---------- */
+function ctxSync(list){
+  const targets=list||workspaces;
+  const msg={type:'context.sync',service:ctx.service,rangeMin:ctx.rangeMin};
+  targets.forEach(w=>{try{w.el.contentWindow.postMessage(msg,'*')}catch(e){}});
+}
+$('gSvc').onchange=()=>{ctx.service=$('gSvc').value.trim();ctxSync()};
+document.querySelectorAll('#gRange button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#gRange button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  ctx.rangeMin=+b.dataset.m;ctxSync()});
+
+/* ---------- 登录 ---------- */
+function doLogin(){
+  fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('pwd').value})})
+    .then(r=>{if(r.ok){location.reload()}else{toast('密码错误')}})}
+
+/* ---------- 初始化 ---------- */
+(async function init(){
+  const r=await fetch('/api/plugins');
+  if(r.status===401){$('login').classList.add('show');return}
+  pluginList=await r.json()||[];
+  $('plugCount').textContent=`${pluginList.length} 个插件 · `+pluginList.map(p=>p.display).join(' / ');
+  renderPlusMenu();
+  // 注册表填充服务建议
+  const svcs=await fetch('/api/registry/services').then(x=>x.json()).catch(()=>[])||[];
+  $('svcList').innerHTML=svcs.map(s=>`<option value="${s.name}">`).join('');
+  if(pluginList.length)openWorkspace(pluginList[0]); // 默认打开第一个插件
+  window.addEventListener('message',e=>{ // 插件向壳请求上下文（加载时）
+    if(e.data&&e.data.type==='context.request')ctxSync()});
+})();
+</script>
+</body>
+</html>

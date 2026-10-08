@@ -1,0 +1,11 @@
+apiVersion: deploy.logplatform.io/v1
+id: ssh-static-deploy
+name: 部署静态资源（SSH）
+description: 上传 tar.gz → 备份 → 解压到 current
+category: 部署
+kind: deploy
+driver: ssh-static
+accepts: [static-archive]
+params:
+  - {name: HOST, type: input, label: 目标主机（主机名）}
+  - {name: REMOTE_DIR, type: input, label: 远端目录（nginx 根）}

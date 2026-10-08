@@ -1,0 +1,39 @@
+/* 主题：默认浅色，html.dark 为深色。切换由 shared/composables/theme.js 驱动。 */
+:root{
+  --bg:#f6f8fa; --panel:#ffffff; --panel2:#eff2f5; --border:#d0d7de;
+  --text:#1f2328; --muted:#656d76; --dim:#8c959f;
+  --brand:#0969da; --error:#cf222e; --warn:#9a6700; --info:#0969da;
+  --ok:#1a7f37; --trace:#8250df;
+  --mono:'SF Mono',Menlo,Consolas,monospace;
+}
+html.dark{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --border:#30363d;
+  --text:#e6edf3; --muted:#8b949e; --dim:#6e7681;
+  --brand:#2f81f7; --error:#f85149; --warn:#d29922; --info:#58a6ff;
+  --ok:#3fb950; --trace:#a371f7;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,'PingFang SC',sans-serif;height:100vh;overflow:hidden;transition:background .15s,color .15s}
+#app{height:100vh;display:flex;flex-direction:column}
+select,input,button,textarea{background:var(--panel);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;outline:none;cursor:pointer;font-family:inherit}
+input,textarea{cursor:text}
+button:hover{border-color:var(--muted)}
+.btn-p{background:var(--brand)!important;border-color:var(--brand)!important;color:#fff!important}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:var(--dim);font-weight:500;font-size:11px;padding:7px 10px;border-bottom:1px solid var(--border)}
+td{padding:8px 10px;border-bottom:1px solid var(--border)}
+tr:hover td{background:var(--panel2)}
+.op{color:var(--brand);cursor:pointer;margin-right:10px}
+.op.del{color:var(--error)}
+.op-btn{border:0;background:transparent;padding:0;font:inherit}.op-btn:hover{text-decoration:underline}
+.table-scroll{width:100%;overflow-x:auto}.table-scroll table{min-width:720px}
+.st-ok{color:var(--ok)}.st-fail{color:var(--error)}.st-run{color:var(--warn)}
+.empty{padding:40px;color:var(--dim);text-align:center}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+.card h4{font-size:12px;color:var(--muted);margin-bottom:8px}
+.fld{margin-bottom:10px}
+.fld label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+.fld input,.fld select,.fld textarea{width:100%}
+/* 图表（SVG）主题适配 */
+.lp-grid{stroke:var(--border)}
+.lp-axis{fill:var(--dim)}

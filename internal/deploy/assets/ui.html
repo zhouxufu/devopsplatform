@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>部署平台</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2128;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--dim:#6e7681;
+--brand:#2f81f7;--error:#f85149;--ok:#3fb950;--mono:'SF Mono',Menlo,Consolas,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,'PingFang SC',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{height:44px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0}
+header .logo{font-weight:600}
+select,input,button{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;outline:none;cursor:pointer}
+input{cursor:text}
+.hint{margin-left:auto;color:var(--dim);font-size:11px}
+nav{display:flex;gap:4px}
+nav a{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)}
+nav a.on{color:var(--text);background:var(--panel2)}
+body.embedded header .logo{display:none}
+main{flex:1;overflow-y:auto;padding:14px 16px;display:none;flex-direction:column}
+main.on{display:flex}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:var(--dim);font-weight:500;font-size:11px;padding:7px 10px;border-bottom:1px solid var(--border)}
+td{padding:8px 10px;border-bottom:1px solid #21262d}
+tr:hover td{background:var(--panel2)}
+.op{color:var(--brand);cursor:pointer;margin-right:10px}
+.op.del{color:var(--error)}
+.st-ok{color:var(--ok)}.st-fail{color:var(--error)}.st-run{color:var(--warn)}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+.card h4{font-size:12px;color:var(--muted);margin-bottom:8px}
+#logView{background:#0a0d12;border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break-all;overflow-y:auto;height:calc(100vh - 210px);color:#c9d1d9}
+.mask{position:fixed;inset:0;background:rgba(1,4,9,.7);display:none;align-items:center;justify-content:center;z-index:50}
+.mask{opacity:0;transition:opacity .15s}
+.mask.show{display:flex;opacity:1}
+.modal{transform:translateY(6px);transition:transform .15s}
+.mask.show .modal{transform:none}
+.modal{width:520px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px;max-height:90vh;overflow-y:auto}
+.modal h3{font-size:14px;margin-bottom:14px}
+.fld{margin-bottom:10px}
+.fld label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+.fld input,.fld select{width:100%}
+.fld .sub{font-size:10px;color:var(--dim);margin-top:2px}
+.btn-p{background:var(--brand)!important;border-color:var(--brand)!important;color:#fff!important}
+#toast{position:fixed;top:56px;right:20px;background:#1f2937;border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--ok);display:none;z-index:99}
+.empty{padding:40px;color:var(--dim);text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">🚀 部署平台</span>
+  <nav>
+    <a class="on" data-v="svc" onclick="sw('svc')">服务</a>
+    <a data-v="host" onclick="sw('host')">主机</a>
+  </nav>
+  <button class="btn-p" style="margin-left:12px" onclick="openSvc()">＋ 新建服务</button>
+  <span class="hint">构建 + 部署（ssh-jar · 单台确认全量 · 自动回滚）</span>
+</header>
+
+<main id="v-svc" class="on">
+  <table><thead><tr><th>服务</th><th>产物</th><th>构建方式</th><th>构建命令</th><th>最近构建</th><th>操作</th></tr></thead>
+  <tbody id="svcRows"></tbody></table>
+  <div id="svcEmpty" class="empty" style="display:none">暂无服务——点右上"新建服务"接入构建</div>
+</main>
+
+<main id="v-detail">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <span style="color:var(--brand);cursor:pointer" onclick="sw('svc')">← 服务</span>
+    <h3 id="dtName" style="font-size:15px;font-weight:600"></h3>
+    <button class="btn-p" style="margin-left:8px" onclick="runPipeline()">▶ 运行流水线</button>
+    <div style="margin-left:auto;display:flex;gap:4px">
+      <a id="dtTabHist" class="dtTab on" onclick="dtTab('hist')">流水线</a>
+      <a id="dtTabDep" class="dtTab" onclick="dtTab('dep')">部署</a>
+      <a id="dtTabCfg" class="dtTab" onclick="dtTab('cfg')">配置</a>
+    </div>
+  </div>
+  <div id="v-cfg" style="display:none" class="card"></div>
+  <div id="v-hist">
+  <div id="plLatest" style="margin-bottom:14px"></div>
+  <table><thead><tr><th>#</th><th>版本</th><th>阶段</th><th>状态</th><th>产物</th><th>耗时</th><th>时间</th><th>操作</th></tr></thead>
+  <tbody id="plRows"></tbody></table>
+</div>
+  <div id="v-dep">
+  <div class="card">
+    <h4>发起部署</h4>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select id="dSvc" onchange="loadVer()"></select>
+      <select id="dVer"></select>
+      <span style="color:var(--dim);font-size:11px">→ 目标主机（先发第一台，确认后再发其余）</span>
+    </div>
+    <div id="dHosts" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn-p" onclick="deployFirst()">发布（单台）</button>
+      <button id="dRest" style="display:none" onclick="deployRest()">确认发布其余主机</button>
+    </div>
+  </div>
+  <table><thead><tr><th>ID</th><th>服务</th><th>版本</th><th>主机</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+  <tbody id="dpRows"></tbody></table>
+</div>
+</main>
+<style>.dtTab{padding:5px 12px;border-radius:6px;cursor:pointer;color:var(--muted)}.dtTab.on{color:var(--text);background:var(--panel2)}</style>
+
+
+<main id="v-log" style="display:none"><!-- 初始隐藏，sw 用 style 切换 -->
+  <div class="card" style="display:flex;align-items:center;gap:10px">
+    <h4 id="logTitle" style="margin:0">构建日志</h4>
+    <span id="logSt" style="color:var(--warn)">● 运行中</span>
+    <button style="margin-left:auto" onclick="backFromLog()">← 返回</button>
+  </div>
+  <div id="logView">连接中…</div>
+</main>
+
+<main id="v-host">
+  <div style="display:flex;align-items:center;margin-bottom:12px">
+    <button class="btn-p" style="margin-left:auto" onclick="openHost()">＋ 新增主机</button></div>
+  <table><thead><tr><th>名称</th><th>地址</th><th>用户</th><th>凭据</th><th>连通性</th><th>操作</th></tr></thead>
+  <tbody id="hRows"></tbody></table>
+  <div id="hEmpty" class="empty" style="display:none">暂无主机</div>
+</main>
+
+
+
+<div class="mask" id="hMask" onclick="if(event.target===this)$('hMask').classList.remove('show')">
+  <div class="modal" style="width:420px">
+    <h3 id="hTitle">新增主机</h3>
+    <div class="fld"><label>名称</label><input id="hName" placeholder="test-1"></div>
+    <div class="fld"><label>地址（host[:port]）</label><input id="hAddr" placeholder="192.168.1.100"></div>
+    <div class="fld"><label>用户</label><input id="hUser" value="root"></div>
+    <div class="fld"><label>私钥路径（留空用 ~/.ssh/id_rsa）</label><input id="hKey" placeholder="~/.ssh/id_rsa"></div>
+    <div class="fld"><label>或密码</label><input id="hPwd" type="password"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button onclick="testHost()">测试连通</button>
+      <button class="btn-p" style="margin-left:auto" onclick="saveHost()">保存</button></div>
+  </div>
+</div>
+
+<div class="mask" id="mMask" onclick="if(event.target===this)closeM()">
+  <div class="modal">
+    <h3 id="mTitle">新建服务</h3>
+    <div class="fld"><label>服务名</label><input id="mName" placeholder="estate-gis-service"><div class="sub">建议与日志/监控的服务名一致</div></div>
+    <div class="fld"><label>Git 地址（配置后插件自动 clone/pull 源码，构建与所在机器解耦）</label><input id="mGit" placeholder="git@your-git:group/estate-gis-service.git 或 https://..."></div>
+    <div style="display:flex;gap:10px">
+      <div class="fld" style="flex:1"><label>分支（留空=默认）</label><input id="mBranch" placeholder="main"></div>
+      <div class="fld" style="flex:1"><label>部署方式</label>
+        <select id="mTarget"><option value="ssh-jar">SSH + jar 启动（后端）</option><option value="ssh-static">SSH + 静态目录（前端/nginx）</option></select></div>
+    </div>
+    <input type="hidden" id="mWorkdir">
+    <div class="fld"><label>前置命令（可选）</label><input id="mPre" placeholder="git pull"></div>
+    <div class="fld"><label>构建命令</label><input id="mCmd" placeholder="./gradlew build -x test"></div>
+    <div class="fld"><label>远端目录（部署目标，如 /opt/gis）</label><input id="mRd" placeholder="/opt/estate-gis"></div>
+    <div class="fld"><label>启动命令</label><input id="mStart" placeholder="nohup java -jar /opt/gis/app.jar > /opt/gis/app.log 2>&1 &"></div>
+    <div class="fld"><label>停止命令（留空=pkill 兜底）</label><input id="mStop" placeholder="可选"></div>
+    <div class="fld"><label>健康检查 URL（部署后轮询至 200，如 actuator/health）</label><input id="mHealth" placeholder="http://host:8080/actuator/health"></div>
+    <div style="display:flex;gap:10px">
+      <div class="fld" style="flex:1"><label>产物类型</label>
+        <select id="mType"><option value="jar">jar（后端）</option><option value="static">static（前端）</option><option value="image">docker image</option></select></div>
+      <div class="fld" style="flex:1"><label>构建位置</label>
+        <select id="mMode"><option value="local">本地</option><option value="ssh">SSH 构建机(M2)</option></select></div>
+    </div>
+    <div class="fld" id="fGlob"><label>产物匹配（jar=文件 glob；前端=目录 glob 如 dist）</label><input id="mGlob" value="build/libs/*.jar"></div>
+    <div class="fld" id="fImg" style="display:none"><label>镜像名（docker build -t 的名字）</label><input id="mImg" placeholder="registry.example.com/gis/gis-api"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
+      <span id="mMsg" style="color:var(--ok);font-size:12px;margin-right:auto"></span>
+      <button class="btn-p" onclick="saveSvc()">保存</button></div>
+  </div>
+</div>
+<div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeAllMasks()});
+function closeAllMasks(){document.querySelectorAll('.mask.show').forEach(m=>m.classList.remove('show'))}
+if(window.parent!==window)document.body.classList.add('embedded');
+function toast(t){const el=$('toast');el.textContent=t;el.style.display='block';clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',2400)}
+// ---- hash 路由：#/ | #/host | #/svc/{name}[/tab] | #/run/{id} ----
+// 导航统一改 hash（入浏览器历史，返回/前进可用）；渲染集中在 route()
+function navTo(h){if(location.hash===h)route();else location.hash=h}
+function sw(v){navTo(v==='svc'?'#/':v==='host'?'#/host':'#/')}
+window.addEventListener('hashchange',route);
+function route(){
+  const parts=location.hash.replace(/^#\/?(.*)$/,'$1').split('/').filter(Boolean);
+  const view=parts[0]||'svc';
+  ['svc','log','host','detail'].forEach(x=>{const el=$('v-'+x);if(el)el.style.display=x===view?'flex':'none'});
+  document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===view));
+  closeAllMasks();
+  if(view==='svc'){loadSvc();return}
+  if(view==='host'){loadHosts();return}
+  if(view==='run'&&parts[1]){viewRun(+parts[1],false);return}
+  if(view==='svc'&&parts[1]){openDetailAt(parts[1],parts[2]||'hist');return}
+  if(view==='detail'&&curDetail){renderDetail(parts[0]==='detail'?(parts[1]||'hist'):'hist');return}
+  loadSvc() // 兜底
+}
+function openDetailAt(name,tab){curDetail=name;renderDetail(tab);
+  document.querySelectorAll('nav a').forEach(a=>a.classList.remove('on'))}
+function renderDetail(tab){
+  ['svc','log','host','detail'].forEach(x=>{const el=$('v-'+x);if(el)el.style.display=x==='detail'?'flex':'none'});
+  document.querySelectorAll('nav a').forEach(a=>a.classList.remove('on'));
+  if($('dtName'))$('dtName').textContent=curDetail;
+  dtTab(tab)}
+function openDetail(name){navTo('#/svc/'+name)}
+function backFromLog(){history.length>1&&document.referrer!==location.href?history.back():navTo(curDetail?'#/svc/'+curDetail:'#/')}
+let svcCache=[];
+async function loadSvc(){
+  const [svcs,builds]=await Promise.all([fetch('api/services').then(r=>r.json()).then(d=>d||[]),fetch('api/builds?limit=200').then(r=>r.json()).then(d=>d||[])]);
+  svcCache=svcs;
+  const tb=$('svcRows');tb.innerHTML='';
+  $('svcEmpty').style.display=svcs.length?'none':'block';
+  const last={};builds.forEach(b=>{if(!last[b.service])last[b.service]=b});
+  svcs.forEach((s,i)=>{
+    const lb=last[s.name];
+    const tr=document.createElement('tr');
+    tr.style.cursor='pointer';
+    tr.onclick=e=>{if(!e.target.classList.contains('op'))openDetail(s.name)};
+    tr.innerHTML=`<td>${s.name}</td>
+      <td><code style="color:var(--info)">${{jar:'jar',image:'image',static:'前端'}[s.artifact_type]||s.artifact_type}</code></td>
+      <td>${s.build_mode}</td>
+      <td style="font-family:var(--mono);font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.build_cmd||'—'}</td>
+      <td>${lb?`<span class="${lb.status==='success'?'st-ok':lb.status==='failed'?'st-fail':'st-run'}">${lb.status==='success'?'✓':lb.status==='failed'?'✗':'●'} ${lb.version}</span>`:'<span style="color:var(--dim)">未构建</span>'}</td>
+      <td><span class="op" onclick="openDetail('${s.name}')">详情</span>
+        <span class="op" onclick="buildSvc('${s.name}')">构建</span>
+        <span class="op del" onclick="delSvc('${s.name}')">删除</span></td>`;
+    tb.appendChild(tr)});
+}
+async function loadBuilds(svc){
+  const list=await(await fetch('api/builds?limit=100'+(svc?'&service='+encodeURIComponent(svc):''))).json()||[];
+  const tb=$('bRows');tb.innerHTML='';
+  if(!list.length){tb.innerHTML='<tr><td colspan=8 style="color:var(--dim);text-align:center;padding:30px">暂无构建</td></tr>';return}
+  list.forEach(b=>{
+    const tr=document.createElement('tr');
+    const dur=b.ended_at?b.ended_at-b.started_at+'s':'—';
+    tr.innerHTML=`<td>${b.id}</td><td>${b.service}</td>
+      <td style="font-family:var(--mono)">${b.version}</td>
+      <td><span class="${b.status==='success'?'st-ok':b.status==='failed'?'st-fail':'st-run'}">${b.status==='running'?'● 运行中':b.status==='success'?'✓ 成功':'✗ 失败'}</span></td>
+      <td style="font-family:var(--mono);font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${b.artifact||''}">${b.artifact||'—'}</td>
+      <td style="color:var(--dim)">${new Date(b.started_at*1000).toLocaleString('zh-CN',{hour12:false})}</td>
+      <td>${dur}</td>
+      <td><span class="op" onclick="viewLog(${b.id},${b.status==='running'})">日志</span></td>`;
+    tb.appendChild(tr)});
+}
+async function buildSvc(name){
+  const r=await(await fetch('api/builds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:name})})).json();
+  if(r.id){toast('构建已启动');viewLog(r.id,true)}else toast('启动失败')}
+let ws=null;
+function viewLog(id,live){
+  sw('log');
+  $('logTitle').textContent=`构建 #${id}`;
+  $('logView').textContent='';
+  if(ws){ws.onclose=null;ws.close()}
+  const base=location.pathname.replace(/\/ui.*$/,'');
+  ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}${base}/api/builds/${id}/tail`);
+  ws.onmessage=ev=>{const v=$('logView');v.textContent+=ev.data;v.scrollTop=v.scrollHeight;
+    if(ev.data.includes('✓ 构建成功'))$('logSt').innerHTML='<span class="st-ok">✓ 成功</span>';
+    if(ev.data.includes('✗'))$('logSt').innerHTML='<span class="st-fail">✗ 失败</span>'};
+  ws.onclose=()=>{if($('v-log').classList.contains('on')&&$('logSt').textContent.includes('运行中'))
+    fetch(`api/builds/${id}/log`).then(r=>r.json()).then(d=>{const v=$('logView');v.textContent=d.log||v.textContent;v.scrollTop=v.scrollHeight})};
+  if(!live){$('logSt').textContent='历史'}}
+function openSvc(s){
+  $('mTitle').textContent=s?'编辑服务':'新建服务';
+  $('mName').value=s?s.name:'';$('mWorkdir').value=s?s.workdir:'';$('mPre').value=s?s.pre_cmd||'':'';
+  $('mCmd').value=s?s.build_cmd||'':'';$('mGlob').value=s?s.artifact_glob||'build/libs/*.jar':'build/libs/*.jar';
+  $('mImg').value=s?s.image_name||'':'';
+  $('mType').value=s?s.artifact_type||'jar':'jar';$('mMode').value=s?s.build_mode||'local':'local';
+  $('mTarget').value=s?(s.target_type||'ssh-jar'):'ssh-jar';
+  $('mRd').value=s?s.remote_dir||'':'';$('mStart').value=s?s.start_cmd||'':'';$('mStop').value=s?s.stop_cmd||'':'';$('mHealth').value=s?s.health_url||'':'';
+  syncTypeFields();$('mMsg').textContent='';$('mMask').classList.add('show')}
+function syncTypeFields(){const t=$('mType').value;$('fGlob').style.display=t==='jar'?'block':'none';$('fImg').style.display=t==='image'?'block':'none'}
+$('mType').onchange=syncTypeFields;
+function closeM(){$('mMask').classList.remove('show')}
+async function saveSvc(){
+  const body={name:$('mName').value.trim(),workdir:$('mWorkdir').value.trim(),git_url:$('mGit').value.trim(),branch:$('mBranch').value.trim(),pre_cmd:$('mPre').value.trim(),
+    build_cmd:$('mCmd').value.trim(),artifact_type:$('mType').value,build_mode:$('mMode').value,
+    artifact_glob:$('mGlob').value.trim()||'build/libs/*.jar',image_name:$('mImg').value.trim(),
+    target_type:$('mTarget').value,remote_dir:$('mRd').value.trim(),start_cmd:$('mStart').value.trim(),
+    stop_cmd:$('mStop').value.trim(),health_url:$('mHealth').value.trim()};
+  if(!body.name||!body.git_url||!body.build_cmd){$('mMsg').style.color='var(--warn)';$('mMsg').textContent='服务名/git地址/构建命令必填';return}
+  const r=await fetch('api/services',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){closeM();toast('已保存');loadSvc()}else{$('mMsg').style.color='var(--error)';$('mMsg').textContent='保存失败'}}
+async function delSvc(name){if(!confirm(`删除服务配置「${name}」？（不影响构建历史）`))return;
+  await fetch(`api/services/${name}`,{method:'DELETE'});loadSvc()}
+
+/* ---------- 主机 ---------- */
+let hostCache=[];
+async function loadHosts(){
+  hostCache=await fetch('api/hosts').then(r=>r.json()).then(d=>d||[]);
+  const tb=$('hRows');tb.innerHTML='';
+  $('hEmpty').style.display=hostCache.length?'none':'block';
+  hostCache.forEach((h,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${h.name}</td><td style="font-family:var(--mono)">${h.addr}</td><td>${h.user}</td>
+      <td style="color:var(--dim)">${h.key_path?'私钥':'密码'}</td>
+      <td id="ht-${h.name}"><span style="color:var(--dim)">未测</span></td>
+      <td><span class="op" onclick="testHostRow('${h.name}')">测试</span>
+        <span class="op" onclick="openHost(hostCache[${i}])">编辑</span>
+        <span class="op del" onclick="delHost('${h.name}')">删除</span></td>`;
+    tb.appendChild(tr)});
+}
+function openHost(h){$('hTitle').textContent=h?'编辑主机':'新增主机';
+  $('hName').value=h?h.name:'';$('hAddr').value=h?h.addr:'';$('hUser').value=h?h.user||'root':'root';
+  $('hKey').value=h?h.key_path||'':'';$('hPwd').value='';
+  $('hMask').classList.add('show')}
+window.testHostRow=async n=>{const el=$('ht-'+n);el.innerHTML='<span style="color:var(--warn)">测试中…</span>';
+  const r=await(await fetch(`api/hosts/${n}/test`,{method:'POST'})).json();
+  el.innerHTML=r.ok?'<span class="st-ok">✓ 可达</span>':`<span class="st-fail" title="${r.error||''}">✗ 不通</span>`}
+async function testHost(){toast('保存后点列表中的"测试"验证连通性')}
+async function saveHost(){
+  const body={name:$('hName').value.trim(),addr:$('hAddr').value.trim(),user:$('hUser').value.trim()||'root',
+    key_path:$('hKey').value.trim(),password:$('hPwd').value};
+  if(!body.name||!body.addr){toast('名称和地址必填');return}
+  const r=await fetch('api/hosts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){$('hMask').classList.remove('show');loadHosts()}else toast('保存失败')}
+async function delHost(n){if(!confirm(`删除主机「${n}」？`))return;
+  await fetch(`api/hosts/${n}`,{method:'DELETE'});loadHosts()}
+
+/* ---------- 部署 ---------- */
+let dSelHosts=new Set(),dPendingHosts=[];
+async function loadDepPage(svc){
+  const [svcs,hosts,builds]=await Promise.all([
+    fetch('api/services').then(r=>r.json()).then(d=>d||[]),
+    fetch('api/hosts').then(r=>r.json()).then(d=>d||[]),
+    fetch('api/builds?limit=200').then(r=>r.json()).then(d=>d||[])]);
+  if(svc)$('dSvc').value=svc;if(!$('dSvc').value&&svcs.length)$('dSvc').value=svcs[0].name;
+  $('dSvc').innerHTML=svcs.map(s=>`<option${s.name===$('dSvc').value?' selected':''}>${s.name}</option>`).join('');
+  dSelHosts=new Set();
+  $('dHosts').innerHTML=hosts.length?hosts.map(h=>
+    `<label style="display:flex;align-items:center;gap:5px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer">
+      <input type="checkbox" value="${h.name}" onchange="this.checked?dSelHosts.add(this.value):dSelHosts.delete(this.value)"> ${h.name}
+      <span style="color:var(--dim);font-size:11px">${h.addr}</span></label>`).join('')
+    :'<span style="color:var(--dim)">先在「主机」页添加目标主机</span>';
+  await loadVer();loadDeps();
+  $('dRest').style.display='none';dPendingHosts=[];
+}
+async function loadVer(){
+  const svc=$('dSvc').value;
+  const builds=(await(await fetch(`api/builds?service=${encodeURIComponent(svc)}&limit=50`)).json()||[]).filter(b=>b.status==='success');
+  $('dVer').innerHTML=builds.length?builds.map(b=>`<option value="${b.version}">${b.version}</option>`).join(''):'<option value="">（无成功构建）</option>';
+}
+async function deployFirst(){await doDeploy(true)}
+async function deployRest(){
+  for(const h of dPendingHosts){await doDeployTo(h);await sleep2(2000)}
+  dPendingHosts=[];$('dRest').style.display='none'}
+async function doDeploy(first){
+  const hosts=[...dSelHosts];
+  if(!hosts.length){toast('勾选目标主机');return}
+  if(!$('dVer').value){toast('无可用制品（先构建）');return}
+  if(first&&hosts.length>1){
+    dPendingHosts=hosts.slice(1);
+    await doDeployTo(hosts[0]);
+    if(dPendingHosts.length)$('dRest').style.display='inline-block',$('dRest').textContent=`确认发布其余 ${dPendingHosts.length} 台`;
+    return}
+  for(const h of hosts){await doDeployTo(h);await sleep2(2000)}
+}
+function sleep2(ms){return new Promise(r=>setTimeout(r,ms))}
+async function doDeployTo(host){
+  const r=await(await fetch('api/deploys',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({service:$('dSvc').value,version:$('dVer').value,host})})).json();
+  if(!r.id){toast('部署发起失败: '+(r.error||''));return}
+  toast(`已向 ${host} 发起部署 #${r.id}`);
+  await sleep2(1500);loadDeps();
+}
+async function loadDeps(){
+  const list=await fetch('api/deploys?limit=50').then(r=>r.json()).then(d=>d||[]);
+  const tb=$('dpRows');tb.innerHTML='';
+  if(!list.length){tb.innerHTML='<tr><td colspan=7 style="color:var(--dim);text-align:center;padding:30px">暂无部署</td></tr>';return}
+  list.forEach(d=>{
+    const tr=document.createElement('tr');
+    const sc=d.status==='success'?'st-ok':d.status==='running'?'st-run':'st-fail';
+    tr.innerHTML=`<td>${d.id}</td><td>${d.service}</td><td style="font-family:var(--mono)">${d.version}</td><td>${d.host}</td>
+      <td><span class="${sc}">${d.status==='success'?'✓ 成功':d.status==='running'?'● 进行中':'✗ '+(d.status==='rolled-back'?'已回滚':'失败')}</span></td>
+      <td style="color:var(--dim)">${new Date(d.started_at*1000).toLocaleString('zh-CN',{hour12:false})}</td>
+      <td><span class="op" onclick="viewDepLog(${d.id},${d.status==='running'})">日志</span>
+        <span class="op" onclick="rollbackDep(${d.id})">回滚</span></td>`;
+    tb.appendChild(tr)});
+}
+let dws=null;
+async function viewDepLog(id,live){
+  sw('log');$('logTitle').textContent=`部署 #${id}`;$('logView').textContent='';$('logSt').textContent='● 运行中';
+  const hist=await(await fetch(`api/deploys/${id}/log`)).json();
+  $('logView').textContent=hist.log||'';
+  if(!live){$('logSt').textContent='历史';return}
+  const base=location.pathname.replace(/\/ui.*$/,'');
+  dws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}${base}/api/deploys/${id}/tail`);
+  dws.onmessage=ev=>{const v=$('logView');v.textContent+=ev.data;v.scrollTop=v.scrollHeight;
+    if(ev.data.includes('部署结束')){loadDeps();
+      $('logSt').innerHTML=ev.data.includes('✓')?'<span class="st-ok">✓ 成功</span>':'<span class="st-fail">✗ 失败/回滚</span>'}};
+}
+async function rollbackDep(id){
+  if(!confirm(`回滚部署 #${id} 到上一成功版本？`))return;
+  const r=await(await fetch(`api/deploys/${id}/rollback`,{method:'POST'})).json();
+  if(r.id){toast(`回滚部署已发起 #${r.id}`);viewDepLog(r.id,true)}else toast('回滚失败: '+(r.error||''))}
+
+/* ---------- 服务详情（构建历史/部署/配置 三级 tab） ---------- */
+let curDetail='';
+function openDetail(name){curDetail=name;sw('detail');dtTab('hist')}
+function dtTab(t){if(curDetail&&location.hash!=='#/svc/'+curDetail+'/'+t&&('#/svc/'+curDetail).indexOf(location.hash)===0?false:true)history.replaceState(null,'','#/svc/'+curDetail+'/'+t);
+  ['hist','dep','cfg'].forEach(x=>{
+  const el=$('v-'+x);if(el)el.style.display=x===t?'block':'none'});
+  $('dtTabHist').classList.toggle('on',t==='hist');$('dtTabDep').classList.toggle('on',t==='dep');$('dtTabCfg').classList.toggle('on',t==='cfg');
+  if(t==='hist')loadPipeline(curDetail);if(t==='dep')loadDepPage(curDetail);if(t==='cfg')loadCfg()}
+async function buildCur(){buildSvc(curDetail)}
+let cfgSteps=[],stepDefs=[];
+async function loadCfg(){
+  const [sv,defs]=await Promise.all([
+    fetch('api/services').then(r=>r.json()).then(d=>(d||[]).find(x=>x.name===curDetail)),
+    fetch('api/steps').then(r=>r.json()).then(d=>d||[])]);
+  if(!sv){$('v-cfg').innerHTML='<div class="empty">服务不存在</div>';return}
+  stepDefs=defs;
+  cfgSteps=JSON.parse(JSON.stringify(sv.steps&&sv.steps.length?sv.steps:[]));
+  renderStepEditor(sv)}
+function defOf(id){return stepDefs.find(d=>d.id===id)}
+function renderStepEditor(sv){
+  const catColor={源码:'var(--info)',构建:'var(--brand)',打包:'var(--warn)',部署:'var(--error)'};
+  let h=`<div style="color:var(--dim);font-size:11px;margin-bottom:8px">基础：${sv.git_url||'（未配 git）'} · 分支 ${sv.branch||'默认'}</div>
+  <div id="stepList">`;
+  cfgSteps.forEach((inst,i)=>{
+    const d=defOf(inst.step);
+    const cat=d?d.category:'?';
+    h+=`<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--panel2)">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="width:20px;text-align:center;color:var(--dim)">${i+1}</span>
+        <span style="width:6px;height:16px;border-radius:2px;background:${catColor[cat]||'var(--dim)'}"></span>
+        <b>${d?d.name:inst.step}</b>
+        <span style="color:var(--dim);font-size:11px">${inst.step} · ${cat}</span>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <span class="op" style="cursor:pointer" onclick="moveStep(${i},-1)">↑</span>
+          <span class="op" style="cursor:pointer" onclick="moveStep(${i},1)">↓</span>
+          <span class="op" style="cursor:pointer" onclick="toggleStepForm(${i})">参数</span>
+          <span class="op del" style="cursor:pointer" onclick="delStep(${i})">✕</span></span></div>
+      <div id="sf-${i}" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+        ${d?d.params.map(p=>paramField(i,p,inst)).join(''):'<span style="color:var(--error);font-size:11px">未知步骤（已删除的插件？）</span>'}
+      </div></div>`});
+  h+=`</div>
+  <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+    <select id="addStepSel">${stepDefs.filter(d=>d.id!=='git-checkout'||!cfgSteps.length).map(d=>`<option value="${d.id}">${d.name}（${d.category}）</option>`).join('')}</select>
+    <button onclick="addStep()">＋ 添加步骤</button>
+    <button class="btn-p" style="margin-left:auto" onclick="saveSteps('${sv.name}')">保存流水线</button></div>`;
+  $('v-cfg').innerHTML=h}
+function paramField(i,p,inst){
+  const v=(inst.params&&inst.params[p.name])||p.default||'';
+  const id=`sp-${i}-${p.name}`;
+  if(p.type==='select')
+    return `<div class="fld" style="margin:6px 0"><label>${p.label}</label><select id="${id}" onchange="setParam(${i},'${p.name}',this.value)">${(p.options||[]).map(o=>`<option ${o.value===v?'selected':''} value="${o.value}">${o.label||o.value}</option>`).join('')}</select></div>`;
+  if(p.type==='shell')
+    return `<div class="fld" style="margin:6px 0"><label>${p.label}</label><textarea id="${id}" rows="2" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px;font-family:var(--mono);font-size:11px" oninput="setParam(${i},'${p.name}',this.value)">${v.replace(/</g,'&lt;')}</textarea></div>`;
+  return `<div class="fld" style="margin:6px 0"><label>${p.label}</label><input id="${id}" value="${v.replace(/"/g,'&quot;')}" oninput="setParam(${i},'${p.name}',this.value)" style="width:100%"></div>`}
+function setParam(i,k,v){if(!cfgSteps[i].params)cfgSteps[i].params={};cfgSteps[i].params[k]=v}
+function toggleStepForm(i){const el=$('sf-'+i);el.style.display=el.style.display==='none'?'block':'none'}
+function delStep(i){cfgSteps.splice(i,1);renderStepEditor({name:curDetail})}
+function moveStep(i,d){const j=i+d;if(j<0||j>=cfgSteps.length)return;[cfgSteps[i],cfgSteps[j]]=[cfgSteps[j],cfgSteps[i]];renderStepEditor({name:curDetail})}
+function addStep(){const id=$('addStepSel').value;cfgSteps.push({step:id,params:{}});renderStepEditor({name:curDetail})}
+async function saveSteps(name){
+  const sv=await fetch('api/services').then(r=>r.json()).then(d=>(d||[]).find(x=>x.name===name));
+  if(!sv)return;
+  sv.steps=cfgSteps;
+  const r=await fetch('api/services',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sv)});
+  toast(r.ok?'流水线已保存':'保存失败')}
+async function editFromCfg(){await loadSvc();const s=svcCache.find(x=>x.name===curDetail);if(s)openSvc(s)}
+
+/* ---------- 流水线 ---------- */
+async function runPipeline(){
+  const r=await(await fetch('api/pipeline/runs',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({service:curDetail})})).json();
+  if(r.id){toast('流水线已启动 #'+r.id);viewRun(r.id,true)}else toast('启动失败')}
+const stageIcon={success:'✓',failed:'✗',running:'●',pending:'○',skipped:'—'};
+function stagesHTML(st){
+  const col={success:'var(--ok)',failed:'var(--error)',running:'var(--warn)',pending:'var(--dim)',skipped:'var(--dim)'};
+  return '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+(st||[]).map(x=>
+    `<span title="${x.name} ${x.status}${x.dur_ms?' '+(x.dur_ms/1000).toFixed(0)+'s':''}" style="padding:3px 10px;border-radius:6px;background:var(--panel2);border:1px solid var(--border);color:${col[x.status]||'var(--dim)'};font-size:11px">
+      ${stageIcon[x.status]||'○'} ${x.name}${x.dur_ms?' <span style="color:var(--dim)">'+(x.dur_ms/1000).toFixed(0)+'s</span>':''}</span>`).join('<span style="color:var(--dim)">→</span>')+'</div>'}
+async function loadPipeline(svc){
+  const runs=await(await fetch('api/pipeline/runs?service='+encodeURIComponent(svc)+'&limit=30')).json()||[];
+  $('plLatest').innerHTML=runs.length?
+    `<div class="card"><h4>最近运行 #${runs[0].id} · ${runs[0].version||'…'} ${runs[0].status==='running'?'<span class="st-run">● 运行中</span>':runs[0].status==='success'?'<span class="st-ok">✓</span>':'<span class="st-fail">✗</span>'}</h4>
+     ${stagesHTML(runs[0].stages)}</div>`:'<div class="empty" style="padding:20px">尚未运行——点右上"▶ 运行流水线"</div>';
+  const tb=$('plRows');tb.innerHTML='';
+  runs.forEach(r=>{
+    const tr=document.createElement('tr');
+    const dur=r.ended_at?((r.ended_at-r.started_at))+'s':'—';
+    tr.innerHTML=`<td>${r.id}</td><td style="font-family:var(--mono)">${r.version||'—'}</td>
+      <td>${stagesHTML(r.stages)}</td>
+      <td><span class="${r.status==='success'?'st-ok':r.status==='running'?'st-run':'st-fail'}">${r.status==='running'?'●':r.status==='success'?'✓':'✗'}</span></td>
+      <td style="font-family:var(--mono);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.artifact?r.artifact.split('/').pop():'—'}</td>
+      <td>${dur}</td>
+      <td style="color:var(--dim)">${new Date(r.started_at*1000).toLocaleString('zh-CN',{hour12:false})}</td>
+      <td><span class="op" onclick="viewRun(${r.id},${r.status==='running'})">详情</span></td>`;
+    tb.appendChild(tr)});
+  if(runs.length&&runs[0].status==='running')setTimeout(()=>{if(curDetail)loadPipeline(curDetail)},3000);
+}
+function backFromLog(){curDetail?openDetail(curDetail):sw('svc')}
+let pws=null;
+async function viewRun(id,live){
+  if(location.hash!=='#/run/'+id)history.pushState(null,'','#/run/'+id);
+  ['svc','log','host','detail'].forEach(x=>{const el=$('v-'+x);if(el)el.style.display=x==='log'?'flex':'none'});$('logTitle').textContent=`流水线 #${id}`;$('logView').textContent='';$('logSt').textContent='● 运行中';
+  const run=await(await fetch(`api/pipeline/runs/${id}`)).json();
+  if(run){$('logTitle').textContent=`流水线 #${id} · ${run.version||''}`;
+    $('logView').textContent=(run.stages||[]).map(x=>`${stageIcon[x.status]} ${x.name}`).join(' → ')+'\n\n'}
+  const hist=await(await fetch(`api/pipeline/runs/${id}/log`)).json();
+  $('logView').textContent+=hist.log||'';
+  $('logView').scrollTop=1e9;
+  if(pws){pws.onclose=null;pws.close()}
+  if(!live){
+    $('logSt').textContent='历史';
+    addDeployBtn(run);
+    return}
+  const base=location.pathname.replace(/\/ui.*$/,'');
+  pws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}${base}/api/pipeline/runs/${id}/tail`);
+  pws.onmessage=async ev=>{const v=$('logView');v.textContent+=ev.data;v.scrollTop=1e9;
+    if(ev.data.includes('⏸ 产物就绪')||ev.data.includes('流水线 #')){
+      const r2=await(await fetch(`api/pipeline/runs/${id}`)).json();
+      if(r2.artifact)addDeployBtn(r2);
+      loadPipeline(curDetail)}};
+  pws.onclose=()=>{loadPipeline(curDetail);viewRun(id,false)}
+}
+async function addDeployBtn(run){
+  if(!run.artifact||run.status!=='running')return;
+  const hosts=await fetch('api/hosts').then(r=>r.json()).then(d=>d||[]);
+  if(!hosts.length)return;
+  const sel=`<select id="plHostSel">${hosts.map(h=>`<option>${h.name}</option>`).join('')}</select>`;
+  $('logSt').innerHTML=sel+' <button class="btn-p" style="padding:3px 10px" onclick="contDeploy('+run.id+')">部署到该主机</button> 运行中';
+}
+async function contDeploy(id){
+  const host=$('plHostSel').value;
+  const r=await(await fetch(`api/pipeline/runs/${id}/deploy`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host})})).json();
+  toast(r.ok?'部署阶段已启动':('失败: '+(r.error||'')));
+  if(r.ok)viewRun(id,true)}
+route();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+name: devtools
+display: AI 开发工具
+version: 0.1.0
+binary: ../../bin/devtools
+admin_addr: 127.0.0.1:19804
+args:
+  - -admin-addr
+  - 127.0.0.1:19804
+  - -data
+  - ../../runtime/devtools-data
+  - -logs
+  - http://127.0.0.1:19801
+  - -monitor
+  - http://127.0.0.1:19802
+  - -deploy
+  - http://127.0.0.1:19803
+nav_icon: "✨"

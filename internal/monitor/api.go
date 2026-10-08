@@ -1,0 +1,424 @@
+package monitor
+
+import (
+	"bytes"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+//go:embed assets
+var uiFS embed.FS
+
+// Routes 管理面（网关转发）+ 数据面预留（OTLP 后续）
+func Routes(st *Store, traceStore *TraceStore) *http.ServeMux {
+	mux := http.NewServeMux()
+	_ = ensureAvailRulesTable(st.db)
+	ma := NewMetricAlertEngine(st.DB())
+	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"ok": true, "service": "monitor", "database": st.Driver()})
+	})
+
+	// ---------- 指标报警（错误率/性能/调用量突变） ----------
+	mux.HandleFunc("GET /api/alerts", func(w http.ResponseWriter, r *http.Request) {
+		environment := r.URL.Query().Get("environment")
+		rules := ma.List()
+		if environment != "" {
+			filtered := rules[:0]
+			for _, rule := range rules {
+				if rule.Environment == environment || rule.Environment == "*" {
+					filtered = append(filtered, rule)
+				}
+			}
+			rules = filtered
+		}
+		writeJSON(w, rules)
+	})
+	mux.HandleFunc("POST /api/alerts", func(w http.ResponseWriter, r *http.Request) {
+		var rule MetricRule
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&rule) != nil || rule.Name == "" || rule.Webhook == "" || rule.Service == "" || rule.Metric == "" {
+			http.Error(w, `{"error":"bad request"}`, 400)
+			return
+		}
+		if err := ma.Create(&rule); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 400)
+			return
+		}
+		writeJSON(w, rule)
+	})
+	mux.HandleFunc("PUT /api/alerts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var rule MetricRule
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&rule) != nil {
+			http.Error(w, `{"error":"bad request"}`, 400)
+			return
+		}
+		rule.ID = parseID(r.PathValue("id"))
+		if err := ma.Update(&rule); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 400)
+			return
+		}
+		writeJSON(w, rule)
+	})
+	mux.HandleFunc("DELETE /api/alerts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := ma.Delete(parseID(r.PathValue("id"))); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/alerts/{id}/test", func(w http.ResponseWriter, r *http.Request) {
+		if err := ma.Test(parseID(r.PathValue("id"))); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("GET /api/alerts/status", func(w http.ResponseWriter, r *http.Request) {
+		statuses := ma.Statuses()
+		environment := r.URL.Query().Get("environment")
+		if environment != "" {
+			allowed := map[int64]bool{}
+			for _, rule := range ma.List() {
+				if rule.Environment == environment || rule.Environment == "*" {
+					allowed[rule.ID] = true
+				}
+			}
+			for id := range statuses {
+				if !allowed[id] {
+					delete(statuses, id)
+				}
+			}
+		}
+		writeJSON(w, statuses)
+	})
+	mux.HandleFunc("GET /api/alert-notifications", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		limit := 100
+		if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+		var rid int64
+		fmt.Sscanf(q.Get("rule_id"), "%d", &rid)
+		writeJSON(w, ma.Notifications(rid, q.Get("environment"), limit))
+	})
+
+	// 事件总线回调：BusEvent{topic:"logs.metrics.minute", payload:{points:[...]}}
+	mux.HandleFunc("POST /api/events", func(w http.ResponseWriter, r *http.Request) {
+		var ev struct {
+			Topic   string          `json:"topic"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&ev) != nil || ev.Topic != "logs.metrics.minute" {
+			http.Error(w, `{"error":"bad event"}`, 400)
+			return
+		}
+		var p struct {
+			Points []Point `json:"points"`
+		}
+		if json.Unmarshal(ev.Payload, &p) != nil {
+			http.Error(w, `{"error":"bad payload"}`, 400)
+			return
+		}
+		if err := st.UpsertPoints(p.Points); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	})
+
+	// 查询：分钟序列
+	mux.HandleFunc("GET /api/metrics", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		service := q.Get("service")
+		end := time.Now().UnixMilli()
+		start := end - 3600_000
+		if v := q.Get("start"); v != "" {
+			parseMillis(v, &start)
+		}
+		if v := q.Get("end"); v != "" {
+			parseMillis(v, &end)
+		}
+		pts, err := st.Query(service, q.Get("environment"), start, end)
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+			return
+		}
+		writeJSON(w, map[string]any{"service": service, "points": pts})
+	})
+
+	mux.HandleFunc("GET /api/services", func(w http.ResponseWriter, r *http.Request) {
+		list, _ := st.Services()
+		writeJSON(w, list)
+	})
+	mux.HandleFunc("GET /api/environments", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, ObservedEnvironments(st.db, r.URL.Query().Get("service")))
+	})
+	mux.HandleFunc("GET /api/instances", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		writeJSON(w, ObservedInstances(st.db, q.Get("service"), q.Get("environment")))
+	})
+
+	// 机器指标查询（管理面）
+	mux.HandleFunc("GET /api/machines", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, queryMachineLatest(st.db, r.URL.Query().Get("environment")))
+	})
+	mux.HandleFunc("GET /api/machine-series", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		end := time.Now().UnixMilli()
+		start := end - 3600_000
+		if v := q.Get("start"); v != "" {
+			parseMillis(v, &start)
+		}
+		if v := q.Get("end"); v != "" {
+			parseMillis(v, &end)
+		}
+		writeJSON(w, queryMachineSeries(st.db, q.Get("agent"), q.Get("environment"), start, end))
+	})
+
+	// OTLP 指标查询（管理面）
+	mux.HandleFunc("GET /api/otlp/services", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, OtlpServices(st.db))
+	})
+	mux.HandleFunc("GET /api/otlp/names", func(w http.ResponseWriter, r *http.Request) {
+		svc := r.URL.Query().Get("service")
+		if svc == "" {
+			http.Error(w, `{"error":"service required"}`, 400)
+			return
+		}
+		q := r.URL.Query()
+		writeJSON(w, OtlpNames(st.db, svc, q.Get("environment"), q.Get("instance")))
+	})
+	mux.HandleFunc("GET /api/otlp/series", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		end := time.Now().UnixMilli()
+		start := end - 3600_000
+		if v := q.Get("start"); v != "" {
+			parseMillis(v, &start)
+		}
+		if v := q.Get("end"); v != "" {
+			parseMillis(v, &end)
+		}
+		name := q.Get("name")
+		if name == "" || q.Get("service") == "" {
+			http.Error(w, `{"error":"service and name required"}`, 400)
+			return
+		}
+		writeJSON(w, OtlpSeries(st.db, q.Get("service"), q.Get("environment"), q.Get("instance"), name, start, end))
+	})
+
+	// 接口维度：接口列表 + 接口下方法/状态 + 分位数序列（meth/status 留空=聚合）
+	mux.HandleFunc("GET /api/otlp/interfaces", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		writeJSON(w, Interfaces(st.db, q.Get("service"), q.Get("environment"), q.Get("instance"), q.Get("name")))
+	})
+	mux.HandleFunc("GET /api/otlp/iface-attrs", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		writeJSON(w, IfaceAttrs(st.db, q.Get("service"), q.Get("environment"), q.Get("instance"), q.Get("name"), q.Get("iface")))
+	})
+	mux.HandleFunc("GET /api/otlp/quantiles", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		end := time.Now().UnixMilli()/60000*60000 - 60000
+		start := end - 3600_000
+		if v := q.Get("start"); v != "" {
+			parseMillis(v, &start)
+		}
+		if v := q.Get("end"); v != "" {
+			parseMillis(v, &end)
+		}
+		writeJSON(w, Quantiles(st.db, q.Get("service"), q.Get("environment"), q.Get("instance"), q.Get("name"), q.Get("iface"), q.Get("meth"), q.Get("status"), start, end))
+	})
+
+	// 可用率判定规则：环境隔离配置 + 显式全环境兜底 + 内置兜底。
+	// 查找顺序：环境+指标 → 环境默认 → *+指标 → *默认 → 内置语义。
+	// http.* 指标不配规则即走内置行业标准；dubbo/业务 code 按指标各自配
+	ruleMu := &sync.Map{}
+	fetchRule := func(svc, environment, name string) (AvailRule, bool) {
+		var r AvailRule
+		var okC, igC string
+		err := st.db.QueryRow(`SELECT ok_codes,ignore_codes FROM avail_rules WHERE service=? AND environment=? AND name=?`, svc, environment, name).
+			Scan(&okC, &igC)
+		if err != nil {
+			return r, false
+		}
+		json.Unmarshal([]byte(okC), &r.OkCodes)
+		json.Unmarshal([]byte(igC), &r.IgnoreCodes)
+		r.Service, r.Environment, r.Name = svc, environment, name
+		return r, true
+	}
+	loadRule := func(svc, environment, name string) *AvailRule {
+		key := svc + "\x00" + environment + "\x00" + name
+		if v, ok := ruleMu.Load(key); ok {
+			return v.(*AvailRule)
+		}
+		var rp *AvailRule
+		if r, ok := fetchRule(svc, environment, name); ok {
+			rp = &r
+		} else if r, ok := fetchRule(svc, environment, ""); ok {
+			r.Inherited = true // 命中服务默认
+			rp = &r
+		} else if r, ok := fetchRule(svc, "*", name); ok {
+			r.Inherited = true
+			rp = &r
+		} else if r, ok := fetchRule(svc, "*", ""); ok {
+			r.Inherited = true
+			rp = &r
+		} else {
+			rp = &AvailRule{Service: svc, Environment: environment, Name: name, Builtin: true} // 内置兜底
+		}
+		ruleMu.Store(key, rp)
+		return rp
+	}
+	mux.HandleFunc("GET /api/avail-rules", func(w http.ResponseWriter, r *http.Request) {
+		environment := r.URL.Query().Get("environment")
+		rows, err := st.db.Query(`SELECT service,environment,name,ok_codes,ignore_codes FROM avail_rules
+			WHERE (?='' OR environment=? OR environment='*') ORDER BY service,environment,name`, environment, environment)
+		out := []AvailRule{}
+		if err != nil {
+			writeJSON(w, out)
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r AvailRule
+			var oc, ic string
+			if rows.Scan(&r.Service, &r.Environment, &r.Name, &oc, &ic) == nil {
+				json.Unmarshal([]byte(oc), &r.OkCodes)
+				json.Unmarshal([]byte(ic), &r.IgnoreCodes)
+				out = append(out, r)
+			}
+		}
+		writeJSON(w, out)
+	})
+	mux.HandleFunc("DELETE /api/avail-rule", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("service") == "" || q.Get("environment") == "" {
+			http.Error(w, `{"error":"service and environment required"}`, 400)
+			return
+		}
+		if _, err := st.db.Exec(`DELETE FROM avail_rules WHERE service=? AND environment=? AND name=?`, q.Get("service"), q.Get("environment"), q.Get("name")); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+			return
+		}
+		ruleMu.Range(func(k, _ any) bool { ruleMu.Delete(k); return true })
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("GET /api/avail-rule", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		writeJSON(w, loadRule(q.Get("service"), q.Get("environment"), q.Get("name")))
+	})
+	mux.HandleFunc("PUT /api/avail-rule", func(w http.ResponseWriter, r *http.Request) {
+		var rule AvailRule
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&rule) != nil || strings.TrimSpace(rule.Service) == "" || strings.TrimSpace(rule.Environment) == "" {
+			http.Error(w, `{"error":"service and environment required; use * for all environments"}`, 400)
+			return
+		}
+		rule.Service = strings.TrimSpace(rule.Service)
+		rule.Environment = strings.TrimSpace(rule.Environment)
+		oc, _ := json.Marshal(rule.OkCodes)
+		ic, _ := json.Marshal(rule.IgnoreCodes)
+		if _, err := st.db.Exec(`INSERT INTO avail_rules(service,environment,name,ok_codes,ignore_codes) VALUES(?,?,?,?,?)
+			ON CONFLICT(service,environment,name) DO UPDATE SET ok_codes=excluded.ok_codes, ignore_codes=excluded.ignore_codes`,
+			rule.Service, rule.Environment, rule.Name, string(oc), string(ic)); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+			return
+		}
+		ruleMu.Range(func(k, _ any) bool { ruleMu.Delete(k); return true })
+		writeJSON(w, loadRule(rule.Service, rule.Environment, rule.Name))
+	})
+
+	// 可用率序列（成功/失败/忽略三态，规则见上）
+	mux.HandleFunc("GET /api/otlp/availability", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		end := time.Now().UnixMilli()/60000*60000 - 60000
+		start := end - 3600_000
+		if v := q.Get("start"); v != "" {
+			parseMillis(v, &start)
+		}
+		if v := q.Get("end"); v != "" {
+			parseMillis(v, &end)
+		}
+		writeJSON(w, Availability(st.db, q.Get("service"), q.Get("environment"), q.Get("instance"), q.Get("name"), q.Get("iface"), q.Get("meth"), start, end, loadRule(q.Get("service"), q.Get("environment"), q.Get("name"))))
+	})
+
+	// Trace：按 id 查调用链 + 最近 trace
+	mux.HandleFunc("GET /api/otlp/trace", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		id := q.Get("id")
+		if id == "" {
+			http.Error(w, `{"error":"id required"}`, 400)
+			return
+		}
+		spans, err := traceStore.ByTrace(id, q.Get("environment"), q.Get("instance"))
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
+			return
+		}
+		writeJSON(w, spans)
+	})
+	mux.HandleFunc("GET /api/otlp/traces/recent", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		writeJSON(w, traceStore.RecentTraces(q.Get("service"), q.Get("environment"), q.Get("instance"), 30))
+	})
+
+	// UI
+	sub, _ := fs.Sub(uiFS, "assets/app/assets")
+	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(sub))))
+	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := uiFS.ReadFile("assets/app/monitor.html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(b)
+	})
+	mux.HandleFunc("GET /ui-legacy", func(w http.ResponseWriter, r *http.Request) {
+		lb, _ := uiFS.ReadFile("assets/ui.html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(lb)
+	})
+	return mux
+}
+
+// SubscribeLoop 周期向平台总线登记订阅（平台重启后自动恢复；总线侧按 URL 去重）
+func SubscribeLoop(busBase, selfURL string) {
+	go func() {
+		for {
+			body, _ := json.Marshal(map[string]any{
+				"topics": []string{"logs.metrics.*"},
+				"url":    selfURL + "/api/events",
+			})
+			if resp, err := http.Post(busBase+"/api/bus/subscribe", "application/json",
+				bytesReader(body)); err == nil {
+				resp.Body.Close()
+			}
+			time.Sleep(30 * time.Second)
+		}
+	}()
+}
+
+func bytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }
+
+func parseMillis(s string, out *int64) {
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		*out = n
+	}
+}
+
+func parseID(s string) int64 {
+	var id int64
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		id = n
+	}
+	return id
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}

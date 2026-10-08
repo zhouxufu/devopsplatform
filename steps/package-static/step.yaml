@@ -1,0 +1,9 @@
+apiVersion: deploy.logplatform.io/v1
+id: package-static
+name: 打包静态资源
+description: 前端 dist 目录打 tar.gz
+category: 打包
+kind: package
+produces: static-archive
+params:
+  - {name: GLOB, type: input, label: 产物目录匹配, default: "dist"}

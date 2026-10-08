@@ -1,0 +1,22 @@
+[Unit]
+Description=LogPlatform Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/logagent -config /etc/logagent/agent.yaml
+Restart=always
+RestartSec=5
+# 降低与业务进程争抢的优先级；不用过死的 CPUQuota，避免故障恢复后永远追不上日志。
+Nice=10
+CPUWeight=20
+IOSchedulingClass=idle
+MemoryMax=128M
+LimitNOFILE=1024
+StateDirectory=logagent
+UMask=0077
+User=logagent
+Group=logagent
+
+[Install]
+WantedBy=multi-user.target

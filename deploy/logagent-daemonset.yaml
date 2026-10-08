@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: logagent
+  namespace: logplatform
+spec:
+  selector:
+    matchLabels: {app: logagent}
+  template:
+    metadata:
+      labels: {app: logagent}
+    spec:
+      serviceAccountName: logagent
+      tolerations:
+        - operator: Exists          # 所有节点都部署
+      containers:
+        - name: logagent
+          image: logplatform/agent:v0.2.0
+          args: ["-config", "/etc/logagent/agent.yaml"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits:   {cpu: 500m, memory: 128Mi}
+          volumeMounts:
+            - name: logs
+              mountPath: /var/log/apps     # 业务日志挂载点（agent 配置里的路径前缀）
+              readOnly: true
+            - name: registry
+              mountPath: /var/lib/logagent
+            - name: config
+              mountPath: /etc/logagent
+      volumes:
+        - name: logs
+          hostPath: {path: /var/log/apps}
+        - name: registry
+          hostPath: {path: /var/lib/logagent, type: DirectoryOrCreate}
+        - name: config
+          configMap: {name: logagent-config}
