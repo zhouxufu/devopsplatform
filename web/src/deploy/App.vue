@@ -69,7 +69,6 @@ try { if (embedded) window.parent.postMessage({ type: 'context.request' }, locat
         <RouterLink to="/plugins">🧩<i>扩展</i></RouterLink>
       </nav>
       <PlatformNav @open="platformPanel=$event" />
-      <span class="hint">基础构建 · 部署编排 · 变更管控</span>
     </header>
     <main><RouterView /></main>
     <PlatformPanel :view="platformPanel" plugin="deploy" @switch="platformPanel=$event" @close="platformPanel=''" />
@@ -77,18 +76,16 @@ try { if (embedded) window.parent.postMessage({ type: 'context.request' }, locat
 </template>
 <style scoped>
 .layout{position:relative;display:flex;height:100vh}
-header{width:46px;transition:width .2s;display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px 0;border-right:1px solid var(--border);background:var(--panel)}
+.layout>header{box-sizing:border-box;width:46px;flex:0 0 46px;display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px 0;border-right:1px solid var(--border);background:var(--panel);overflow-y:auto}
 .logo{font-size:18px}
 .layout.embedded .logo{display:none}
 nav{display:flex;flex-direction:column;gap:4px;width:100%}
 nav a{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0;width:100%;border-radius:8px;color:var(--muted);text-decoration:none;font-size:10px}
 nav a i{font-style:normal}
 nav a.router-link-active{color:var(--text);background:var(--panel2)}
-.hint{display:none}
-.layout:not(.embedded) header{width:180px;align-items:flex-start;padding:14px 12px}
+.layout:not(.embedded)>header{width:160px;flex-basis:160px;align-items:flex-start;padding:14px 10px}
 .layout:not(.embedded) .logo{font-size:13px;font-weight:600}
-.layout:not(.embedded) nav{flex-direction:row;flex-wrap:wrap}
-.layout:not(.embedded) nav a{flex-direction:row;width:auto;padding:5px 12px;font-size:12px;gap:6px}
-.layout:not(.embedded) .hint{display:block;color:var(--dim);font-size:10px;margin-top:auto;writing-mode:vertical-rl}
-main{flex:1;overflow-y:auto;padding:14px 16px}
+.layout:not(.embedded) nav a{flex-direction:row;justify-content:flex-start;width:100%;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
+.layout:not(.embedded) :deep(.platform-nav button){flex-direction:row;justify-content:flex-start;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
+.layout>main{flex:1;min-width:0;overflow:auto;padding:14px 16px}
 </style>

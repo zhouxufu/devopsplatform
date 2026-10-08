@@ -74,14 +74,14 @@ const NAV = [
 </template>
 <style scoped>
 .layout{position:relative;display:flex;height:100vh}
-header{width:46px;display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px 0;border-right:1px solid var(--border);background:var(--panel)}
+.layout>header{box-sizing:border-box;width:46px;flex:0 0 46px;display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px 0;border-right:1px solid var(--border);background:var(--panel);overflow-y:auto}
 .layout.embedded .logo{display:none}
 nav{display:flex;flex-direction:column;gap:4px;width:100%}
 nav a{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0;width:100%;border-radius:8px;color:var(--muted);text-decoration:none;font-size:10px}
 nav a i{font-style:normal}
 nav a.router-link-active{color:var(--text);background:var(--panel2)}
 main{flex:1;min-width:0;overflow-y:auto}
-.layout:not(.embedded) header{width:150px;align-items:flex-start;padding:14px 10px}
-.layout:not(.embedded) nav{flex-direction:row;flex-wrap:wrap}
-.layout:not(.embedded) nav a{flex-direction:row;width:auto;padding:5px 10px;font-size:12px;gap:6px}
+.layout:not(.embedded)>header{width:160px;flex-basis:160px;align-items:flex-start;padding:14px 10px}
+.layout:not(.embedded) nav a{flex-direction:row;justify-content:flex-start;width:100%;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
+.layout:not(.embedded) :deep(.platform-nav button){flex-direction:row;justify-content:flex-start;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
 </style>
