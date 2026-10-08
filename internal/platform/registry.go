@@ -66,10 +66,11 @@ type ApplicationIdentity struct {
 // passwords), so callers must keep it in memory and must not log it. Import is
 // idempotent and never deletes records that exist only in the destination.
 type RegistrySnapshot struct {
-	Services    []Service             `json:"services"`
-	Deployments []DeploymentState     `json:"deployments"`
-	Identities  []ApplicationIdentity `json:"identities"`
-	Users       []User                `json:"users"`
+	Services       []Service             `json:"services"`
+	Deployments    []DeploymentState     `json:"deployments"`
+	Identities     []ApplicationIdentity `json:"identities"`
+	Users          []User                `json:"users"`
+	UserIdentities []UserIdentity        `json:"user_identities"`
 }
 
 func OpenRegistry(path string) (*Registry, error) {
@@ -172,6 +173,13 @@ func (r *Registry) migrate() error {
 				password_hash TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
 		}
 	}
+	userIdentityDDL := `CREATE TABLE IF NOT EXISTS platform_user_identities (
+		source VARCHAR(80) NOT NULL, external_id VARCHAR(64) NOT NULL,
+		username VARCHAR(64) NOT NULL UNIQUE, PRIMARY KEY(source,external_id))`
+	if r.dialect == "mysql" {
+		userIdentityDDL += ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`
+	}
+	schema = append(schema, userIdentityDDL)
 	for _, ddl := range schema {
 		if _, err := r.db.Exec(ddl); err != nil {
 			return fmt.Errorf("migrate registry database: %w", err)
@@ -270,6 +278,10 @@ func (r *Registry) Snapshot() (RegistrySnapshot, error) {
 		return snapshot, err
 	}
 	snapshot.Users = users
+	snapshot.UserIdentities, err = r.userIdentitiesLocked()
+	if err != nil {
+		return snapshot, err
+	}
 	return snapshot, nil
 }
 
@@ -323,6 +335,36 @@ func (r *Registry) Restore(snapshot RegistrySnapshot) error {
 	for _, item := range snapshot.Users {
 		if _, err := tx.Exec(userQuery, item.Username, item.DisplayName, item.Role, item.PasswordHash, item.Enabled, item.CreatedAt, item.UpdatedAt); err != nil {
 			return rollback(fmt.Errorf("restore user %q: %w", item.Username, err))
+		}
+	}
+	for _, item := range snapshot.UserIdentities {
+		rows, err := tx.Query(`SELECT source,external_id,username FROM platform_user_identities WHERE (source=? AND external_id=?) OR username=?`, item.Source, item.ExternalID, item.Username)
+		if err != nil {
+			return rollback(err)
+		}
+		exists := false
+		for rows.Next() {
+			var old UserIdentity
+			if err = rows.Scan(&old.Source, &old.ExternalID, &old.Username); err != nil {
+				rows.Close()
+				return rollback(err)
+			}
+			if old != item {
+				rows.Close()
+				return rollback(fmt.Errorf("用户外部身份冲突，不能覆盖已有账号关联"))
+			}
+			exists = true
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return rollback(err)
+		}
+		rows.Close()
+		if exists {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO platform_user_identities(source,external_id,username) VALUES(?,?,?)`, item.Source, item.ExternalID, item.Username); err != nil {
+			return rollback(err)
 		}
 	}
 	return tx.Commit()

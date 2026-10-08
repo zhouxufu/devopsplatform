@@ -44,11 +44,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("verify target catalog: %v", err)
 	}
-	if len(verify.Services) < len(snapshot.Services) || len(verify.Deployments) < len(snapshot.Deployments) || len(verify.Identities) < len(snapshot.Identities) || len(verify.Users) < len(snapshot.Users) {
-		log.Fatalf("verification failed: source=%d/%d/%d/%d target=%d/%d/%d/%d",
-			len(snapshot.Services), len(snapshot.Deployments), len(snapshot.Identities), len(snapshot.Users),
-			len(verify.Services), len(verify.Deployments), len(verify.Identities), len(verify.Users))
+	if len(verify.UserIdentities) < len(snapshot.UserIdentities) || len(verify.Services) < len(snapshot.Services) || len(verify.Deployments) < len(snapshot.Deployments) || len(verify.Identities) < len(snapshot.Identities) || len(verify.Users) < len(snapshot.Users) {
+		log.Fatalf("verification failed: source=%d/%d/%d/%d/%d target=%d/%d/%d/%d/%d",
+			len(snapshot.Services), len(snapshot.Deployments), len(snapshot.Identities), len(snapshot.Users), len(snapshot.UserIdentities),
+			len(verify.Services), len(verify.Deployments), len(verify.Identities), len(verify.Users), len(verify.UserIdentities))
 	}
-	fmt.Printf("catalog migration complete: applications=%d deployments=%d identities=%d users=%d\n",
-		len(snapshot.Services), len(snapshot.Deployments), len(snapshot.Identities), len(snapshot.Users))
+	fmt.Printf("catalog migration complete: applications=%d deployments=%d identities=%d users=%d user_identities=%d\n",
+		len(snapshot.Services), len(snapshot.Deployments), len(snapshot.Identities), len(snapshot.Users), len(snapshot.UserIdentities))
 }

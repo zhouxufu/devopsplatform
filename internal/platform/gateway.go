@@ -113,6 +113,7 @@ func (g *Gateway) Routes(registry *Registry, bus *Bus) http.Handler {
 	bus.HandleRoutes(mux)
 
 	// 用户管理保持刻意简单：只有管理员和成员两个固定角色。
+	g.registerUserSync(mux, registry)
 	mux.HandleFunc("GET /api/users", func(w http.ResponseWriter, r *http.Request) {
 		users, err := registry.Users()
 		if err != nil {

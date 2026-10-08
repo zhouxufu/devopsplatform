@@ -57,8 +57,11 @@ func validateIntegrationConnection(c *ResourceConnection) error {
 			}
 		}
 		ids, err := zentaoProductIDs(c)
-		if err != nil || len(ids) == 0 {
+		if strings.TrimSpace(c.Config["product_ids"]) != "" && err != nil {
 			return fmt.Errorf("请填写产品 ID，多个用逗号分隔，最多 20 个")
+		}
+		if n, _ := strconv.Atoi(c.Config["sync_minutes"]); n > 0 && len(ids) == 0 {
+			return fmt.Errorf("自动同步 Bug 需要填写产品 ID；仅同步用户时可留空并关闭自动同步")
 		}
 		if baseline := c.Config["baseline"]; baseline != "" {
 			if _, err := time.Parse("2006-01-02", baseline); err != nil {
@@ -332,7 +335,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string) (s
 	}
 	ids, err := zentaoProductIDs(c)
 	if err != nil {
-		return state, err
+		return state, fmt.Errorf("同步 Bug 前请在禅道连接中填写有效产品 ID")
 	}
 	// Fetch first, then persist in one transaction: a failed page cannot advance
 	// the successful sync baseline or leave a partly refreshed issue pool.
@@ -405,6 +408,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string) (s
 }
 
 func registerIntegrationRoutes(mux *http.ServeMux, s *Store) {
+	registerIssueUserRoutes(mux, s)
 	mux.HandleFunc("GET /api/sql-executions", func(w http.ResponseWriter, r *http.Request) { writeIntegrationJSON(w, s.SQLLedger(), nil) })
 	mux.HandleFunc("GET /api/issue-sync", func(w http.ResponseWriter, r *http.Request) { writeIntegrationJSON(w, s.issueSyncStates(), nil) })
 	mux.HandleFunc("POST /api/issue-sync/{name}", func(w http.ResponseWriter, r *http.Request) {

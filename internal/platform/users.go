@@ -21,13 +21,15 @@ var usernameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$`)
 // PasswordHash is carried by the database migration snapshot but never exposed
 // by JSON APIs.
 type User struct {
-	Username     string `json:"username"`
-	DisplayName  string `json:"display_name"`
-	Role         string `json:"role"`
-	PasswordHash string `json:"-"`
-	Enabled      bool   `json:"enabled"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
+	Username           string `json:"username"`
+	DisplayName        string `json:"display_name"`
+	Role               string `json:"role"`
+	PasswordHash       string `json:"-"`
+	Enabled            bool   `json:"enabled"`
+	CreatedAt          int64  `json:"created_at"`
+	UpdatedAt          int64  `json:"updated_at"`
+	Source             string `json:"source,omitempty"`
+	PasswordConfigured bool   `json:"password_configured"`
 }
 
 func normalizeUser(user User) (User, error) {
@@ -47,7 +49,7 @@ func normalizeUser(user User) (User, error) {
 }
 
 func (r *Registry) usersLocked() ([]User, error) {
-	rows, err := r.db.Query(`SELECT username,display_name,role,password_hash,enabled,created_at,updated_at FROM platform_users ORDER BY role,username`)
+	rows, err := r.db.Query(`SELECT u.username,u.display_name,u.role,u.password_hash,u.enabled,u.created_at,u.updated_at,COALESCE(i.source,'') FROM platform_users u LEFT JOIN platform_user_identities i ON i.username=u.username ORDER BY u.role,u.username`)
 	if err != nil {
 		return nil, err
 	}
@@ -55,9 +57,10 @@ func (r *Registry) usersLocked() ([]User, error) {
 	users := []User{}
 	for rows.Next() {
 		var user User
-		if err := rows.Scan(&user.Username, &user.DisplayName, &user.Role, &user.PasswordHash, &user.Enabled, &user.CreatedAt, &user.UpdatedAt); err != nil {
+		if err := rows.Scan(&user.Username, &user.DisplayName, &user.Role, &user.PasswordHash, &user.Enabled, &user.CreatedAt, &user.UpdatedAt, &user.Source); err != nil {
 			return nil, err
 		}
+		user.PasswordConfigured = user.PasswordHash != ""
 		users = append(users, user)
 	}
 	return users, rows.Err()
@@ -76,11 +79,17 @@ func (r *Registry) EnsureBootstrapAdmin(password string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var count int
-	if err := r.db.QueryRow(`SELECT COUNT(*) FROM platform_users`).Scan(&count); err != nil {
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM platform_users WHERE role='admin'`).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
 		return nil
+	}
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM platform_users WHERE username='admin'`).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("admin 用户名已被占用，请先配置平台管理员")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -140,6 +149,9 @@ func (r *Registry) SaveUser(user User, password string) (*User, error) {
 		}
 		hash = string(encoded)
 	}
+	if user.Enabled && hash == "" {
+		return nil, fmt.Errorf("请先设置平台密码，再启用同步成员")
+	}
 	now, createdAt := time.Now().Unix(), existing.CreatedAt
 	if createdAt == 0 {
 		createdAt = now
@@ -154,6 +166,7 @@ func (r *Registry) SaveUser(user User, password string) (*User, error) {
 		return nil, err
 	}
 	user.PasswordHash, user.CreatedAt, user.UpdatedAt = hash, createdAt, now
+	user.PasswordConfigured = hash != ""
 	return &user, nil
 }
 
