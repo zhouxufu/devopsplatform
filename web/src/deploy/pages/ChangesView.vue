@@ -92,7 +92,7 @@ const list = computed(() =>
   ),
 );
 const detail = computed(() => route.query.item ? (tab.value === 'work' ? work.value : tab.value === 'versions' ? versions.value : []).find(v=>v.id===Number(route.query.item)) : null);
-const summaries = computed(() => new Map(list.value.map(item => [item.id, descriptionSummary(item.summary || item.description)])));
+const summaries = computed(() => new Map(list.value.map(item => [item.id, descriptionSummary(item.summary || item.description, 180, item.url || '')])));
 const detailChanges = computed(()=> tab.value==='work' ? changes.value.filter(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id)) : detail.value?.changes || []);
 const detailVersions = computed(()=>versions.value.filter(v=>(v.work_items||[]).some(w=>w.id===detail.value?.id)||(v.changes||[]).some(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id))));
 const detailRuns = computed(()=>deliveries.value.filter(r=>tab.value==='versions' ? r.plan.version?.id===detail.value?.id : detailVersions.value.some(v=>v.id===r.plan.version?.id)));
