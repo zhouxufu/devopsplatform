@@ -126,6 +126,17 @@ func migrateMySQLDeploySchema(db *deployDB) error {
 			return fmt.Errorf("migrate deploy mysql schema: %w", err)
 		}
 	}
+	for _, column := range []struct{ name, index string }{{"assigned_to", "idx_work_items_assigned"}, {"opened_by", "idx_work_items_opened"}, {"resolved_by", "idx_work_items_resolved"}, {"closed_by", "idx_work_items_closed"}} {
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='work_items' AND COLUMN_NAME=?`, column.name).Scan(&exists); err != nil {
+			return fmt.Errorf("inspect work item personnel schema: %w", err)
+		}
+		if exists == 0 {
+			if _, err := db.Exec(`ALTER TABLE work_items ADD COLUMN ` + column.name + ` VARCHAR(191) NOT NULL DEFAULT '', ADD KEY ` + column.index + ` (` + column.name + `,updated_at)`); err != nil {
+				return fmt.Errorf("migrate work item personnel: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -240,7 +251,9 @@ var mysqlDeploySchema = []string{
 		id BIGINT PRIMARY KEY AUTO_INCREMENT, source VARCHAR(64) NOT NULL DEFAULT 'manual', external_id VARCHAR(255) NOT NULL DEFAULT '',
 		kind VARCHAR(64) NOT NULL DEFAULT 'requirement', title VARCHAR(255) NOT NULL, url TEXT, external_status VARCHAR(64) NOT NULL DEFAULT '',
 		description TEXT, status VARCHAR(32) NOT NULL DEFAULT 'open', owner VARCHAR(255) NOT NULL DEFAULT '', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
-		KEY idx_work_items_status(status,updated_at)
+		assigned_to VARCHAR(191) NOT NULL DEFAULT '', opened_by VARCHAR(191) NOT NULL DEFAULT '', resolved_by VARCHAR(191) NOT NULL DEFAULT '', closed_by VARCHAR(191) NOT NULL DEFAULT '',
+		KEY idx_work_items_status(status,updated_at), KEY idx_work_items_assigned(assigned_to,updated_at),
+		KEY idx_work_items_opened(opened_by,updated_at), KEY idx_work_items_resolved(resolved_by,updated_at), KEY idx_work_items_closed(closed_by,updated_at)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	`CREATE TABLE IF NOT EXISTS changes (
 		id BIGINT PRIMARY KEY AUTO_INCREMENT, kind VARCHAR(64) NOT NULL, title VARCHAR(255) NOT NULL, service VARCHAR(255) NOT NULL DEFAULT '',

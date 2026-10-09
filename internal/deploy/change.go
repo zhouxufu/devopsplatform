@@ -41,6 +41,10 @@ type WorkItem struct {
 	Description    string `json:"description,omitempty"`
 	Status         string `json:"status"`
 	Owner          string `json:"owner,omitempty"`
+	AssignedTo     string `json:"assigned_to,omitempty"`
+	OpenedBy       string `json:"opened_by,omitempty"`
+	ResolvedBy     string `json:"resolved_by,omitempty"`
+	ClosedBy       string `json:"closed_by,omitempty"`
 	CreatedAt      int64  `json:"created_at"`
 	UpdatedAt      int64  `json:"updated_at"`
 }
@@ -116,11 +120,11 @@ type ApplicationResources struct {
 
 type rowScanner interface{ Scan(...any) error }
 
-const workItemSelect = `SELECT id,source,COALESCE(external_id,''),kind,title,COALESCE(url,''),COALESCE(external_status,''),COALESCE(description,''),status,COALESCE(owner,''),created_at,updated_at FROM work_items`
+const workItemSelect = `SELECT id,source,COALESCE(external_id,''),kind,title,COALESCE(url,''),COALESCE(external_status,''),COALESCE(description,''),status,COALESCE(owner,''),created_at,updated_at,COALESCE(assigned_to,''),COALESCE(opened_by,''),COALESCE(resolved_by,''),COALESCE(closed_by,'') FROM work_items`
 
 func scanWorkItem(row rowScanner) (WorkItem, error) {
 	var v WorkItem
-	err := row.Scan(&v.ID, &v.Source, &v.ExternalID, &v.Kind, &v.Title, &v.URL, &v.ExternalStatus, &v.Description, &v.Status, &v.Owner, &v.CreatedAt, &v.UpdatedAt)
+	err := row.Scan(&v.ID, &v.Source, &v.ExternalID, &v.Kind, &v.Title, &v.URL, &v.ExternalStatus, &v.Description, &v.Status, &v.Owner, &v.CreatedAt, &v.UpdatedAt, &v.AssignedTo, &v.OpenedBy, &v.ResolvedBy, &v.ClosedBy)
 	return v, err
 }
 
@@ -148,6 +152,8 @@ func (s *Store) CreateWorkItem(v *WorkItem) error {
 		return err
 	}
 	now := time.Now().Unix()
+	// External personnel is authoritative only when imported by its connector.
+	v.AssignedTo, v.OpenedBy, v.ResolvedBy, v.ClosedBy = "", "", "", ""
 	v.Status, v.CreatedAt, v.UpdatedAt = WorkItemOpen, now, now
 	res, err := s.db.Exec(`INSERT INTO work_items(source,external_id,kind,title,url,external_status,description,status,owner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		v.Source, v.ExternalID, v.Kind, v.Title, v.URL, v.ExternalStatus, v.Description, v.Status, strings.TrimSpace(v.Owner), now, now)

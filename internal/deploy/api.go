@@ -758,6 +758,46 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		wj(w, st.WorkItems(r.URL.Query().Get("status"), r.URL.Query().Get("q"), limit))
 	})
+	mux.HandleFunc("GET /api/work-items/page", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		f := WorkItemFilter{Query: q.Get("q"), Status: q.Get("status"), Kind: q.Get("kind"), Person: q.Get("person"), PersonRole: q.Get("person_role")}
+		for key, dest := range map[string]*int{"page": &f.Page, "page_size": &f.PageSize} {
+			if q.Get(key) != "" {
+				v, err := strconv.Atoi(q.Get(key))
+				if err != nil || v <= 0 {
+					writeError(w, http.StatusBadRequest, "分页参数必须为正整数")
+					return
+				}
+				*dest = v
+			}
+		}
+		if err := f.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		out, err := st.WorkItemsPage(f)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取需求列表失败")
+			return
+		}
+		wj(w, out)
+	})
+	mux.HandleFunc("GET /api/work-items/people", func(w http.ResponseWriter, r *http.Request) {
+		out, err := st.WorkItemPeople()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取人员列表失败")
+			return
+		}
+		wj(w, out)
+	})
+	mux.HandleFunc("GET /api/work-items/{id}", func(w http.ResponseWriter, r *http.Request) {
+		item := st.GetWorkItem(changeID(r))
+		if item == nil {
+			writeError(w, http.StatusNotFound, "需求或 Bug 不存在")
+			return
+		}
+		wj(w, item)
+	})
 	mux.HandleFunc("GET /api/work-items/{id}/delivery-content", func(w http.ResponseWriter, r *http.Request) {
 		out, err := st.WorkDelivery(changeID(r))
 		if err != nil {

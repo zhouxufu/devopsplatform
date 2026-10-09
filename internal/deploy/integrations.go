@@ -362,6 +362,10 @@ type zentaoBug struct {
 	Steps          string      `json:"steps"`
 	LastEditedDate string      `json:"lastEditedDate"`
 	ClosedDate     string      `json:"closedDate"`
+	AssignedTo     string      `json:"assignedTo"`
+	OpenedBy       string      `json:"openedBy"`
+	ResolvedBy     string      `json:"resolvedBy"`
+	ClosedBy       string      `json:"closedBy"`
 }
 type zentaoBugPage struct {
 	Bugs    json.RawMessage `json:"bugs"`
@@ -607,7 +611,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string, st
 		}
 		link := z.bugURL(id)
 		if e == sql.ErrNoRows {
-			r, e := tx.Exec(`INSERT INTO work_items(source,external_id,kind,title,url,external_status,description,status,owner,created_at,updated_at) VALUES(?,?,'bug',?,?,?,?,?,?,?,?)`, "zentao:"+name, id, bug.Title, link, bug.Status, bug.Steps, status, actor, state.LastAt, state.LastAt)
+			r, e := tx.Exec(`INSERT INTO work_items(source,external_id,kind,title,url,external_status,description,status,owner,created_at,updated_at,assigned_to,opened_by,resolved_by,closed_by) VALUES(?,?,'bug',?,?,?,?,?,?,?,?,?,?,?,?)`, "zentao:"+name, id, bug.Title, link, bug.Status, bug.Steps, status, actor, state.LastAt, state.LastAt, strings.TrimSpace(bug.AssignedTo), strings.TrimSpace(bug.OpenedBy), strings.TrimSpace(bug.ResolvedBy), strings.TrimSpace(bug.ClosedBy))
 			if e != nil {
 				return state, e
 			}
@@ -616,7 +620,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string, st
 				return state, e
 			}
 		} else {
-			if _, e = tx.Exec(`UPDATE work_items SET title=?,url=?,external_status=?,description=?,status=?,updated_at=? WHERE id=?`, bug.Title, link, bug.Status, bug.Steps, status, state.LastAt, itemID); e != nil {
+			if _, e = tx.Exec(`UPDATE work_items SET title=?,url=?,external_status=?,description=?,status=?,updated_at=?,assigned_to=?,opened_by=?,resolved_by=?,closed_by=? WHERE id=?`, bug.Title, link, bug.Status, bug.Steps, status, state.LastAt, strings.TrimSpace(bug.AssignedTo), strings.TrimSpace(bug.OpenedBy), strings.TrimSpace(bug.ResolvedBy), strings.TrimSpace(bug.ClosedBy), itemID); e != nil {
 				return state, e
 			}
 		}

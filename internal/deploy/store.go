@@ -202,6 +202,10 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			}
 		}
 		for _, m := range []struct{ table, col, ddl string }{
+			{"work_items", "assigned_to", `ALTER TABLE work_items ADD COLUMN assigned_to TEXT DEFAULT ''`},
+			{"work_items", "opened_by", `ALTER TABLE work_items ADD COLUMN opened_by TEXT DEFAULT ''`},
+			{"work_items", "resolved_by", `ALTER TABLE work_items ADD COLUMN resolved_by TEXT DEFAULT ''`},
+			{"work_items", "closed_by", `ALTER TABLE work_items ADD COLUMN closed_by TEXT DEFAULT ''`},
 			{"services", "application_id", `ALTER TABLE services ADD COLUMN application_id TEXT DEFAULT ''`},
 			{"hosts", "host_key", `ALTER TABLE hosts ADD COLUMN host_key TEXT DEFAULT ''`},
 			{"hosts", "environment", `ALTER TABLE hosts ADD COLUMN environment TEXT DEFAULT ''`},
@@ -259,6 +263,10 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_source ON artifacts(source,source_id) WHERE source<>'' AND source_id>0`,
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_builds_pipeline_run ON builds(pipeline_run_id) WHERE pipeline_run_id>0`,
 			`CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status,updated_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_work_items_assigned ON work_items(assigned_to,updated_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_work_items_opened ON work_items(opened_by,updated_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_work_items_resolved ON work_items(resolved_by,updated_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_work_items_closed ON work_items(closed_by,updated_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_changes_status ON changes(status,updated_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_release_versions_status ON release_versions(status,updated_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_release_promotions_version ON release_promotions(release_version_id,id)`,

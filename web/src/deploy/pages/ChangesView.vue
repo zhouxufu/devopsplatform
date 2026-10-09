@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import WorkDeliveryEditor from '../components/WorkDeliveryEditor.vue';
+import WorkItemsTable from '../components/WorkItemsTable.vue';
 import GitBranchSelect from '../components/GitBranchSelect.vue';
 import DataSyncTasks from '../components/DataSyncTasks.vue';
 import Modal from "../../shared/components/Modal.vue";
@@ -116,7 +117,15 @@ const list = computed(() =>
           .includes(query.value.toLowerCase())),
   ),
 );
-const detail = computed(() => route.query.item ? (tab.value === 'work' ? work.value : tab.value === 'versions' ? versions.value : []).find(v=>v.id===Number(route.query.item)) : null);
+const workTable=ref(null),workDetail=ref(null);
+const detail = computed(() => route.query.item ? (tab.value==='work'&&workDetail.value?.id===Number(route.query.item)?workDetail.value:(tab.value === 'work' ? work.value : tab.value === 'versions' ? versions.value : []).find(v=>v.id===Number(route.query.item))) : null);
+let detailSequence=0;
+async function loadWorkDetail(){
+ const request=++detailSequence;
+ if(tab.value!=='work'||!route.query.item)return;
+ try{const item=await api(`api/work-items/${encodeURIComponent(route.query.item)}`);if(request===detailSequence)workDetail.value=item}catch(e){if(request===detailSequence){workDetail.value=null;toast(e.message,'error')}}
+}
+watch(()=>[tab.value,route.query.item],loadWorkDetail);
 const summaries = computed(() => new Map(list.value.map(item => [item.id, descriptionSummary(item.summary || item.description, 180, item.url || '')])));
 const detailChanges = computed(()=> tab.value==='work' ? changes.value.filter(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id)) : detail.value?.changes || []);
 const detailVersions = computed(()=>versions.value.filter(v=>(v.work_items||[]).some(w=>w.id===detail.value?.id)||(v.changes||[]).some(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id))));
@@ -135,7 +144,7 @@ async function loadSQLResources(){
   catch(e){if(seq===resourceRequest)sqlResourcesError.value=e.message}finally{if(seq===resourceRequest)sqlResourcesLoading.value=false}
 }
 watch(()=>[dialog.value,form.value.kind,form.value.service],()=>{sqlResourcesLoading.value=false;loadSQLResources()});
-function view(type,item){router.push({path:'/changes',query:{tab:type,item:String(item.id)}})}
+function view(type,item){if(type==='work')workDetail.value=item;router.push({path:'/changes',query:{tab:type,item:String(item.id)}})}
 function back(){router.push({path:'/changes',query:{tab:tab.value}})}
 function addChange(item){open('changes');form.value.work_item_ids=[item.id];const apps=[...new Set(changes.value.filter(c=>(c.work_items||[]).some(w=>w.id===item.id)).map(c=>c.service).filter(Boolean))];if(apps.length===1)form.value.service=apps[0]}
 function chooseVersion(type,item){addType.value=type;addItem.value=item;addVersionID.value='';showAddVersion.value=true}
@@ -162,6 +171,7 @@ const canManage = (item) =>
   me.value.username === item.owner;
 const safeURL = (value) =>
   /^https?:\/\//i.test(value || "") ? value : undefined;
+let dataLoaded=false;
 async function load() {
   try {
     [
@@ -179,6 +189,9 @@ async function load() {
       api("api/delivery/runs"),
       api('api/connections'),api('api/environments'),api('api/issue-sync'),
     ]);
+    if(dataLoaded)workTable.value?.refresh();
+    dataLoaded=true;
+    await loadWorkDetail();
   } catch (e) {
     toast(e.message, "error");
   }
@@ -340,12 +353,13 @@ onMounted(async () => {
     <template v-if="route.query.item">
       <ElButton @click="back">← 返回列表</ElButton>
       <section v-if="detail" class="workspace">
-        <div class="heading"><div><h2>{{tab==='versions'?detail.version+' · ':''}}{{detail.title}}</h2><p>{{labels[detail.status]}} · {{detail.owner || '未指定负责人'}}<template v-if="detail.external_id"> · {{detail.source}} / {{detail.external_id}}</template> <a v-if="safeURL(detail.url)" :href="safeURL(detail.url)" target="_blank" rel="noopener noreferrer">外部记录</a></p></div>
+        <div class="heading"><div><h2>{{tab==='versions'?detail.version+' · ':''}}{{detail.title}}</h2><p>{{labels[detail.status]}} · 平台创建人：{{detail.owner || '—'}}<template v-if="detail.external_id"> · {{detail.source}} / {{detail.external_id}}</template> <a v-if="safeURL(detail.url)" :href="safeURL(detail.url)" target="_blank" rel="noopener noreferrer">外部记录</a></p></div>
           <div class="actions"><ElButton v-if="canManage(detail)&&(tab==='work'||detail.status==='draft')" @click="open(tab,detail)">{{tab==='versions'?'编辑范围':'编辑需求'}}</ElButton>
             <template v-if="tab==='work'"><ElButton @click="chooseVersion('work',detail)">纳入版本</ElButton><ElButton type="primary" @click="editDelivery(detail)">编辑交付内容</ElButton></template>
             <ElButton v-else-if="detail.status==='draft'&&canManage(detail)" type="primary" @click="action('versions',detail,'ready')">冻结并标记就绪</ElButton>
             <ElButton v-else-if="['ready','completed'].includes(detail.status)" type="primary" @click="router.push({path:'/orchestration',query:{version:String(detail.id)}})">发起交付</ElButton>
           </div></div>
+        <div v-if="tab==='work'&&detail.source?.startsWith('zentao:')" class="chips"><span>指派给：{{detail.assigned_to==='closed'?'已关闭':detail.assigned_to||'—'}}</span><span>由谁创建：{{detail.opened_by||'—'}}</span><span>由谁解决：{{detail.resolved_by||'—'}}</span><span>由谁关闭：{{detail.closed_by||'—'}}</span></div>
         <RichDescription :key="`${tab}-${detail.id}`" :content="detail.description || ''" :source-url="detail.url || ''" :title="tab==='versions'?'版本说明':detail.kind==='bug'?'Bug 说明':'需求说明'" />
         <div v-if="tab==='versions'&&detail.status==='draft'&&versionBlockers(detail).length" class="notice"><b>发布前待处理</b><p v-for="reason in versionBlockers(detail)" :key="reason">{{reason}}</p></div>
         <ElButton v-if="tab==='versions'&&detail.status==='draft'&&canManage(detail)" :loading="saving" @click="refreshScope(detail)">刷新关联范围</ElButton>
@@ -364,8 +378,9 @@ onMounted(async () => {
         <h3>交付记录</h3><div class="chips"><ElButton v-for="r in detailRuns" :key="r.id" @click="router.push({path:'/orchestration',query:{run:String(r.id)}})">#{{r.id}} · {{r.plan.environment.display_name}} · {{runLabel(r.status)}}</ElButton><span v-if="!detailRuns.length">尚无交付记录；需求关闭不代表已经上线。</span></div>
       </section><div v-else class="empty">记录不存在或正在加载。<ElButton @click="back">返回列表</ElButton></div>
     </template>
-    <template v-else>
-    <div class="toolbar">
+    <div v-show="!route.query.item">
+    <WorkItemsTable v-if="tab==='work'" ref="workTable" :me="me" :can-manage="canManage" @view="view('work',$event)" @edit="open('work',$event)" @delivery="editDelivery" @version="chooseVersion('work',$event)" @create="open('work')" />
+    <div v-if="tab!=='work'" class="toolbar">
       <ElInput
         v-model="query"
         placeholder="搜索标题、版本、外部编号或应用"
@@ -384,7 +399,7 @@ onMounted(async () => {
         all-label="全部状态"
       /><Sel v-if="tab!=='versions'" v-model="associationFilter" :options="tab==='work'?[{value:'requirement',label:'需求'},{value:'bug',label:'BUG'}]:[{value:'linked',label:'关联需求的变更'},{value:'independent',label:'独立变更'}]" all-label="全部类型" width="180px" /><span>{{ list.length }} 条</span><ElButton @click="load">刷新</ElButton>
     </div>
-    <div v-if="!list.length" class="empty">
+    <div v-if="tab!=='work'&&!list.length" class="empty">
       <h3>
         尚无{{
           tab === "work"
@@ -403,7 +418,7 @@ onMounted(async () => {
       </p>
       <ElButton @click="open(tab)">新建</ElButton>
     </div>
-    <article v-for="item in list" :key="item.id" class="record">
+    <article v-for="item in tab==='work'?[]:list" :key="item.id" class="record">
       <div class="record-head">
         <div>
           <span class="tag">{{
@@ -544,7 +559,7 @@ onMounted(async () => {
         >
       </div>
     </article>
-    </template>
+    </div>
     <Modal :show="showRedisPreview" title="Redis 命令预检（只读）" extra-wide @close="closeRedisPreview"><div class="form-grid"><p class="span">{{redisPreviewItem?.title}} · 仅测试连接和命令范围，不执行命令、不读取缓存值。</p><label>目标环境<Sel v-model="redisEnvironment" :disabled="saving" :options="environments.map(e=>({value:e.name,label:e.display_name||e.name}))" width="100%" /></label><ElButton type="primary" :loading="saving" :disabled="!redisEnvironment" @click="runRedisPreview">检查连接与命令范围</ElButton><div class="span"><RedisPlanPreview :plans="redisPreview?[redisPreview]:[]" /></div></div></Modal>
     <Modal :show="showNacosPreview" title="Nacos 配置差异（只读预览）" extra-wide @close="closeNacosPreview"><div class="form-grid"><p class="span">{{nacosPreviewItem?.title}} · 预览不发布配置；执行单提交时会重新读取并冻结基线。</p><label>目标环境<Sel v-model="nacosEnvironment" :disabled="saving" :options="environments.map(e=>({value:e.name,label:e.display_name||e.name}))" width="100%" /></label><ElButton type="primary" :loading="saving" :disabled="!nacosEnvironment" @click="runNacosPreview">读取目标配置并对比</ElButton><div class="span"><NacosPlanPreview :plans="nacosPreview?[nacosPreview]:[]" /></div></div></Modal>
     <WorkDeliveryEditor ref="deliveryEditor" :show="showDeliveryEditor" :item="deliveryItem" :services="services" :work-items="work" :can-manage="canManage" @close="showDeliveryEditor=false" @saved="load" @open-sync="openSyncTasks" />

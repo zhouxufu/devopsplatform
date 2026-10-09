@@ -44,7 +44,7 @@ try {
   await page.getByRole('button',{name:'＋ 新建需求'}).click()
   await dialog().getByRole('button',{name:'取消',exact:true}).click()
   await dialog().waitFor({state:'hidden'})
-  await page.locator('.record').filter({hasText:title}).getByRole('button',{name:'查看需求'}).click()
+  await page.locator('.work-table tbody tr').filter({hasText:title}).getByRole('button',{name:'查看',exact:true}).click()
   await page.getByRole('button',{name:'编辑交付内容'}).click()
   await dialog().getByRole('button',{name:/^其他操作/}).click()
   await dialog().getByRole('button',{name:'＋ 添加其他操作'}).click()
