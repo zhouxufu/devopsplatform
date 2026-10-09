@@ -25,11 +25,16 @@ const work = ref([]),
   deliveries = ref([]),
   services = ref([]),
   me = ref({});
-const connections=ref([]),environments=ref([]),syncStates=ref([]),showSync=ref(false),syncForm=ref({connection:'',baseline:''}),showBindings=ref(false),showResources=ref(false),showSQLPreview=ref(false),sqlPreview=ref(null),previewItem=ref(null),previewEnvironment=ref('');
+const connections=ref([]),environments=ref([]),syncStates=ref([]),showSync=ref(false),syncForm=ref({connection:'',baseline:'',status:''}),showBindings=ref(false),showResources=ref(false),showSQLPreview=ref(false),sqlPreview=ref(null),previewItem=ref(null),previewEnvironment=ref('');
+const bugStatuses=[{value:'closed',label:'已关闭'},{value:'active',label:'激活（未解决）'},{value:'resolved',label:'已解决（未关闭）'},{value:'unclosed',label:'未关闭（激活 + 已解决）'},{value:'all',label:'全部状态'}];
+const syncDefaultStatus=computed(()=>connections.value.find(c=>c.name===syncForm.value.connection)?.config?.bug_status||'closed');
+const syncStatusOptions=computed(()=>[{value:'__default',label:`沿用连接默认：${bugStatuses.find(v=>v.value===syncDefaultStatus.value)?.label||'已关闭'}`},...bugStatuses]);
+const syncStatusModel=computed({get:()=>syncForm.value.status||'__default',set:value=>{syncForm.value.status=value==='__default'?'':value}});
+watch(showSync,opened=>{if(opened&&!connections.value.some(c=>c.kind==='zentao'&&c.name===syncForm.value.connection)){syncForm.value.connection=connections.value.find(c=>c.kind==='zentao')?.name||'';syncForm.value.status=''}});
 function openResources(){if(window.parent!==window)window.parent.postMessage({type:'platform.open',view:'resources'},location.origin);else showResources.value=true}
 async function syncIssues(){
   if(!syncForm.value.connection)return toast('请选择禅道连接','warning');saving.value=true
-  try{await api(`api/issue-sync/${encodeURIComponent(syncForm.value.connection)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({baseline:syncForm.value.baseline})});await load();toast('禅道同步完成','success')}catch(e){toast(e.message,'error')}finally{saving.value=false;await load()}
+  try{await api(`api/issue-sync/${encodeURIComponent(syncForm.value.connection)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({baseline:syncForm.value.baseline,status:syncForm.value.status})});await load();toast('禅道同步完成','success')}catch(e){toast(e.message,'error')}finally{saving.value=false;await load()}
 }
 async function checkSQL(item){previewItem.value=item;previewEnvironment.value=environments.value[0]?.name||'';sqlPreview.value=null;showSQLPreview.value=true}
 async function runSQLPreview(){
@@ -509,7 +514,7 @@ onMounted(async () => {
     <Modal :show="showResources" title="资源中心" extra-wide @close="showResources=false;load()"><ResourcesView directAPI /></Modal>
     <ApplicationResourcesEditor :show="showBindings" :services="services" :initial-service="form.service" @close="showBindings=false;loadSQLResources()" />
     <Modal :show="showSync" title="同步禅道 BUG（开源 16.0）" wide @close="showSync=false">
-      <div class="form-grid"><label class="span">禅道连接<Sel v-model="syncForm.connection" :options="connections.filter(c=>c.kind==='zentao').map(c=>c.name)" width="100%" /></label><label class="span">本次日期基线（留空沿用连接设置）<ElInput v-model="syncForm.baseline" placeholder="YYYY-MM-DD" /></label><p class="notice span">同步产品范围内的 Bug，关闭状态来自禅道。尚未回写上线状态；选版时仍需核对历史上线范围。</p><p v-for="state in syncStates.filter(s=>s.connection===syncForm.connection)" :key="state.connection" class="span">上次同步：{{state.status==='success'?'成功':'失败'}} · {{state.detail}}</p><div class="actions span"><ElButton @click="openResources">配置禅道连接</ElButton><ElButton type="primary" :loading="saving" @click="syncIssues">立即同步</ElButton></div></div>
+      <div class="form-grid"><label class="span">禅道连接<Sel v-model="syncForm.connection" :options="connections.filter(c=>c.kind==='zentao').map(c=>c.name)" width="100%" /></label><label class="span">本次 Bug 状态<Sel v-model="syncStatusModel" :options="syncStatusOptions" width="100%" :disabled="saving" /></label><label class="span">更新或关闭日期基线（留空沿用连接设置）<ElInput v-model="syncForm.baseline" placeholder="YYYY-MM-DD；包含当天" /></label><p class="notice span">默认同步已关闭 Bug，可按本次需要切换状态；筛选不删除此前已同步的记录。按更新、关闭时间倒序读取，日期基线前的数据不纳入本次范围。已关闭不等于未上线；历史上线范围仍需核对。</p><p v-for="state in syncStates.filter(s=>s.connection===syncForm.connection)" :key="state.connection" class="span">上次同步：{{state.status==='success'?'成功':'失败'}} · {{state.detail}}</p><div class="actions span"><ElButton @click="openResources">配置禅道连接</ElButton><ElButton type="primary" :loading="saving" @click="syncIssues">立即同步</ElButton></div></div>
     </Modal>
     <Modal :show="showSQLPreview" title="SQL 结构与影响范围预检（不执行）" extra-wide @close="showSQLPreview=false">
       <div class="form-grid"><label>目标环境<Sel v-model="previewEnvironment" :options="environments.map(e=>({value:e.name,label:e.display_name}))" width="100%" /></label><ElButton :loading="saving" @click="runSQLPreview">读取目标库并预检</ElButton><template v-if="sqlPreview"><p class="span">{{sqlPreview.connection}} / {{sqlPreview.database}} · {{sqlPreview.mode.toUpperCase()}}</p><p v-for="warning in sqlPreview.warnings" :key="warning" class="notice span">{{warning}}</p><article v-for="(op,index) in sqlPreview.statements" :key="index" class="span"><b>{{op.skip?'跳过（结构一致）':'计划执行'}} · {{op.reason||op.action}} · {{op.expected_rows||0}} 行</b><pre>{{op.sql}}</pre></article><p class="notice span">预检不执行 SQL。标记就绪后，在部署编排中选择 SQL 节点，提交冻结计划并按环境审批。</p></template></div>

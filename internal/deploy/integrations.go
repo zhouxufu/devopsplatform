@@ -53,6 +53,9 @@ func validateIntegrationConnection(c *ResourceConnection) error {
 			return fmt.Errorf("本版适配禅道开源 16.0，API 模式为 legacy")
 		}
 		c.Config["api_mode"] = "legacy"
+		if _, err := normalizeZentaoStatus(c.Config["bug_status"]); err != nil {
+			return err
+		}
 		if minutes := c.Config["sync_minutes"]; minutes != "" {
 			n, err := strconv.Atoi(minutes)
 			if err != nil || n < 0 || n > 1440 {
@@ -327,17 +330,23 @@ type zentaoBug struct {
 	ClosedDate     string      `json:"closedDate"`
 }
 type zentaoBugPage struct {
-	Bugs json.RawMessage `json:"bugs"`
+	Bugs    json.RawMessage `json:"bugs"`
+	OrderBy string          `json:"orderBy"`
 }
 
 func (z *zentaoLegacy) bugs(ctx context.Context, product, page int) ([]zentaoBug, error) {
+	rows, _, err := z.bugPage(ctx, product, page, "all", "id_asc")
+	return rows, err
+}
+
+func (z *zentaoLegacy) bugPage(ctx context.Context, product, page int, browseType, orderBy string) ([]zentaoBug, string, error) {
 	var v zentaoBugPage
-	err := z.call(ctx, "bug", "browse", url.Values{"productID": {strconv.Itoa(product)}, "browseType": {"all"}, "recPerPage": {"100"}, "pageID": {strconv.Itoa(page)}}, nil, &v)
+	err := z.call(ctx, "bug", "browse", url.Values{"productID": {strconv.Itoa(product)}, "browseType": {browseType}, "orderBy": {orderBy}, "recPerPage": {"100"}, "pageID": {strconv.Itoa(page)}}, nil, &v)
 	if err != nil {
-		return nil, fmt.Errorf("读取禅道产品 %d 的 Bug 列表失败（请检查产品访问及 Bug 列表权限）：%w", product, err)
+		return nil, "", fmt.Errorf("读取禅道产品 %d 的 Bug 列表失败（请检查产品访问及 Bug 列表权限）：%w", product, err)
 	}
 	if len(v.Bugs) == 0 || string(v.Bugs) == "null" {
-		return nil, fmt.Errorf("禅道 Bug 列表缺少 bugs 字段，请检查权限或接口参数")
+		return nil, "", fmt.Errorf("禅道 Bug 列表缺少 bugs 字段，请检查权限或接口参数")
 	}
 	decode := func(raw json.RawMessage, out any) error {
 		d := json.NewDecoder(strings.NewReader(string(raw)))
@@ -348,13 +357,108 @@ func (z *zentaoLegacy) bugs(ctx context.Context, product, page int) ([]zentaoBug
 	if decode(v.Bugs, &rows) != nil {
 		var indexed map[string]zentaoBug
 		if decode(v.Bugs, &indexed) != nil {
-			return nil, fmt.Errorf("禅道 Bug 列表格式不兼容")
+			return nil, "", fmt.Errorf("禅道 Bug 列表格式不兼容")
 		}
 		for _, bug := range indexed {
 			rows = append(rows, bug)
 		}
 	}
-	return rows, nil
+	return rows, v.OrderBy, nil
+}
+
+func normalizeZentaoStatus(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "closed"
+	}
+	switch value {
+	case "closed", "active", "resolved", "unclosed", "all":
+		return value, nil
+	default:
+		return "", fmt.Errorf("Bug 状态仅支持已关闭、激活、已解决、未关闭或全部")
+	}
+}
+
+func zentaoStatusMatches(selected, actual string) bool {
+	return selected == "all" || actual == selected || (selected == "unclosed" && (actual == "active" || actual == "resolved"))
+}
+
+// Scan each date independently: an old close date may still have a recent
+// edit, and vice versa. A server-confirmed descending order permits an early
+// boundary stop; if order metadata is absent, scan normally (never skip data).
+func (z *zentaoLegacy) filteredBugs(ctx context.Context, ids []int, baseline, status string) (map[string]zentaoBug, error) {
+	result := map[string]zentaoBug{}
+	browseType := map[string]string{"active": "unresolved", "resolved": "toclosed", "unclosed": "unclosed"}[status]
+	if browseType == "" {
+		browseType = "all"
+	} // 16.0 has no native "closed" browse type.
+	fields := []string{"id"}
+	if baseline != "" {
+		fields = []string{"lastEditedDate", "closedDate"}
+	}
+	for _, product := range ids {
+		for _, field := range fields {
+			seen := map[string]bool{}
+			previousMin := ""
+			for page := 1; page <= 101; page++ {
+				rows, reportedOrder, err := z.bugPage(ctx, product, page, browseType, field+"_desc")
+				if err != nil {
+					return nil, err
+				}
+				if page == 101 && len(rows) > 0 {
+					return nil, fmt.Errorf("产品 %d 的历史扫描超过 10000 条（不是日期范围内命中数）；请填写更近日期。若禅道未返回倒序信息，需检查接口排序；本次未保存部分结果", product)
+				}
+				pageMin, pageMax, datesValid := "", "", true
+				for _, bug := range rows {
+					id := string(bug.ID)
+					if n, e := strconv.ParseInt(id, 10, 64); e != nil || n < 1 || bug.Title == "" {
+						return nil, fmt.Errorf("禅道返回无效 Bug ID 或标题")
+					}
+					if seen[id] {
+						return nil, fmt.Errorf("禅道分页重复，请检查 pageID 参数；未保存本次结果")
+					}
+					seen[id] = true
+					if zentaoStatusMatches(status, bug.Status) && (baseline == "" || bug.LastEditedDate >= baseline || bug.ClosedDate >= baseline) {
+						result[id] = bug
+					}
+					if baseline != "" {
+						date := bug.LastEditedDate
+						if field == "closedDate" {
+							date = bug.ClosedDate
+						}
+						if date == "" || strings.HasPrefix(date, "0000-00-00") {
+							date = "0000-00-00"
+						} else if len(date) < 10 {
+							datesValid = false
+						} else if _, e := time.Parse("2006-01-02", date[:10]); e != nil {
+							datesValid = false
+						}
+						if pageMin == "" || date < pageMin {
+							pageMin = date
+						}
+						if date > pageMax {
+							pageMax = date
+						}
+					}
+				}
+				if baseline != "" && reportedOrder == field+"_desc" && datesValid {
+					if previousMin != "" && pageMax > previousMin {
+						return nil, fmt.Errorf("禅道返回的日期倒序分页不稳定，请重试；未保存部分结果")
+					}
+					if len(rows) == 0 || pageMax < baseline {
+						break
+					}
+					previousMin = pageMin
+				} else {
+					previousMin = ""
+				}
+				if len(rows) < 100 {
+					break
+				}
+			}
+		}
+	}
+	return result, nil
 }
 
 func zentaoProductIDs(c *ResourceConnection) ([]int, error) {
@@ -401,7 +505,7 @@ func (s *Store) issueSyncStates() []IssueSyncState {
 	return out
 }
 
-func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string) (state IssueSyncState, err error) {
+func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string, statusOverride ...string) (state IssueSyncState, err error) {
 	key := s.dataDir + "\x00" + name
 	if _, loaded := issueSyncLocks.LoadOrStore(key, true); loaded {
 		return state, fmt.Errorf("该禅道连接正在同步")
@@ -418,6 +522,14 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string) (s
 		if _, err = time.Parse("2006-01-02", baseline); err != nil {
 			return state, fmt.Errorf("日期基线格式为 YYYY-MM-DD")
 		}
+	}
+	selectedStatus := c.Config["bug_status"]
+	if len(statusOverride) > 0 && strings.TrimSpace(statusOverride[0]) != "" {
+		selectedStatus = statusOverride[0]
+	}
+	selectedStatus, err = normalizeZentaoStatus(selectedStatus)
+	if err != nil {
+		return state, err
 	}
 	state = IssueSyncState{Connection: name, LastAt: time.Now().Unix(), Status: "failed"}
 	defer func() {
@@ -440,35 +552,9 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string) (s
 	}
 	// Fetch first, then persist in one transaction: a failed page cannot advance
 	// the successful sync baseline or leave a partly refreshed issue pool.
-	bugs := map[string]zentaoBug{}
-	for _, product := range ids {
-		seen := map[string]bool{}
-		for page := 1; page <= 100; page++ {
-			rows, e := z.bugs(ctx, product, page)
-			if e != nil {
-				return state, e
-			}
-			for _, bug := range rows {
-				id := string(bug.ID)
-				if _, e := strconv.ParseInt(id, 10, 64); e != nil || id == "" || bug.Title == "" {
-					return state, fmt.Errorf("禅道返回无效 Bug ID 或标题")
-				}
-				if seen[id] {
-					return state, fmt.Errorf("禅道分页重复，请检查 pageID 参数；未保存本次结果")
-				}
-				seen[id] = true
-				// Refresh previously imported issues even if their status changes.
-				if baseline == "" || bug.LastEditedDate >= baseline || bug.ClosedDate >= baseline {
-					bugs[id] = bug
-				}
-			}
-			if len(rows) < 100 {
-				break
-			}
-			if page == 100 {
-				return state, fmt.Errorf("同步超过 10000 条/产品，请缩小产品范围")
-			}
-		}
+	bugs, err := z.filteredBugs(ctx, ids, baseline, selectedStatus)
+	if err != nil {
+		return state, err
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -504,7 +590,12 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string) (s
 	if err = tx.Commit(); err != nil {
 		return state, err
 	}
-	state.Status, state.Detail = "success", fmt.Sprintf("已更新 %d 个 Bug；关闭状态与上线状态分别管理", len(bugs))
+	statusLabel := map[string]string{"closed": "已关闭", "active": "激活", "resolved": "已解决", "unclosed": "未关闭", "all": "全部状态"}[selectedStatus]
+	baselineLabel := baseline
+	if baselineLabel == "" {
+		baselineLabel = "全部历史"
+	}
+	state.Status, state.Detail = "success", fmt.Sprintf("已更新 %d 个 Bug（状态：%s，日期基线：%s）；关闭状态与上线状态分别管理", len(bugs), statusLabel, baselineLabel)
 	return state, nil
 }
 
@@ -516,6 +607,7 @@ func registerIntegrationRoutes(mux *http.ServeMux, s *Store) {
 	mux.HandleFunc("POST /api/issue-sync/{name}", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Baseline string `json:"baseline"`
+			Status   string `json:"status"`
 		}
 		if e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); e != nil {
 			writeIntegrationJSON(w, nil, fmt.Errorf("同步参数无效"))
@@ -527,7 +619,7 @@ func registerIntegrationRoutes(mux *http.ServeMux, s *Store) {
 		if actor == "" {
 			actor = "local"
 		}
-		state, err := s.syncZentao(ctx, r.PathValue("name"), req.Baseline, actor)
+		state, err := s.syncZentao(ctx, r.PathValue("name"), req.Baseline, actor, req.Status)
 		writeIntegrationJSON(w, state, err)
 	})
 	mux.HandleFunc("POST /api/changes/{id}/sql-preview", func(w http.ResponseWriter, r *http.Request) {
