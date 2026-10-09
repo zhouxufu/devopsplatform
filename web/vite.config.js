@@ -10,6 +10,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         deploy: 'deploy.html',
+		workbench: 'workbench.html',
         logs: 'logs.html',
         monitor: 'monitor.html',
         shell: 'shell.html',

@@ -26,6 +26,9 @@ func NewSupervisor() *Supervisor { return &Supervisor{procs: map[string]*pluginP
 // StartAll 拉起全部插件
 func (s *Supervisor) StartAll(ms []*Manifest) {
 	for _, m := range ms {
+		if m.Backend != "" {
+			continue
+		}
 		s.Start(m)
 	}
 }

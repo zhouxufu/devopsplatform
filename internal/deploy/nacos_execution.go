@@ -61,7 +61,7 @@ func nacosTargetKey(p NacosConfigPlan) string {
 }
 
 func (s *Store) nacosBinding(service, environment, alias string) (*ResourceConnection, error) {
-	if s.GetService(service) == nil || s.GetEnvironment(environment) == nil {
+	if !s.hasResourceApplication(service) || s.GetEnvironment(environment) == nil {
 		return nil, fmt.Errorf("应用或环境不存在")
 	}
 	resources := s.ApplicationResources(service)

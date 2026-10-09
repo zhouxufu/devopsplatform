@@ -56,6 +56,12 @@ func (o *Observer) Submit(name, source, applicationID string) {
 }
 
 func (o *Observer) Resolve(name, source, requestedID string) (string, error) {
+	return o.ResolveWithSession(name, source, requestedID, "")
+}
+
+// Interactive resource onboarding forwards the current console session only
+// to the configured platform catalog, not to resource connection endpoints.
+func (o *Observer) ResolveWithSession(name, source, requestedID, cookie string) (string, error) {
 	name, source = strings.TrimSpace(name), strings.TrimSpace(source)
 	if name == "" || source == "" {
 		return requestedID, nil
@@ -76,6 +82,9 @@ func (o *Observer) Resolve(name, source, requestedID string) (string, error) {
 		return requestedID, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
 	resp, err := o.client.Do(req)
 	if err != nil {
 		return requestedID, err

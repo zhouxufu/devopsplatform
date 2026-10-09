@@ -58,7 +58,7 @@ onMounted(load)
       <div class="fld"><label>排序</label><ElInputNumber v-model="form.sort_order" :min="0" :max="999" /></div>
       <label style="display:block;margin:10px 0"><input v-model="form.protected" type="checkbox" /> 受保护环境，需要审批后发布</label>
       <label style="display:block;margin:10px 0"><input v-model="form.require_reason" type="checkbox" /> 发布时必须填写原因</label>
-			<div class="fld"><label>发布 / 操作审核人员</label><Sel v-model="form.approver_list" :options="users.map(user=>({value:user.username,label:user.display_name+' · '+user.username}))" multiple filterable width="100%" placeholder="选择审核人员" /><small style="color:var(--dim)">从平台成员中选择；发起人不能审核自己的执行单。普通环境的发布仍无需审核，但 Redis 操作始终需要另一名审核人。</small></div>
+			<div class="fld"><label>发布 / 操作审核人员</label><Sel v-model="form.approver_list" :options="users.map(user=>({value:user.username,label:user.display_name+' · '+user.username}))" multiple filterable width="100%" placeholder="选择审核人员" /><small style="color:var(--dim)">从平台成员中选择；发起人不能审核自己的执行单。普通环境的服务发布仍无需审核，但 SQL 写操作和 Redis 操作始终需要另一名审核人。</small></div>
       <div style="display:flex"><ElButton type="primary" style="margin-left:auto" @click="save">保存</ElButton></div>
     </Modal>
   </div>

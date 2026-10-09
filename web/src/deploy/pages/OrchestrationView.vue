@@ -557,7 +557,7 @@ onMounted(async () => {
           <h4>
             执行预览 ·
             {{
-              preview.environment.protected || preview.redis_plans?.length ? "需要审核（发起人不可自审）" : "无需额外审核"
+              preview.environment.protected || preview.redis_plans?.length || preview.sql_plans?.length || preview.template.workbench ? "需要审核（发起人不可自审）" : "无需额外审核"
             }}
           </h4>
           <p v-for="(b, i) in preview.blockers" :key="'b' + i" class="blocker">

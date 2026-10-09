@@ -8,6 +8,8 @@ import { toast } from '../../shared/composables/toast.js'
 const props=defineProps({show:Boolean,services:Array,initialService:String})
 const emit=defineEmits(['close'])
 const api=inject('api'),service=ref(''),resources=ref({requirements:[],bindings:[]}),connections=ref([]),environments=ref([]),busy=ref(false),loading=ref(false)
+const resourcePlugin=inject('resourcePlugin','deploy')
+const directAPI=!location.pathname.startsWith('/api/plugins/')
 async function loadService(){
   if(!service.value){resources.value={requirements:[],bindings:[]};return}
   loading.value=true
@@ -45,7 +47,7 @@ async function save(){
       <div class="binding-footer"><ElButton @click="emit('close')">取消</ElButton><ElButton type="primary" :loading="busy" :disabled="loading||!service" @click="save">保存绑定</ElButton></div>
     </div>
   </Modal>
-  <Modal :show="showConnections" title="资源中心" extra-wide @close="showConnections=false;refreshConnections()"><ResourcesView directAPI /></Modal>
+  <Modal :show="showConnections" title="资源中心" extra-wide @close="showConnections=false;refreshConnections()"><ResourcesView :plugin="resourcePlugin" :directAPI="directAPI" /></Modal>
 </template>
 <style scoped>
 .binding-editor{display:grid;gap:14px}.binding-editor p{color:var(--muted);margin:0}.binding-editor article{border:1px solid var(--border);border-radius:8px;padding:14px;display:grid;gap:10px}.binding-row{display:grid;grid-template-columns:minmax(160px,1fr) minmax(160px,1.4fr) auto;gap:12px;align-items:center}.binding-footer{display:flex;justify-content:flex-end;gap:12px}@media(max-width:700px){.binding-row{grid-template-columns:1fr}}

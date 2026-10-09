@@ -183,7 +183,7 @@ async function finishSetup() {
   st.setupSaving = true
   try {
 		const environments = st.setupRows.map(({ approver_list, ...row }) => ({ ...row, approvers: (approver_list || []).join(',') }))
-		const r = await fetch('/api/plugins/deploy/api/setup/environments', {
+		const r = await fetch('/api/resources/setup/environments', {
 			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environments }),
     })
     const body = await r.json().catch(() => ({}))
@@ -238,14 +238,14 @@ onMounted(async () => {
   if (r.status === 401) { st.showLogin = true; return }
 	await loadIdentity()
   st.plugins = (await r.json()) ?? []
-  if (st.plugins.some(p => p.name === 'deploy')) {
-    const setup = await getJSON('/api/plugins/deploy/api/setup')
+  if (st.plugins.some(p => ['deploy','dbms','redis'].includes(p.name))) {
+    const setup = await getJSON('/api/resources/setup')
     if (setup && setup.completed === false) {
       chooseEnvironmentTemplate('simple')
       st.showSetup = true
       return
     }
-    st.environments = setup?.environments || await getJSON('/api/plugins/deploy/api/environments') || []
+    st.environments = setup?.environments || await getJSON('/api/resources/environments') || []
     if (!st.environments.some(e => e.name === st.gEnv)) st.gEnv = st.environments.find(e => e.name === 'test')?.name || st.environments[0]?.name || ''
   }
   await loadServices()

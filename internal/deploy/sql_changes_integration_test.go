@@ -21,6 +21,11 @@ func sqlTargetFixture(t *testing.T) (*Store, *ReleaseManager, *sql.DB, string) {
 		t.Fatal("SQL tests only accept a loopback disposable MySQL")
 	}
 	st, m, _ := deliveryFixture(t)
+	env := *st.GetEnvironment("test")
+	env.Approvers = "reviewer"
+	if err := st.UpsertEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
 	c := ResourceConnection{Name: "qa-mysql", Kind: "mysql", Endpoint: addr, Username: "root", Password: os.Getenv("DEVOPS_SQL_TEST_PASSWORD"), Config: map[string]string{"database": "delivery_qa", "tls": "false"}}
 	if e := st.UpsertConnection(c); e != nil {
 		t.Fatal(e)
@@ -70,6 +75,18 @@ func sqlRunFixture(t *testing.T, st *Store, m *ReleaseManager, c *Change, enviro
 	run, e := st.CreateDeliveryRun(DeliveryRequest{TemplateID: tpl.ID, VersionID: version.ID, Environment: environment, Reason: "SQL QA"}, "alice", m)
 	if e != nil {
 		t.Fatal(e)
+	}
+	if environment == "test" {
+		if run.Status != "pending_approval" {
+			t.Fatal("ordinary environment SQL bypassed review")
+		}
+		if _, err := st.AdvanceDeliveryRun(run.ID, "alice", false, m); err == nil {
+			t.Fatal("unreviewed SQL advanced")
+		}
+		run, e = st.ReviewDeliveryRun(run.ID, "reviewer", run.Digest, true)
+		if e != nil {
+			t.Fatal(e)
+		}
 	}
 	return run
 }

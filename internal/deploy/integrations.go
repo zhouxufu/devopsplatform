@@ -21,6 +21,7 @@ import (
 
 func integrationSchema(identity, doc string) []string {
 	return []string{
+		`CREATE TABLE IF NOT EXISTS resource_applications (name VARCHAR(191) PRIMARY KEY)`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS redis_execution_ledger (target_key VARCHAR(80) NOT NULL, change_id BIGINT NOT NULL, command_index BIGINT NOT NULL, run_id BIGINT NOT NULL, node_id VARCHAR(191) NOT NULL, status VARCHAR(32) NOT NULL, result %s NOT NULL, PRIMARY KEY(target_key,change_id,command_index))`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS data_sync_tasks (id %s, document %s NOT NULL, owner VARCHAR(191) NOT NULL, revision BIGINT NOT NULL)`, identity, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS release_version_scope (release_version_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),

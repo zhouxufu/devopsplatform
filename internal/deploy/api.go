@@ -37,6 +37,7 @@ func sameOrigin(r *http.Request) bool {
 func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib) *http.ServeMux {
 	mux := http.NewServeMux()
 	registerGitBranchRoutes(mux, st)
+	registerWorkbenchRoutes(mux, st, busURL)
 	applicationObserver := appcatalog.NewObserver(busURL)
 	wj := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1548,6 +1549,24 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(bt)
 	})
+	for _, kind := range []string{"dbms", "redis"} {
+		mux.HandleFunc("GET /ui/"+kind, func(w http.ResponseWriter, r *http.Request) {
+			bt, err := uiFS.ReadFile("assets/app/workbench.html")
+			if err != nil {
+				http.Error(w, "workbench assets unavailable", 503)
+				return
+			}
+			// Both direct and gateway entries resolve assets/API beside /ui.
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			base := "../"
+			if r.Header.Get("X-User") != "" {
+				base = "./"
+			}
+			bt = []byte(strings.Replace(string(bt), "<head>", "<head><base href=\""+base+"\">", 1))
+			w.Write(bt)
+		})
+	}
 	mux.HandleFunc("GET /ui-legacy", func(w http.ResponseWriter, r *http.Request) {
 		bt, _ := uiFS.ReadFile("assets/ui.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

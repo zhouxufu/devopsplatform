@@ -200,7 +200,7 @@ func (s *Store) SaveDataSyncTask(t *DataSyncTask) error {
 	if err := normalizeSyncTask(t); err != nil {
 		return err
 	}
-	if s.GetService(t.Service) == nil {
+	if !s.hasResourceApplication(t.Service) {
 		return fmt.Errorf("应用不存在")
 	}
 	var kind string

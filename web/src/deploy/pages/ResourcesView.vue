@@ -19,8 +19,10 @@ const connectionKeyScanning=ref(false),pendingConnectionHostKey=ref(null)
 const agentHost=ref(null),agentForm=ref({}),agentSaving=ref(false),agentApplying=ref(false),agentRemoteState=ref({}),agentInstallState=ref({})
 const KINDS={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 变更数据库',redis:'Redis 缓存维护',nacos:'Nacos 配置中心（2.4 / 2.5）',zentao:'禅道 16.0（需求来源）'}
 const ALL_RESOURCE_TABS={connections:['connections','🔌','连接'],environments:['environments','🌐','环境'],hosts:['hosts','🖥','主机'],groups:['groups','▦','主机组'],variables:['variables','⌘','变量组'],runners:['runners','⚙','构建 Runner'],audit:['audit','◷','审计日志']}
-const RESOURCE_SCOPES={deploy:['connections','environments','hosts','groups','variables','runners','audit'],logs:['hosts','environments','audit'],monitor:['hosts','environments','audit'],devtools:['environments','audit']}
-const PLUGIN_LABELS={deploy:'部署平台',logs:'日志查询',monitor:'监控大盘',devtools:'AI 开发工具'}
+const RESOURCE_SCOPES={dbms:['connections','environments','audit'],redis:['connections','environments','audit'],deploy:['connections','environments','hosts','groups','variables','runners','audit'],logs:['hosts','environments','audit'],monitor:['hosts','environments','audit'],devtools:['environments','audit']}
+const PLUGIN_LABELS={dbms:'数据库工作台',redis:'Redis 工作台',deploy:'部署平台',logs:'日志查询',monitor:'监控大盘',devtools:'AI 开发工具'}
+const connectionKinds=computed(()=>Object.entries(KINDS).filter(([kind])=>!['dbms','redis'].includes(props.plugin)||kind===(props.plugin==='dbms'?'mysql':'redis')).map(([value,label])=>({value,label})))
+const visibleConnections=computed(()=>connections.value.filter(c=>connectionKinds.value.some(k=>k.value===c.kind)))
 const resourceTabs=computed(()=>(RESOURCE_SCOPES[props.plugin]||['environments','hosts','audit']).map(key=>ALL_RESOURCE_TABS[key]))
 const pluginLabel=computed(()=>PLUGIN_LABELS[props.plugin]||'当前插件')
 const showAgentResources=computed(()=>props.plugin==='logs')
@@ -39,7 +41,7 @@ const post=(url,body)=>json(url,{method:'POST',headers:{'Content-Type':'applicat
 async function remove(url,label){if(!confirm(`删除「${label}」？`))return;try{await json(url,{method:'DELETE'});toast('已删除','success');load()}catch(e){toast(e.message,'error')}}
 function editConnection(v){
   const config={database:'',tls:'false',db:'0',redis_auth:'password',key_prefix:'',nacos_version:'2.4',nacos_auth:'password',namespace:'',test_data_id:'',test_group:'DEFAULT_GROUP',product_ids:'',bug_status:'closed',baseline:'',sync_minutes:'0',settings_path:'',repository_id:'',mirror_of:'*',region:'cn-hangzhou',oss_bucket:'',oss_endpoint:'',oss_prefix:'logplatform/releases',security_token:'',auth_mode:'https',known_hosts:'',ssh_fingerprint:'',...(v?.config||{})}
-  connectionForm.value=v?{...v,username:'',password:'',private_key:'',passphrase:'',config}:{name:'',kind:'maven',endpoint:'',username:'',password:'',private_key:'',passphrase:'',config}
+  connectionForm.value=v?{...v,username:'',password:'',private_key:'',passphrase:'',config}:{name:'',kind:props.plugin==='dbms'?'mysql':props.plugin==='redis'?'redis':'maven',endpoint:'',username:'',password:'',private_key:'',passphrase:'',config}
   pendingConnectionHostKey.value=null;connectionKeyScanning.value=false;showConnection.value=true
 }
 const gitAuthMode=computed({get:()=>connectionForm.value.config?.auth_mode||'https',set:value=>{
@@ -173,8 +175,8 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
 
   <section v-if="tab==='connections'">
     <div class="section-head"><div><h3>资源连接</h3><p>账号密码加密保存；编辑时留空表示保留原凭据</p></div><ElButton type="primary" native-type="button" size="small" @click="editConnection()">＋ 新建连接</ElButton></div>
-    <div class="resource-grid"><article v-for="v in connections" :key="v.name" class="resource-card"><span class="icon">{{v.kind==='maven'?'Ⓜ':v.kind==='docker'?'🐳':v.kind==='aliyun-sae'?'☁':'⌘'}}</span><div class="grow"><b>{{v.name}}</b><small>{{KINDS[v.kind]}}{{v.kind==='git'?' · '+(v.config?.auth_mode==='ssh'?'SSH 私钥':'HTTPS / PAT'):''}}</small><code>{{v.kind==='aliyun-sae' ? `${v.config?.region} · ${v.config?.oss_bucket||'未配置 OSS'}` : v.endpoint}}</code></div><span :class="v.secret_configured?'st-ok':'st-run'">{{v.secret_configured?'凭据已配置':'无凭据'}}</span><div class="actions"><button class="op op-btn" @click="testConnection(v)">{{testState[v.name]==='testing'?'测试中…':testState[v.name]==='ok'?'✓ 可连接':testState[v.name]==='fail'?'✗ 重试':'测试'}}</button><button class="op op-btn" @click="editConnection(v)">编辑</button><button class="op op-btn del" @click="remove(`api/connections/${v.name}`,v.name)">删除</button></div></article></div>
-    <div v-if="!connections.length" class="onboarding"><span>🔌</span><h3>连接构建与云资源</h3><p>按实际需要添加 Git、Maven 私服、镜像仓库或 SAE；没有使用的资源无需配置。</p><ElButton type="primary" size="small" @click="editConnection()">新建第一个连接</ElButton></div>
+    <div class="resource-grid"><article v-for="v in visibleConnections" :key="v.name" class="resource-card"><span class="icon">{{v.kind==='maven'?'Ⓜ':v.kind==='docker'?'🐳':v.kind==='aliyun-sae'?'☁':'⌘'}}</span><div class="grow"><b>{{v.name}}</b><small>{{KINDS[v.kind]}}{{v.kind==='git'?' · '+(v.config?.auth_mode==='ssh'?'SSH 私钥':'HTTPS / PAT'):''}}</small><code>{{v.kind==='aliyun-sae' ? `${v.config?.region} · ${v.config?.oss_bucket||'未配置 OSS'}` : v.endpoint}}</code></div><span :class="v.secret_configured?'st-ok':'st-run'">{{v.secret_configured?'凭据已配置':'无凭据'}}</span><div class="actions"><button class="op op-btn" @click="testConnection(v)">{{testState[v.name]==='testing'?'测试中…':testState[v.name]==='ok'?'✓ 可连接':testState[v.name]==='fail'?'✗ 重试':'测试'}}</button><button class="op op-btn" @click="editConnection(v)">编辑</button><button class="op op-btn del" @click="remove(`api/connections/${v.name}`,v.name)">删除</button></div></article></div>
+    <div v-if="!visibleConnections.length" class="onboarding"><span>🔌</span><h3>添加资源连接</h3><p>只配置当前功能需要的连接；凭据与其他插件共用，不必重复添加。</p><ElButton type="primary" size="small" @click="editConnection()">新建第一个连接</ElButton></div>
   </section>
 
   <section v-if="tab==='hosts'">
@@ -204,7 +206,7 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
 
   <Modal :show="showConnection" title="资源连接" wide @close="showConnection=false">
     <div class="fld"><label>连接名称</label><ElInput v-model="connectionForm.name" placeholder="例如 云效代码凭据" /><small class="help">用于在应用中选择这份凭据，支持中文；名称中不要包含空格或斜杠。</small></div>
-    <div class="fld"><label>类型</label><Sel v-model="connectionForm.kind" :disabled="!!connectionForm.updated_at" :options="Object.entries(KINDS).map(([value,label])=>({value,label}))" width="100%" /></div>
+    <div class="fld"><label>类型</label><Sel v-model="connectionForm.kind" :disabled="!!connectionForm.updated_at" :options="connectionKinds" width="100%" /></div>
     <div v-if="connectionForm.kind==='git'" class="fld"><label>认证方式</label><Sel v-model="gitAuthMode" :options="[{value:'https',label:'HTTPS + 用户名 / PAT'},{value:'ssh',label:'SSH 私钥'}]" width="100%" /><small class="help">认证方式必须与应用中的仓库地址一致；SSH 地址形如 git@codeup.aliyun.com:组织/仓库.git。</small></div>
     <div v-if="connectionForm.kind!=='aliyun-sae'" class="fld">
       <label>{{connectionForm.kind==='git'&&gitAuthMode==='ssh'?'SSH 服务地址':'服务地址'}}</label>

@@ -1,0 +1,6 @@
+name: redis
+display: Redis 工作台
+version: 0.1.0
+backend: delivery-core
+ui_path: /ui/redis
+nav_icon: "⚡"

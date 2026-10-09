@@ -894,7 +894,7 @@ func (s *Store) ApplicationResources(service string) ApplicationResources {
 
 func (s *Store) SaveApplicationResources(service string, resources ApplicationResources) error {
 	service = strings.TrimSpace(service)
-	if s.GetService(service) == nil {
+	if !s.hasResourceApplication(service) {
 		return fmt.Errorf("应用不存在")
 	}
 	requirements := map[string]ApplicationResourceRequirement{}
@@ -941,6 +941,9 @@ func (s *Store) SaveApplicationResources(service string, resources ApplicationRe
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`DELETE FROM application_environment_resources WHERE service=?`, service); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO resource_applications(name) VALUES(?)`, service); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM application_resource_requirements WHERE service=?`, service); err != nil {

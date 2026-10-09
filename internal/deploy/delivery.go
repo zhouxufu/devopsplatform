@@ -26,12 +26,13 @@ type DeliveryNode struct {
 	ChangeIDs    []int64 `json:"change_ids,omitempty"`
 }
 type DeliveryTemplate struct {
-	ID       int64          `json:"id"`
-	Name     string         `json:"name"`
-	Mode     string         `json:"mode"`
-	Services []string       `json:"services"`
-	Nodes    []DeliveryNode `json:"nodes"`
-	Owner    string         `json:"owner"`
+	Workbench string         `json:"workbench,omitempty"`
+	ID        int64          `json:"id"`
+	Name      string         `json:"name"`
+	Mode      string         `json:"mode"`
+	Services  []string       `json:"services"`
+	Nodes     []DeliveryNode `json:"nodes"`
+	Owner     string         `json:"owner"`
 }
 type DeliveryRequest struct {
 	TemplateID  int64            `json:"template_id"`
@@ -113,7 +114,8 @@ func (s *Store) initDeliverySchema() error {
 			return err
 		}
 	}
-	return nil
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO resource_applications(name) SELECT DISTINCT service FROM application_resource_requirements`)
+	return err
 }
 
 func validateDeliveryNodes(nodes []DeliveryNode) error {
@@ -144,6 +146,11 @@ func (s *Store) SaveDeliveryTemplate(v *DeliveryTemplate) error {
 	}
 	if err := validateDeliveryNodes(v.Nodes); err != nil {
 		return err
+	}
+	if v.Workbench != "" {
+		if err := validateWorkbenchTemplate(*v); err != nil {
+			return err
+		}
 	}
 	if v.Mode == "fixed" && len(v.Services) == 0 {
 		for _, node := range v.Nodes {
@@ -250,6 +257,16 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 		return nil, nil, err
 	}
 	p := &DeliveryPlan{Template: *tpl, Environment: *env, Reason: strings.TrimSpace(req.Reason), Nodes: nodes, Services: []DeliveryService{}, Blockers: []string{}, Warnings: []string{}}
+	if tpl.Workbench != "" {
+		candidate := *tpl
+		candidate.Nodes = nodes
+		if err := validateWorkbenchTemplate(candidate); err != nil {
+			return nil, nil, err
+		}
+		if strings.TrimSpace(env.Approvers) == "" {
+			p.Blockers = append(p.Blockers, "工作台操作必须审核，请先为环境配置审核人")
+		}
+	}
 	secrets := map[string]string{}
 	services := map[string]bool{}
 	if tpl.Mode == "fixed" {
@@ -426,6 +443,9 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 		case "manual":
 			manualCount++
 		case "mysql":
+			if strings.TrimSpace(env.Approvers) == "" {
+				p.Blockers = append(p.Blockers, "SQL 写操作必须审核，请先为该环境配置审核人")
+			}
 			ids := append([]int64{}, node.ChangeIDs...)
 			if p.Version != nil {
 				allowed := map[int64]bool{}
@@ -527,7 +547,7 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	planJSON, _ := json.Marshal(p)
 	hash := sha256.Sum256(planJSON)
 	run := &DeliveryRun{Plan: *p, Digest: "sha256:" + hex.EncodeToString(hash[:]), Status: "approved", Owner: actor, CreatedAt: time.Now().Unix(), Revision: 1, Steps: []DeliveryStep{}, envSecrets: secrets}
-	if p.Environment.Protected || len(p.RedisPlans) > 0 {
+	if p.Environment.Protected || len(p.RedisPlans) > 0 || len(p.SQLPlans) > 0 || p.Template.Workbench != "" {
 		run.Status = "pending_approval"
 	}
 	for _, node := range p.Nodes {
@@ -637,8 +657,8 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 	if env == nil || (env.Protected && (v.Approver == "" || !allowedApprover(env.Approvers, v.Approver))) {
 		return nil, fmt.Errorf("环境保护策略已变化，请重新提交审核")
 	}
-	if len(v.Plan.RedisPlans) > 0 && (v.Approver == "" || v.Approver == v.Owner || !allowedApprover(env.Approvers, v.Approver) || !allowedApprover(v.Plan.Environment.Approvers, v.Approver)) {
-		return nil, fmt.Errorf("Redis 操作必须经另一名环境审核人审核，且审核人仍须有权限")
+	if (len(v.Plan.RedisPlans) > 0 || len(v.Plan.SQLPlans) > 0 || v.Plan.Template.Workbench != "") && (v.Approver == "" || v.Approver == v.Owner || !allowedApprover(env.Approvers, v.Approver) || !allowedApprover(v.Plan.Environment.Approvers, v.Approver)) {
+		return nil, fmt.Errorf("SQL/Redis 工作台操作必须经另一名环境审核人审核，且审核人仍须有权限")
 	}
 	if env.RequireReason && v.Plan.Reason == "" {
 		return nil, fmt.Errorf("环境已要求发布原因，请重新提交执行单")
@@ -884,7 +904,15 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 	decode := func(w http.ResponseWriter, r *http.Request, v any) error {
 		return json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(v)
 	}
-	mux.HandleFunc("GET /api/delivery/templates", func(w http.ResponseWriter, r *http.Request) { reply(w, st.DeliveryTemplates(), nil) })
+	mux.HandleFunc("GET /api/delivery/templates", func(w http.ResponseWriter, r *http.Request) {
+		out := []DeliveryTemplate{}
+		for _, t := range st.DeliveryTemplates() {
+			if t.Workbench == "" {
+				out = append(out, t)
+			}
+		}
+		reply(w, out, nil)
+	})
 	saveTemplate := func(w http.ResponseWriter, r *http.Request) {
 		var v DeliveryTemplate
 		if err := decode(w, r, &v); err != nil {

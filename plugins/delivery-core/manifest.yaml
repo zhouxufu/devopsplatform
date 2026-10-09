@@ -1,0 +1,11 @@
+name: delivery-core
+display: 共享交付执行服务
+version: 0.1.0
+internal: true
+binary: ../../bin/deploy
+admin_addr: 127.0.0.1:19803
+args:
+  - -admin-addr
+  - 127.0.0.1:19803
+  - -data
+  - ../../runtime/deploy-data

@@ -237,7 +237,7 @@ func normalizeRedisChange(c *Change) error {
 	return err
 }
 func (s *Store) redisBinding(service, environment, alias string) (*ResourceConnection, error) {
-	if s.GetService(service) == nil || s.GetEnvironment(environment) == nil {
+	if !s.hasResourceApplication(service) || s.GetEnvironment(environment) == nil {
 		return nil, fmt.Errorf("应用或环境不存在")
 	}
 	r := s.ApplicationResources(service)

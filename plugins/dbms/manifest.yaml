@@ -1,0 +1,6 @@
+name: dbms
+display: 数据库工作台
+version: 0.1.0
+backend: delivery-core
+ui_path: /ui/dbms
+nav_icon: "🗄"

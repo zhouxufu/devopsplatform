@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -74,6 +75,25 @@ func (g *Gateway) Routes(registry *Registry, bus *Bus) http.Handler {
 			http.Error(w, `{"error":"plugin not found"}`, 404)
 			return
 		}
+		for _, m := range g.manifests {
+			if m.Name != name {
+				continue
+			}
+			if m.Internal {
+				http.NotFound(w, r)
+				return
+			}
+			if m.Backend != "" {
+				if (name == "dbms" || name == "redis") && r.URL.Path != "/ui" && !strings.HasPrefix(r.URL.Path, "/assets/") && !strings.HasPrefix(r.URL.Path, "/api/workbench/"+name+"/") {
+					http.NotFound(w, r)
+					return
+				}
+				if r.URL.Path == "/ui" {
+					r.URL.Path = m.UIPath
+				}
+			}
+			break
+		}
 		user, role := currentUser(r), currentRole(r)
 		if g.auth == "" {
 			user, role = "local", RoleAdmin
@@ -87,7 +107,10 @@ func (g *Gateway) Routes(registry *Registry, bus *Bus) http.Handler {
 	// 进程，但公共页面只使用这个稳定入口，不感知部署插件的内部路由。
 	mux.HandleFunc("/api/resources/", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.RLock()
-		p, ok := g.proxies["deploy"]
+		p, ok := g.proxies["delivery-core"]
+		if !ok {
+			p, ok = g.proxies["deploy"]
+		}
 		g.mu.RUnlock()
 		if !ok {
 			http.Error(w, `{"error":"资源服务不可用"}`, http.StatusServiceUnavailable)
@@ -107,7 +130,13 @@ func (g *Gateway) Routes(registry *Registry, bus *Bus) http.Handler {
 	mux.HandleFunc("GET /api/plugins", func(w http.ResponseWriter, r *http.Request) {
 		g.mu.RLock()
 		defer g.mu.RUnlock()
-		writeJSON(w, g.manifests)
+		visible := []*Manifest{}
+		for _, m := range g.manifests {
+			if !m.Internal {
+				visible = append(visible, m)
+			}
+		}
+		writeJSON(w, visible)
 	})
 	registry.HandleRoutes(mux)
 	bus.HandleRoutes(mux)
