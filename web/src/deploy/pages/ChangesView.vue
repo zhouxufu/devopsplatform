@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import WorkDeliveryEditor from '../components/WorkDeliveryEditor.vue';
+import GitBranchSelect from '../components/GitBranchSelect.vue';
 import DataSyncTasks from '../components/DataSyncTasks.vue';
 import Modal from "../../shared/components/Modal.vue";
 import HelpTip from "../../shared/components/HelpTip.vue";
@@ -587,7 +588,7 @@ onMounted(async () => {
               all-label="不关联应用"
               filterable
               width="100%" /></label
-          ><label v-if="form.kind!=='mysql'" class="span"
+          ><label v-if="form.kind==='code'" class="span">代码分支<GitBranchSelect v-model="form.reference" :repositories="form.service?[{service:form.service}]:[]" /></label><label v-if="form.kind!=='mysql'&&form.kind!=='code'" class="span"
             >{{
               form.kind === "code"
                 ? "代码分支"

@@ -36,6 +36,7 @@ func sameOrigin(r *http.Request) bool {
 // Routes 管理面
 func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib) *http.ServeMux {
 	mux := http.NewServeMux()
+	registerGitBranchRoutes(mux, st)
 	applicationObserver := appcatalog.NewObserver(busURL)
 	wj := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")

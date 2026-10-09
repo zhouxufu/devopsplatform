@@ -1,5 +1,6 @@
 <script setup>
 import BuildEnvironmentEditor from '../components/BuildEnvironmentEditor.vue'
+import GitBranchSelect from '../components/GitBranchSelect.vue'
 import { ref, onMounted, computed, inject } from 'vue'
 import { useRouter } from 'vue-router'
 import Modal from '../../shared/components/Modal.vue'
@@ -16,6 +17,7 @@ const services = ref([]), catalogApps = ref([]), lastBuild = ref({}), lastArtifa
 const showNew = ref(false), editing = ref(null), wizardStep = ref(1)
 const form = ref({}), showAdvancedBuild = ref(false)
 const buildEnvironment = ref({mode:'local'})
+const gitConnections = ref([])
 const searchText = ref(''), category = ref('all'), activeTags = ref([])
 const TYPES = {
   jar: { label: 'Java JAR', icon: '☕', hint: 'Maven / Gradle 构建，发布到 Linux 主机' },
@@ -27,6 +29,7 @@ const isSSHGitURL=value=>/^(?:ssh:\/\/|[^/@\s]+@[^:/\s]+:)/i.test((value||'').tr
 async function load() {
   const [svcs, runs, artifacts, deploys, catalog] = await Promise.all([api('api/services'), api('api/pipeline/runs?limit=200'), api('api/artifacts?limit=300'), api('api/deploys?limit=500'), api('/api/registry/applications').catch(() => [])])
   services.value = svcs
+  gitConnections.value = (await api('api/connections')).filter(c=>c.kind==='git')
   catalogApps.value = Array.isArray(catalog) ? catalog : []
   const lb = {}, la = {}, lr = {}
   for (const b of runs) if (!lb[b.service]) lb[b.service] = b
@@ -41,13 +44,13 @@ async function load() {
 onMounted(load)
 
 function defaults(type = 'jar') {
-	const base = { name: '', application_id: '', git_url: '', branch: '', artifact_type: type, tags: [], tags_text: '', remote_dir: '', start_cmd: '', stop_cmd: '', health_url: '' }
+	const base = { name: '', application_id: '', git_url: '', git_connection: '', branch: '', artifact_type: type, tags: [], tags_text: '', remote_dir: '', start_cmd: '', stop_cmd: '', health_url: '' }
   if (type === 'jar') return { ...base, build_tool: 'maven', maven_executable: 'auto', maven_goals: 'clean package', maven_profiles: '', maven_properties: '', maven_settings_path: '', gradle_executable: 'auto', gradle_tasks: 'clean build', gradle_excluded_tasks: '', gradle_project_properties: '', gradle_system_properties: '', artifact_glob: 'target/*.jar', build_cmd: '' }
   if (type === 'static') return { ...base, build_tool: 'command', build_cmd: 'npm ci && npm run build', artifact_glob: 'dist' }
   return { ...base, build_tool: 'command', build_cmd: '', artifact_glob: '', image_name: '' }
 }
 function selectTemplate(type) {
-	const keep = { name: form.value.name, application_id: form.value.application_id, git_url: form.value.git_url, branch: form.value.branch, workdir: form.value.workdir, tags: form.value.tags, tags_text: form.value.tags_text }
+	const keep = { name: form.value.name, application_id: form.value.application_id, git_url: form.value.git_url, git_connection: form.value.git_connection, branch: form.value.branch, workdir: form.value.workdir, tags: form.value.tags, tags_text: form.value.tags_text }
   form.value = { ...defaults(type), ...keep }
   buildEnvironment.value = { mode: 'local' }
 }
@@ -94,11 +97,12 @@ async function save() {
 	const body = { ...form.value }
 	body.tags = [...new Set((body.tags_text || '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean))].slice(0, 12)
 	delete body.tags_text
+  delete body.git_connection
   if (body.artifact_type === 'image') body.build_tool = 'command'
   delete body.steps
   const r = await fetch('api/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   if (r.ok) {
-    const deliveryResponse = await fetch(`api/services/${encodeURIComponent(body.name)}/delivery`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...serviceDelivery.value[body.name],build_environment:buildEnvironment.value})})
+    const deliveryResponse = await fetch(`api/services/${encodeURIComponent(body.name)}/delivery`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...serviceDelivery.value[body.name],git_connection:form.value.git_connection,build_environment:buildEnvironment.value})})
     if (!deliveryResponse.ok) {
       editing.value = body
       wizardStep.value = 2
@@ -123,6 +127,7 @@ async function del(s) {
 }
 
 const bcSvc = ref(null), bcBranch = ref(''), bcMavenProfiles = ref(''), bcMavenProperties = ref(''), bcGradleTasks = ref(''), bcGradleExcludedTasks = ref(''), bcGradleProjectProperties = ref(''), bcGradleSystemProperties = ref(''), showBC = ref(false)
+const bcSubmitting = ref(false)
 function build(s) {
   bcSvc.value = s; bcBranch.value = s.branch || ''
   bcMavenProfiles.value = s.maven_profiles || ''; bcMavenProperties.value = s.maven_properties || ''
@@ -130,9 +135,14 @@ function build(s) {
   bcGradleProjectProperties.value = s.gradle_project_properties || ''; bcGradleSystemProperties.value = s.gradle_system_properties || ''; showBC.value = true
 }
 async function confirmBuild() {
-  const s = bcSvc.value; showBC.value = false
-  const r = await (await fetch('api/pipeline/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: s.name, branch: bcBranch.value.trim(), override_maven: s.build_tool === 'maven', maven_profiles: bcMavenProfiles.value, maven_properties: bcMavenProperties.value, override_gradle: s.build_tool === 'gradle', gradle_tasks: bcGradleTasks.value, gradle_excluded_tasks: bcGradleExcludedTasks.value, gradle_project_properties: bcGradleProjectProperties.value, gradle_system_properties: bcGradleSystemProperties.value }) })).json()
-  if (r.id) router.push(`/run/${r.id}`); else toast(r.error || '构建发起失败', 'error')
+  if (bcSubmitting.value) return
+  const s = bcSvc.value; bcSubmitting.value = true
+  try {
+    const response = await fetch('api/pipeline/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: s.name, branch: bcBranch.value.trim(), override_maven: s.build_tool === 'maven', maven_profiles: bcMavenProfiles.value, maven_properties: bcMavenProperties.value, override_gradle: s.build_tool === 'gradle', gradle_tasks: bcGradleTasks.value, gradle_excluded_tasks: bcGradleExcludedTasks.value, gradle_project_properties: bcGradleProjectProperties.value, gradle_system_properties: bcGradleSystemProperties.value }) })
+    const r = await response.json()
+    if (response.ok && r.id) { showBC.value = false; router.push(`/run/${r.id}`) }
+    else toast(r.error || '构建发起失败', 'error')
+  } catch(e) { toast(e.message, 'error') } finally { bcSubmitting.value = false }
 }
 const stCls = s => s === 'success' ? 'st-ok' : s === 'running' ? 'st-run' : s ? 'st-fail' : ''
 const buildText = s => s === 'success' ? '构建成功' : s === 'running' ? '构建中' : s ? '构建失败' : '尚未构建'
@@ -204,9 +214,9 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
       <ElButton type="primary" @click="openNew">接入应用</ElButton>
     </div>
 
-    <Modal :show="showBC" :title="`构建 ${bcSvc?.name}`" @close="showBC = false">
+    <Modal :show="showBC" :title="`构建 ${bcSvc?.name}`" @close="!bcSubmitting && (showBC = false)">
       <div class="summary-line"><span>{{ TYPES[bcSvc?.artifact_type]?.icon }}</span><div><b>{{ repoName(bcSvc?.git_url) }}</b><small>{{ TYPES[bcSvc?.artifact_type]?.label }}</small></div></div>
-      <div class="fld"><label>本次构建分支</label><ElInput v-model="bcBranch" placeholder="留空使用仓库默认分支" /></div>
+      <div class="fld"><label>本次构建分支</label><GitBranchSelect v-model="bcBranch" :repositories="bcSvc?.git_url?[{service:bcSvc.name}]:[]" :disabled="bcSubmitting" /></div>
       <details v-if="bcSvc?.build_tool === 'maven'" class="advanced-box">
         <summary>本次覆盖 Maven 参数（可选）</summary>
         <div class="fld"><label>Profiles</label><ElInput v-model="bcMavenProfiles" placeholder="ci,release" /></div>
@@ -219,7 +229,7 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
         <div class="fld"><label>-P 项目属性（每行 key=value）</label><ElInput v-model="bcGradleProjectProperties" type="textarea" :rows="3" /></div>
         <div class="fld"><label>-D 系统属性（每行 key=value）</label><ElInput v-model="bcGradleSystemProperties" type="textarea" :rows="3" /></div>
       </details>
-      <div class="modal-actions"><ElButton @click="showBC = false">取消</ElButton><ElButton type="primary" @click="confirmBuild">开始构建</ElButton></div>
+      <div class="modal-actions"><ElButton :disabled="bcSubmitting" @click="showBC = false">取消</ElButton><ElButton type="primary" :loading="bcSubmitting" @click="confirmBuild">开始构建</ElButton></div>
     </Modal>
 
     <Modal :show="showNew" :title="editing ? '编辑应用' : '接入应用'" wide @close="showNew = false">
@@ -231,9 +241,10 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
         <h3 class="wizard-title">连接代码仓库</h3>
         <div v-if="!editing && availableCatalogApps.length" class="discovered-app"><div class="fld"><label>关联已发现应用（可选）</label><Sel :model-value="form.application_id" :options="availableCatalogApps.map(app=>({value:app.application_id,label:`${app.name} · ${(app.sources||[]).length?(app.sources||[]).map(s=>s==='otel'?'OTel':s==='logs'?'日志':s).join(' + '):'历史数据'}`}))" all-label="创建全新应用" filterable width="100%" @update:model-value="selectCatalogApplication" /></div><small>日志或 OTel 先上报时会生成待接入应用；选中后沿用同一个 application_id。</small></div>
         <div class="fld"><label>应用名称</label><ElInput v-model="form.name" :disabled="!!editing" placeholder="例如 order-api" /></div>
-        <div class="fld"><label>Git 仓库</label><ElInput v-model="form.git_url" placeholder="推荐 https://codeup.aliyun.com/组织/项目/仓库.git" /><small v-if="isSSHGitURL(form.git_url)" class="git-url-warning">检测到 SSH 仓库地址。资源中心的用户名/PAT 凭据只适用于 HTTPS；SSH 地址依赖 Runner 自行配置私钥和 known_hosts。</small></div>
+        <div class="fld"><label>Git 仓库</label><ElInput v-model="form.git_url" placeholder="https://.../repo.git 或 git@...:repo.git" /><small v-if="isSSHGitURL(form.git_url)" class="git-url-warning">SSH 仓库请选择 SSH 私钥凭据，并在资源中心获取、确认主机指纹。</small></div>
+        <div v-if="form.git_url" class="fld"><label>Git 代码凭据</label><Sel v-model="form.git_connection" :options="[{value:'',label:'公开仓库 / 使用执行环境凭据'},...gitConnections.map(c=>({value:c.name,label:`${c.name} · ${c.config?.auth_mode==='ssh'?'SSH':'HTTPS'}`}))]" filterable width="100%" /></div>
         <div v-if="form.workdir && !form.git_url" class="local-source">当前使用本地工作目录：<code>{{ form.workdir }}</code></div>
-        <div class="fld"><label>默认分支</label><ElInput v-model="form.branch" placeholder="留空自动使用仓库默认分支" /></div>
+        <div class="fld"><label>默认分支</label><GitBranchSelect v-model="form.branch" :repositories="[{git_url:form.git_url||'',connection:form.git_connection||''}]" /></div>
 		<div class="fld"><label>应用标签</label><ElInput v-model="form.tags_text" placeholder="例如：核心、交易、Java（逗号分隔，最多 12 个）" /><small class="field-help">前端/后端会根据制品类型自动分类，这里填写业务、团队或技术标签。</small></div>
       </div>
 

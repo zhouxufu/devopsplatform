@@ -1,5 +1,6 @@
 <script setup>
 import BuildEnvironmentEditor from '../components/BuildEnvironmentEditor.vue'
+import GitBranchSelect from '../components/GitBranchSelect.vue'
 import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor.vue'
 import { ref, computed, onUnmounted, watch, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -32,6 +33,7 @@ const showReleaseDetail = ref(false), activeRelease = ref(null)
 const showInstances = ref(false), instanceTarget = ref(null), instances = ref([]), instancesLoading = ref(false)
 const pendingInstanceAction = ref(null), instanceReason = ref(''), instanceOperating = ref(false)
 const showOneClickDeploy = ref(false), oneClickDeploying = ref(false)
+const showBuildRun = ref(false), runBranch = ref(''), startingBuild = ref(false)
 const oneClickForm = ref({ environment: '', branch: '', reason: '' })
 let timer = null, deployTimer = null
 
@@ -294,10 +296,16 @@ async function saveBuildConfiguration(showSuccess = true) {
 }
 async function runPipeline() {
   if (tab.value === 'build' && buildConfigurationDirty.value && !(await saveBuildConfiguration(false))) return
-  const res = await fetch('api/pipeline/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: name.value }) })
-  const r = await res.json()
-  if (res.ok && r.id) router.push(`/run/${r.id}`)
-  else toast(r.error || '流水线发起失败', 'error')
+  runBranch.value = svc.value?.branch || ''; showBuildRun.value = true
+}
+async function startBuildRun() {
+  startingBuild.value = true
+  try {
+    const res = await fetch('api/pipeline/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: name.value, branch: runBranch.value.trim() }) })
+    const r = await res.json()
+    if (res.ok && r.id) { showBuildRun.value = false; router.push(`/run/${r.id}`) }
+    else toast(r.error || '流水线发起失败', 'error')
+  } catch(e) { toast(e.message, 'error') } finally { startingBuild.value = false }
 }
 function openOneClickDeploy(target = null) {
   const preferred = target || selectedTarget.value || targets.value.find(targetReady) || targets.value[0]
@@ -587,7 +595,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
         <section class="settings-card build-source-card">
           <div class="card-title"><span>1</span><div><h4>代码来源</h4><small>仓库、默认分支与应用标签</small></div></div>
           <div class="fld"><label>Git 仓库</label><ElInput v-model="svc.git_url" placeholder="https://codeup.aliyun.com/组织/项目/仓库.git" /></div>
-          <div class="two"><div class="fld"><label>默认分支</label><ElInput v-model="svc.branch" placeholder="留空使用远程默认分支" /></div><div class="fld"><label>应用标签</label><ElInput v-model="buildTagsText" placeholder="核心、AI、Java" /></div></div>
+          <div class="fld"><label>默认分支</label><GitBranchSelect v-model="svc.branch" :repositories="[{service:name,git_url:svc.git_url||'',connection:delivery.git_connection||''}]" /></div><div class="fld"><label>应用标签</label><ElInput v-model="buildTagsText" placeholder="核心、AI、Java" /></div>
           <small class="config-help">切换 HTTPS/SSH 地址时，请在下方选择相同认证方式的 Git 凭据。</small>
         </section>
 
@@ -743,10 +751,15 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
       </div>
     </Modal>
 
+    <Modal :show="showBuildRun" :title="`构建 ${name}`" wide @close="showBuildRun=false">
+      <div class="fld"><label>本次构建分支</label><GitBranchSelect v-model="runBranch" :repositories="svc?.git_url?[{service:name}]:[]" :disabled="startingBuild" /></div>
+      <p class="dim">只覆盖本次构建，不修改应用默认分支。</p>
+      <div class="one-click-actions"><ElButton :disabled="startingBuild" @click="showBuildRun=false">取消</ElButton><ElButton type="primary" :loading="startingBuild" @click="startBuildRun">开始构建</ElButton></div>
+    </Modal>
     <Modal :show="showOneClickDeploy" title="一键部署" wide @close="showOneClickDeploy=false">
       <div class="one-click-flow"><span>代码</span><i>→</i><span>构建</span><i>→</i><span>不可变制品</span><i>→</i><span>{{oneClickTarget?.protected?'提交审批':'自动发布'}}</span></div>
       <div class="fld"><label>目标环境</label><Sel v-model="oneClickForm.environment" :options="targets.map(t=>({value:t.environment,label:`${t.protected?'🔒 ':''}${t.display_name}${targetReady(t)?'':'（资源未配置）'}`}))" width="100%" /></div>
-      <div class="fld"><label>本次构建分支</label><ElInput v-model="oneClickForm.branch" placeholder="留空使用仓库默认分支" /></div>
+      <div class="fld"><label>本次构建分支</label><GitBranchSelect v-model="oneClickForm.branch" :repositories="svc?.git_url?[{service:name}]:[]" :disabled="oneClickDeploying" /></div>
       <div class="one-click-summary"><div><small>构建环境</small><b>{{buildEnvironmentSummary}}</b></div><div><small>发布目标</small><b>{{targetResource(oneClickTarget)}}</b></div><div><small>发布策略</small><b>{{oneClickTarget?.protected?'受保护，需要审批':`每批 ${oneClickTarget?.batch_size||1} 台`}}</b></div></div>
       <div v-if="oneClickTarget?.require_reason" class="fld"><label>发布原因</label><ElInput v-model="oneClickForm.reason" type="textarea" :rows="2" placeholder="该环境要求填写" /></div>
       <div v-if="oneClickTarget?.protected" class="approval-note">🔒 构建成功后只会创建待审批发布单，不会绕过审批直接部署。审批人：{{oneClickTarget.approvers||'未配置'}}。</div>

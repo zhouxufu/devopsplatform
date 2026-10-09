@@ -4,6 +4,7 @@ import Modal from '../../shared/components/Modal.vue';
 import Sel from '../../shared/components/Sel.vue';
 import {ElButton,ElInput} from '../../shared/components/ui.js';
 import ApplicationResourcesEditor from './ApplicationResourcesEditor.vue';
+import GitBranchSelect from './GitBranchSelect.vue';
 import {deliveryRows,expandDeliveryRows} from '../deliveryContent.js';
 import {toast} from '../../shared/composables/toast.js';
 const props=defineProps({show:Boolean,item:Object,services:Array,workItems:Array,canManage:Function});
@@ -51,7 +52,7 @@ function configure(row){bindingService.value=row.service;showBindings.value=true
  <article v-for="row in visibleRows" :key="row.key" class="content-row">
  <div class="row-head"><strong>{{row.originals.length?'已有内容 #'+row.originals.map(c=>c.id).join('、'):'新增内容'}}</strong><span v-if="row.readonly">{{row.status==='ready'?'已就绪 · 只读':'他人内容 · 只读'}}</span><ElButton v-if="!row.originals.length" size="small" @click="rows=rows.filter(r=>r.key!==row.key)">移除</ElButton></div>
  <div class="grid">
- <template v-if="row.kind==='code'"><label>关联分支<ElInput v-model="row.reference" :disabled="row.readonly||saving" placeholder="feature/menu（同一代码仓库的应用可共用）" /></label><label>影响应用<Sel v-model="row.services" :disabled="row.readonly||saving" :options="services.map(s=>s.name)" multiple filterable width="100%" /></label><p class="hint span" v-if="new Set(services.filter(s=>row.services.includes(s.name)).map(s=>s.git_url)).size>1">当前包含不同仓库，请确认分支名在每个仓库都存在；不同分支应分开添加。</p></template>
+ <template v-if="row.kind==='code'"><label>影响应用<Sel v-model="row.services" :disabled="row.readonly||saving" :options="services.map(s=>s.name)" multiple filterable width="100%" /></label><label>关联分支<GitBranchSelect v-model="row.reference" :disabled="row.readonly||saving" :repositories="row.services.map(service=>({service}))" /></label><p class="hint span" v-if="new Set(services.filter(s=>row.services.includes(s.name)).map(s=>s.git_url)).size>1">当前包含不同仓库，同步后仅列出所有应用的共同分支；不同分支应分开添加。</p></template>
  <template v-else>
  <label v-if="section==='manual'&&!row.originals.length">操作类型<Sel v-model="row.kind" :disabled="saving" :options="[{value:'manual',label:'人工操作'},{value:'redis',label:'Redis 命令（仅保存，执行器未接通）'},{value:'artifact',label:'应用制品引用'}]" width="100%" /></label>
  <label>应用<Sel v-model="row.service" :disabled="row.readonly||saving" :options="services.map(s=>s.name)" filterable width="100%" @change="loadResources(row.service)" /></label>
