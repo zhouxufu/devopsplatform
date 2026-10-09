@@ -12,6 +12,12 @@ let explicitPreview = false
 const previewRequests = []
 const relativeImage = 'https://zentao.example.test/upload/menu.png'
 const failedImage = 'https://zentao.example.test/zentao/file-read-42.png'
+const placeholderImages = [
+  'https://zentao.example.test/zentao/file-read-43660.png',
+  'https://zentao.example.test/zentao/file-read-43661.jpg',
+  'https://zentao.example.test/zentao/file-read-43662.html',
+  'https://zentao.example.test/zentao/index.php?m=file&f=read&fileID=43663',
+]
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64')
 page.on('pageerror', e => errors.push(e.message))
 const html = `<p>服务名：<strong>auth</strong> &amp; API</p><p>异常类型：BusinessException</p>
@@ -30,10 +36,13 @@ const fixtures = [
   { id: 990002, title: '纯文本需求', kind: 'requirement', status: 'open', owner: 'local', description: plain },
   { id: 990003, title: '空说明需求', kind: 'requirement', status: 'open', owner: 'local', description: null },
   { id: 990004, title: '只有图片的需求', kind: 'requirement', status: 'open', owner: 'local', description: '<p><img src="../upload/menu.png" alt="菜单截图"></p>', url: 'https://zentao.example.test/zentao/bug-view-40.html' },
+  { id: 990005, title: '禅道附件占位符', kind: 'bug', status: 'closed', owner: 'local', description: '<p><img src="{43660.png}" alt="实际附件"><img src="%7B43661.JPG%7D" alt="编码附件"><img src="{43662}" alt="无扩展名附件"><img src="../upload/menu.png" alt="普通链接图片"><img src="{0.png}"><img src="{43660.svg}"><img src="{43660.php}"><img src="../{43660.png}"><img src="{43660.png}?redirect=evil"></p>', url: 'https://zentao.example.test/zentao/bug-view-41.html' },
+  { id: 990006, title: '禅道 GET 附件', kind: 'bug', status: 'closed', owner: 'local', description: '<p><img src="{43663.jpg}" alt="GET 路由附件"></p>', url: 'https://zentao.example.test/zentao/index.php?m=bug&f=view&bugID=42' },
+  { id: 990007, title: '未知来源附件', kind: 'requirement', status: 'open', owner: 'local', description: '<img src="{43660.png}">', url: 'https://other.example.test/issues/41' },
 ]
 await page.route('**/*', async route => {
   const request = route.request(), url = new URL(request.url())
-  if (explicitPreview && [relativeImage, failedImage, 'https://evil.example.test/beacon'].includes(request.url())) {
+  if (explicitPreview && [relativeImage, failedImage, 'https://evil.example.test/beacon', ...placeholderImages].includes(request.url())) {
     previewRequests.push({ url: request.url(), referer: request.headers().referer })
     return request.url() === failedImage ? route.fulfill({ status: 403, body: 'Login required' }) : route.fulfill({ contentType: 'image/png', body: png })
   }
@@ -115,6 +124,41 @@ try {
   await imageCard.getByRole('button', { name: '查看需求', exact: true }).click()
   assert.equal(await panel.locator('.description-images button').count(), 1)
   assert.equal(await body.locator('img').count(), 0)
+  await ui.getByRole('button', { name: '← 返回列表', exact: true }).click()
+  await ui.getByRole('button', { name: '禅道附件占位符', exact: true }).click()
+  const mixedImages = [...placeholderImages.slice(0, 3), relativeImage]
+  assert.equal(await panel.locator('.description-images button').count(), mixedImages.length, 'Invalid placeholder admitted or mixed image missing')
+  assert.equal(previewRequests.length, 2, 'Placeholder loaded before click')
+  explicitPreview = true
+  for (let index = 0; index < mixedImages.length; index++) {
+    await panel.locator('.description-images button').nth(index).click()
+    await preview.locator('img').evaluate(img => new Promise((resolve, reject) => { if (img.complete) return img.naturalWidth ? resolve() : reject(new Error('Image failed')); img.addEventListener('load', resolve, { once: true }); img.addEventListener('error', reject, { once: true }) }))
+    assert.equal(await preview.locator('img').getAttribute('src'), mixedImages[index])
+    assert.equal(await preview.getByRole('link', { name: '打开原图', exact: true }).getAttribute('href'), mixedImages[index])
+    await preview.getByRole('button', { name: '关闭预览', exact: true }).click()
+    await preview.waitFor({ state: 'hidden' })
+  }
+  const requestsAfterMixed = previewRequests.length
+  explicitPreview = false
+  await ui.getByRole('button', { name: '← 返回列表', exact: true }).click()
+  await ui.getByRole('button', { name: '禅道 GET 附件', exact: true }).click()
+  assert.equal(previewRequests.length, requestsAfterMixed, 'GET placeholder loaded before click')
+  explicitPreview = true
+  await panel.getByRole('button', { name: '查看图片 1 · GET 路由附件', exact: true }).click()
+  await preview.locator('img').evaluate(img => new Promise((resolve, reject) => { if (img.complete) return img.naturalWidth ? resolve() : reject(new Error('Image failed')); img.addEventListener('load', resolve, { once: true }); img.addEventListener('error', reject, { once: true }) }))
+  assert.equal(await preview.locator('img').getAttribute('src'), placeholderImages[3])
+  assert.equal(await preview.getByRole('link', { name: '打开原图', exact: true }).getAttribute('href'), placeholderImages[3])
+  await preview.getByRole('button', { name: '关闭预览', exact: true }).click()
+  await preview.waitFor({ state: 'hidden' })
+  // The normal URL was previewed earlier and Chrome may reuse its decoded
+  // image without another request. All new attachment URLs must be fetched.
+  assert.deepEqual(previewRequests.slice(2).filter(r => r.url !== relativeImage), placeholderImages.map(url => ({ url, referer: undefined })))
+  assert(previewRequests.slice(2).filter(r => r.url === relativeImage).every(r => r.referer === undefined))
+  explicitPreview = false
+  await ui.getByRole('button', { name: '← 返回列表', exact: true }).click()
+  await ui.getByRole('button', { name: '未知来源附件', exact: true }).click()
+  assert.equal(await panel.locator('.description-images button').count(), 0)
+  assert.equal(await body.innerText(), '[图片地址不可用]')
   assert.deepEqual(errors, []); assert.deepEqual(writes, []); assert.deepEqual(remoteRequests, [])
-  console.log(JSON.stringify({ ok: true, embedded, checks: ['two-line list summary', 'HTML formatting', 'entities and plain text', 'expand/collapse', 'null description', 'safe relative links', 'no automatic image requests', 'click-to-load preview', 'safe relative image paths', 'login failure fallback', 'unsafe image URLs blocked', 'image-only description', 'three viewport widths', 'no real writes'] }))
+  console.log(JSON.stringify({ ok: true, embedded, checks: ['two-line list summary', 'HTML formatting', 'entities and plain text', 'expand/collapse', 'null description', 'safe relative links', 'no automatic image requests', 'click-to-load preview', 'safe relative image paths', 'ZenTao attachment placeholders', 'encoded and extensionless placeholders', 'ZenTao GET route', 'invalid placeholders blocked', 'login failure fallback', 'unsafe image URLs blocked', 'image-only description', 'three viewport widths', 'no real writes'] }))
 } finally { await browser.close() }

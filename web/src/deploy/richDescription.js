@@ -10,6 +10,32 @@ export function safeDescriptionURL(value, base) {
   } catch { return '' }
 }
 
+// ZenTao 16 stores editor attachments as {fileID.extension}, not a URL.
+// Derive only its read-only attachment route from the external record route;
+// never reinterpret arbitrary braces as a relative path or accept an origin
+// supplied by the attachment itself. This also handles already-synced records.
+export function descriptionImageURL(value, sourceURL = '') {
+  let source = String(value ?? '').trim()
+  if (!source) return ''
+  try { if (/^%7b/i.test(source)) source = decodeURIComponent(source) } catch { return '' }
+  if (!/[{}]/.test(source)) return safeDescriptionURL(source, safeDescriptionURL(sourceURL))
+  const placeholder = /^\{([1-9]\d*)(?:\.(png|jpe?g|gif|webp|bmp|avif))?\}$/i.exec(source)
+  const base = safeDescriptionURL(sourceURL)
+  if (!placeholder || !base) return ''
+  const record = new URL(base)
+  const filename = record.pathname.split('/').pop()
+  if (/^(bug|story|task)-view-\d+\.html$/i.test(filename)) {
+    return new URL(`file-read-${placeholder[1]}.${(placeholder[2] || 'html').toLowerCase()}`, record).href
+  }
+  if (filename === 'index.php' && /^(bug|story|task)$/.test(record.searchParams.get('m') || '') && record.searchParams.get('f') === 'view') {
+    record.search = ''; record.hash = ''
+    record.searchParams.set('m', 'file'); record.searchParams.set('f', 'read')
+    record.searchParams.set('fileID', placeholder[1])
+    return record.href
+  }
+  return ''
+}
+
 // The list uses text, while details use this same sanitized, basic-HTML allowlist.
 // Images become text markers and explicit preview descriptors, never live <img>
 // nodes. Merely opening a list/detail must not load remote images or beacons.
@@ -31,7 +57,7 @@ export function prepareDescription(value, sourceURL = '') {
   const images = []
   for (const img of fragment.querySelectorAll('img')) {
     const rawSource = img.getAttribute('src') || ''
-    const url = rawSource.trim() ? safeDescriptionURL(rawSource, base) : ''
+    const url = descriptionImageURL(rawSource, base)
     const marker = document.createElement('span')
     if (url) {
       const label = (img.getAttribute('alt') || '').trim().slice(0, 80)
