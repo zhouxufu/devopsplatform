@@ -67,6 +67,7 @@ var deployMigrationTables = func() []deployMigrationTable {
 		migrationTable("delivery_runs", "id,plan,digest,status,execution,env_secrets,owner,approver,created_at,revision", "id"),
 		migrationTable("change_payloads", "change_id,document", "change_id"),
 		migrationTable("data_sync_tasks", "id,document,owner,revision", "id"),
+		migrationTable("workbench_queries", "id,kind,document,status,owner,revision", "id"),
 		migrationTable("issue_sync_state", "connection,last_at,status,detail", "connection"),
 		migrationTable("external_work_items", "connection,kind,external_id,work_item_id", "connection,kind,external_id"),
 		migrationTable("sql_execution_ledger", "connection,database_name,change_id,digest,status,run_id,node_id,detail", "connection,database_name,change_id"),

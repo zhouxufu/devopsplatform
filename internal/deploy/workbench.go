@@ -2,14 +2,12 @@ package deploy
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"logplatform/internal/appcatalog"
 )
@@ -122,36 +120,7 @@ func registerWorkbenchRoutes(mux *http.ServeMux, st *Store, busURL string) {
 				writeIntegrationJSON(w, out, nil)
 				return
 			}
-			if rest == "query" && r.Method == http.MethodPost && kind == "dbms" {
-				var req struct {
-					Service     string `json:"service"`
-					Environment string `json:"environment"`
-					Alias       string `json:"resource_alias"`
-					SQL         string `json:"sql"`
-				}
-				if json.Unmarshal(raw, &req) != nil {
-					fail("查询参数无效")
-					return
-				}
-				q, err := parseSyncQuery(req.SQL)
-				if err != nil {
-					writeIntegrationJSON(w, nil, err)
-					return
-				}
-				c, err := st.sqlBinding(req.Service, req.Environment, req.Alias)
-				if err != nil {
-					writeIntegrationJSON(w, nil, err)
-					return
-				}
-				ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-				defer cancel()
-				rows, err := readSyncRows(ctx, c, q)
-				if err != nil {
-					fail("只读查询失败，请检查连接、字段、权限或缩小 WHERE 范围")
-					return
-				}
-				st.Audit(r.Header.Get("X-User"), "query", "mysql", c.Name, map[string]any{"service": req.Service, "environment": req.Environment, "table": q.Table, "rows": len(rows)})
-				writeIntegrationJSON(w, map[string]any{"columns": q.Columns, "rows": rows}, nil)
+			if st.handleWorkbenchQueries(w, r, kind, rest, raw) {
 				return
 			}
 			allowed := rest == "environments" && isGet
@@ -198,6 +167,13 @@ func registerWorkbenchRoutes(mux *http.ServeMux, st *Store, busURL string) {
 				}
 			}
 			if len(parts) >= 2 && parts[0] == "data-sync" && parts[1] == "tasks" && kind == "dbms" {
+				if len(parts) == 4 && r.Method == http.MethodPost && (parts[3] == "compare" || parts[3] == "freeze") {
+					id, _ := strconv.ParseInt(parts[2], 10, 64)
+					if err := st.authorizeWorkbenchComparison(r, raw, id); err != nil {
+						writeIntegrationJSON(w, nil, err)
+						return
+					}
+				}
 				allowed = (len(parts) == 2 && (isGet || r.Method == http.MethodPost)) || (len(parts) == 3 && r.Method == http.MethodPut) || (len(parts) == 4 && r.Method == http.MethodPost && (parts[3] == "compare" || parts[3] == "freeze"))
 			}
 			if rest == "delivery/templates" && r.Method == http.MethodPost {

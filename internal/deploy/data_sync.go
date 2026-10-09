@@ -631,6 +631,11 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 			writeError(w, 400, "请选择本次来源和目标环境")
 			return
 		}
+		policyBody, _ := json.Marshal(req)
+		if err := s.authorizeWorkbenchComparison(r, policyBody, idOf(r)); err != nil {
+			writeError(w, 403, err)
+			return
+		}
 		t, err := s.DataSyncTask(idOf(r))
 		if err != nil {
 			writeError(w, 404, err)
@@ -648,13 +653,19 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 	mux.HandleFunc("POST /api/data-sync/tasks/{id}/freeze", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			DataSyncScope
-			Digest     string              `json:"digest"`
-			WorkItemID int64               `json:"work_item_id"`
-			WorkDigest string              `json:"work_digest"`
-			Rows       []DataSyncSelection `json:"rows"`
+			QueryApprovalID int64               `json:"query_approval_id"`
+			Digest          string              `json:"digest"`
+			WorkItemID      int64               `json:"work_item_id"`
+			WorkDigest      string              `json:"work_digest"`
+			Rows            []DataSyncSelection `json:"rows"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req) != nil {
 			writeError(w, 400, "差异计划格式错误")
+			return
+		}
+		policyBody, _ := json.Marshal(req)
+		if err := s.authorizeWorkbenchComparison(r, policyBody, idOf(r)); err != nil {
+			writeError(w, 403, err)
 			return
 		}
 		t, err := s.DataSyncTask(idOf(r))

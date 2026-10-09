@@ -120,6 +120,9 @@ func mockRedisServer(t *testing.T) (*mockRedis, string) {
 							if r.keys[a[1]] {
 								reply = "+string\r\n"
 							}
+						} else if a[0] == "GETRANGE" {
+							value := strings.Repeat("v", 65537)
+							reply = fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 						} else if a[0] == "UNLINK" {
 							n := 0
 							for _, k := range a[1:] {

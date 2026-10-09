@@ -50,17 +50,18 @@ type DeliveryService struct {
 	DestinationDigest string             `json:"destination_digest"`
 }
 type DeliveryPlan struct {
-	Template    DeliveryTemplate      `json:"template"`
-	Version     *ReleaseVersion       `json:"version,omitempty"`
-	Environment Environment           `json:"environment"`
-	Reason      string                `json:"reason"`
-	Services    []DeliveryService     `json:"services"`
-	Nodes       []DeliveryNode        `json:"nodes"`
-	Blockers    []string              `json:"blockers"`
-	Warnings    []string              `json:"warnings"`
-	SQLPlans    []*SQLExecutionPlan   `json:"sql_plans,omitempty"`
-	NacosPlans  []*NacosExecutionPlan `json:"nacos_plans,omitempty"`
-	RedisPlans  []*RedisExecutionPlan `json:"redis_plans,omitempty"`
+	WorkbenchPolicy *WorkbenchPolicy      `json:"workbench_policy,omitempty"`
+	Template        DeliveryTemplate      `json:"template"`
+	Version         *ReleaseVersion       `json:"version,omitempty"`
+	Environment     Environment           `json:"environment"`
+	Reason          string                `json:"reason"`
+	Services        []DeliveryService     `json:"services"`
+	Nodes           []DeliveryNode        `json:"nodes"`
+	Blockers        []string              `json:"blockers"`
+	Warnings        []string              `json:"warnings"`
+	SQLPlans        []*SQLExecutionPlan   `json:"sql_plans,omitempty"`
+	NacosPlans      []*NacosExecutionPlan `json:"nacos_plans,omitempty"`
+	RedisPlans      []*RedisExecutionPlan `json:"redis_plans,omitempty"`
 }
 type DeliveryStep struct {
 	NodeID    string `json:"node_id"`
@@ -258,12 +259,17 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	}
 	p := &DeliveryPlan{Template: *tpl, Environment: *env, Reason: strings.TrimSpace(req.Reason), Nodes: nodes, Services: []DeliveryService{}, Blockers: []string{}, Warnings: []string{}}
 	if tpl.Workbench != "" {
+		policy, err := s.workbenchPolicy(tpl.Workbench, env.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		p.WorkbenchPolicy = &policy
 		candidate := *tpl
 		candidate.Nodes = nodes
 		if err := validateWorkbenchTemplate(candidate); err != nil {
 			return nil, nil, err
 		}
-		if strings.TrimSpace(env.Approvers) == "" {
+		if deliveryReviewRequired(p) && strings.TrimSpace(env.Approvers) == "" {
 			p.Blockers = append(p.Blockers, "工作台操作必须审核，请先为环境配置审核人")
 		}
 	}
@@ -342,7 +348,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	for _, node := range nodes {
 		switch node.Kind {
 		case "redis":
-			if strings.TrimSpace(env.Approvers) == "" {
+			if deliveryReviewRequired(p) && strings.TrimSpace(env.Approvers) == "" {
 				p.Blockers = append(p.Blockers, "Redis 操作必须审核，请先为该环境配置审核人（开发/测试也需要）")
 			}
 			ids := append([]int64{}, node.ChangeIDs...)
@@ -443,7 +449,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 		case "manual":
 			manualCount++
 		case "mysql":
-			if strings.TrimSpace(env.Approvers) == "" {
+			if deliveryReviewRequired(p) && strings.TrimSpace(env.Approvers) == "" {
 				p.Blockers = append(p.Blockers, "SQL 写操作必须审核，请先为该环境配置审核人")
 			}
 			ids := append([]int64{}, node.ChangeIDs...)
@@ -547,7 +553,7 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	planJSON, _ := json.Marshal(p)
 	hash := sha256.Sum256(planJSON)
 	run := &DeliveryRun{Plan: *p, Digest: "sha256:" + hex.EncodeToString(hash[:]), Status: "approved", Owner: actor, CreatedAt: time.Now().Unix(), Revision: 1, Steps: []DeliveryStep{}, envSecrets: secrets}
-	if p.Environment.Protected || len(p.RedisPlans) > 0 || len(p.SQLPlans) > 0 || p.Template.Workbench != "" {
+	if deliveryReviewRequired(p) {
 		run.Status = "pending_approval"
 	}
 	for _, node := range p.Nodes {
@@ -657,7 +663,15 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 	if env == nil || (env.Protected && (v.Approver == "" || !allowedApprover(env.Approvers, v.Approver))) {
 		return nil, fmt.Errorf("环境保护策略已变化，请重新提交审核")
 	}
-	if (len(v.Plan.RedisPlans) > 0 || len(v.Plan.SQLPlans) > 0 || v.Plan.Template.Workbench != "") && (v.Approver == "" || v.Approver == v.Owner || !allowedApprover(env.Approvers, v.Approver) || !allowedApprover(v.Plan.Environment.Approvers, v.Approver)) {
+	requiresReview := deliveryReviewRequired(&v.Plan)
+	if v.Plan.Template.Workbench != "" {
+		policy, err := s.workbenchPolicy(v.Plan.Template.Workbench, env.Name)
+		if err != nil {
+			return nil, err
+		}
+		requiresReview = requiresReview || policy.ChangeApproval || env.Protected
+	}
+	if requiresReview && (v.Approver == "" || v.Approver == v.Owner || !allowedApprover(env.Approvers, v.Approver) || !allowedApprover(v.Plan.Environment.Approvers, v.Approver)) {
 		return nil, fmt.Errorf("SQL/Redis 工作台操作必须经另一名环境审核人审核，且审核人仍须有权限")
 	}
 	if env.RequireReason && v.Plan.Reason == "" {

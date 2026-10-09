@@ -5,8 +5,9 @@ import Sel from '../../shared/components/Sel.vue';
 import {ElButton,ElInput} from '../../shared/components/ui.js';
 import ApplicationResourcesEditor from './ApplicationResourcesEditor.vue';
 import {toast} from '../../shared/composables/toast.js';
-const props=defineProps({show:Boolean,services:Array,environments:Array,item:Object});
-const emit=defineEmits(['close','generated','preview']);
+const props=defineProps({show:Boolean,inline:Boolean,services:Array,environments:Array,item:Object,approvedComparison:Object});
+const emit=defineEmits(['close','generated','preview','query-approval']);
+const approvalID=ref(0);
 const lastGenerated=ref(null);
 const api=inject('api'),tasks=ref([]),form=ref(null),original=ref(''),resources=ref([]),source=ref(''),target=ref(''),comparison=ref(null),selected=ref([]),edited=ref({}),saving=ref(false),error=ref(''),showBindings=ref(false);
 let session=0;
@@ -14,19 +15,21 @@ const dirty=computed(()=>form.value&&JSON.stringify(form.value)!==original.value
 const envOptions=computed(()=>props.environments.map(e=>({value:e.name,label:e.display_name||e.name})));
 const resourceOptions=computed(()=>resources.value.filter(r=>r.kind==='mysql').map(r=>({value:r.alias,label:r.alias})));
 async function load(){try{tasks.value=await api('api/data-sync/tasks')}catch(e){error.value=e.message}}
-watch(()=>props.show,v=>{session++;if(v){form.value=null;comparison.value=null;lastGenerated.value=null;error.value='';load()}});
+watch(()=>props.show,v=>{session++;if(v){form.value=null;comparison.value=null;lastGenerated.value=null;error.value='';load()}},{immediate:true});
+watch(()=>props.approvedComparison,async data=>{if(!data)return;form.value=JSON.parse(JSON.stringify(data.result.task));original.value=JSON.stringify(form.value);source.value=data.result.source_environment;target.value=data.result.target_environment;await resourcesFor();comparison.value=data.result;approvalID.value=data.ticket.id;selected.value=[];edited.value=Object.fromEntries(data.result.differences.map(d=>[d.key,JSON.parse(JSON.stringify(d.after))]));});
 async function resourcesFor(){resources.value=[];if(!form.value?.service)return;const name=form.value.service;try{const r=await api(`api/services/${encodeURIComponent(name)}/resources`);if(form.value?.service===name)resources.value=r.requirements||[]}catch(e){error.value=e.message}}
-function invalidate(){comparison.value=null;selected.value=[];edited.value={}}
+function invalidate(){comparison.value=null;selected.value=[];edited.value={};approvalID.value=0}
 watch([source,target,()=>JSON.stringify(form.value)],invalidate);
 function open(task){if(saving.value)return;if(dirty.value&&!confirm('放弃当前未保存的任务修改？'))return;form.value=task?JSON.parse(JSON.stringify(task)):{name:'',service:'',resource_alias:'',source_sql:'SELECT id, name FROM sys_menu WHERE id > 0',target_sql:'SELECT id, name FROM sys_menu WHERE id > 0',keys:['id']};original.value=JSON.stringify(form.value);invalidate();source.value='';target.value='';lastGenerated.value=null;error.value='';resourcesFor()}
 function close(){if(saving.value)return;if(dirty.value&&!confirm('放弃任务的未保存修改并返回原页面？'))return;emit('close')}
 async function save(){saving.value=true;error.value='';const current=session;try{const result=await api('api/data-sync/tasks'+(form.value.id?'/'+form.value.id:''),{method:form.value.id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form.value)});if(current!==session)return;form.value=result;original.value=JSON.stringify(result);invalidate();await load();toast('任务已保存，选择本次来源和目标环境即可对比','success')}catch(e){error.value=e.message}finally{saving.value=false}}
-async function compare(){if(dirty.value)return error.value='请先保存任务修改，再对比';if(!source.value||!target.value)return error.value='请选择本次来源和目标环境';if(source.value===target.value)return error.value='来源和目标环境不能相同';saving.value=true;error.value='';invalidate();const current=session;try{const data=await api(`api/data-sync/tasks/${form.value.id}/compare`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_environment:source.value,target_environment:target.value})});if(current!==session)return;comparison.value=data;selected.value=[];edited.value=Object.fromEntries(data.differences.map(d=>[d.key,JSON.parse(JSON.stringify(d.after))]))}catch(e){error.value=e.message}finally{saving.value=false}}
-async function freeze(){if(dirty.value)return error.value='任务已有修改，请保存并重新对比';if(!comparison.value||!selected.value.length)return error.value='请勾选要同步的差异';saving.value=true;error.value='';const current=session;try{const work=props.item?await api(`api/work-items/${props.item.id}/delivery-content`):null;const data=await api(`api/data-sync/tasks/${form.value.id}/freeze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_environment:comparison.value.source_environment,target_environment:comparison.value.target_environment,digest:comparison.value.digest,work_item_id:props.item?.id||0,work_digest:work?.digest,rows:selected.value.map(key=>({key,after:edited.value[key]}))})});if(current!==session)return;lastGenerated.value=data;emit('generated',data);toast('已生成同步 SQL 草稿，未执行；就绪后纳入版本并提交审批','success');invalidate()}catch(e){error.value=e.message}finally{saving.value=false}}
+async function compare(){if(dirty.value)return error.value='请先保存任务修改，再对比';if(!source.value||!target.value)return error.value='请选择本次来源和目标环境';if(source.value===target.value)return error.value='来源和目标环境不能相同';saving.value=true;error.value='';invalidate();const current=session;try{const scope={source_environment:source.value,target_environment:target.value};if(props.inline){const policies=await Promise.all([source.value,target.value].map(env=>api(`api/policy?environment=${encodeURIComponent(env)}`)));if(current!==session)return;if(policies.some(p=>p.query_approval)){emit('query-approval',{task_id:form.value.id,scope});return}}const data=await api(`api/data-sync/tasks/${form.value.id}/compare`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scope)});if(current!==session)return;comparison.value=data;selected.value=[];edited.value=Object.fromEntries(data.differences.map(d=>[d.key,JSON.parse(JSON.stringify(d.after))]))}catch(e){error.value=e.message}finally{saving.value=false}}
+async function freeze(){if(dirty.value)return error.value='任务已有修改，请保存并重新对比';if(!comparison.value||!selected.value.length)return error.value='请勾选要同步的差异';saving.value=true;error.value='';const current=session;try{const work=props.item?await api(`api/work-items/${props.item.id}/delivery-content`):null;const data=await api(`api/data-sync/tasks/${form.value.id}/freeze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_environment:comparison.value.source_environment,target_environment:comparison.value.target_environment,digest:comparison.value.digest,query_approval_id:approvalID.value,work_item_id:props.item?.id||0,work_digest:work?.digest,rows:selected.value.map(key=>({key,after:edited.value[key]}))})});if(current!==session)return;lastGenerated.value=data;emit('generated',data);toast('已生成同步 SQL 草稿，未执行；请到变更提交预检目标库','success');invalidate()}catch(e){error.value=e.message}finally{saving.value=false}}
 function keys(text){form.value.keys=text.split(',').map(k=>k.trim()).filter(Boolean)}
 </script>
 <template>
-<Modal :show="show" title="数据同步任务" extra-wide @close="close"><div class="sync-tasks">
+<component :is="inline?'section':Modal" :show="show" title="数据同步任务" extra-wide @close="close"><div class="sync-tasks">
+ <h3 v-if="inline">数据对比同步</h3>
  <p>任务只保存查询与匹配规则，不绑定环境；每次对比时选择来源和目标环境。目标独有数据保留，不自动删除。</p>
  <p v-if="error" class="error" role="alert">{{error}}</p>
  <div class="toolbar"><Sel :model-value="form?.id||''" :options="tasks.map(t=>({value:t.id,label:t.name+' · '+t.service}))" :disabled="saving" filterable placeholder="选择已有任务" width="100%" @change="open(tasks.find(t=>t.id===$event))" /><ElButton :disabled="saving" @click="open()">＋ 新建任务</ElButton></div>
@@ -43,7 +46,7 @@ function keys(text){form.value.keys=text.split(',').map(k=>k.trim()).filter(Bool
  <p v-if="!comparison.differences.length">无需同步，没有可写入差异。</p><p class="hint">修改右侧值后勾选差异，再生成草稿。生成前会重新核对任务和数据；之后执行仍须审批及目标数据校验。</p>
  <ElButton type="primary" :loading="saving" :disabled="!selected.length" @click="freeze">生成同步草稿{{item?'并关联当前需求':''}}（{{selected.length}} 行）</ElButton></template>
  </template><section v-if="lastGenerated" class="result"><b>已生成同步草稿 #{{lastGenerated.id}} · {{lastGenerated.sql.data_sync.source_environment}} → {{lastGenerated.sql.data_sync.target_environment}}</b><p>{{item?'已关联当前需求，在需求详情核对就绪后随版本交付。':'已加入变更列表，核对就绪后可纳入版本交付。'}}未执行数据库写入。</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{lastGenerated.sql.content}}</pre><ElButton @click="emit('preview',lastGenerated)">继续预检目标库（只读）</ElButton></section><div class="footer"><ElButton :disabled="saving" @click="close">关闭并返回原页面</ElButton></div>
- </div></Modal>
+ </div></component>
  <ApplicationResourcesEditor :show="showBindings" :services="services" :initial-service="form?.service||''" @close="showBindings=false;resourcesFor()" />
 </template>
 <style scoped>

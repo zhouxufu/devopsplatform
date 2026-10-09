@@ -119,6 +119,9 @@ func redisErrorCategory(err error) string {
 }
 
 func parseRedisCommands(text string) ([][]string, error) {
+	return parseRedisCommandText(text, redisCommandKeys)
+}
+func parseRedisCommandText(text string, keys func([]string) ([]string, error)) ([][]string, error) {
 	if len(text) > 32768 {
 		return nil, fmt.Errorf("Redis 命令文本最多 32 KiB")
 	}
@@ -176,7 +179,7 @@ func parseRedisCommands(text string) ([][]string, error) {
 			continue
 		}
 		args[0] = strings.ToUpper(args[0])
-		if _, err := redisCommandKeys(args); err != nil {
+		if _, err := keys(args); err != nil {
 			return nil, err
 		}
 		commands = append(commands, args)
