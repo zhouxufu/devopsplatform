@@ -19,16 +19,21 @@ import (
 // Selected differences become immutable, environment-bound SQL changes and use
 // the existing approval/snapshot/transaction executor, not a second write path.
 type DataSyncTask struct {
-	ID                int64    `json:"id"`
-	Name              string   `json:"name"`
-	Service           string   `json:"service"`
-	ResourceAlias     string   `json:"resource_alias"`
-	SourceEnvironment string   `json:"source_environment"`
-	SourceSQL         string   `json:"source_sql"`
-	TargetSQL         string   `json:"target_sql"`
-	Keys              []string `json:"keys"`
-	Owner             string   `json:"owner"`
-	Revision          int64    `json:"revision"`
+	ID            int64    `json:"id"`
+	Name          string   `json:"name"`
+	Service       string   `json:"service"`
+	ResourceAlias string   `json:"resource_alias"`
+	SourceSQL     string   `json:"source_sql"`
+	TargetSQL     string   `json:"target_sql"`
+	Keys          []string `json:"keys"`
+	Owner         string   `json:"owner"`
+	Revision      int64    `json:"revision"`
+}
+
+// Environment choices belong to one comparison, never to the reusable task.
+type DataSyncScope struct {
+	SourceEnvironment string `json:"source_environment"`
+	TargetEnvironment string `json:"target_environment"`
 }
 type DataSyncSnapshot struct {
 	TaskID            int64                `json:"task_id"`
@@ -51,6 +56,7 @@ type DataSyncDifference struct {
 }
 type DataSyncComparison struct {
 	Task              DataSyncTask         `json:"task"`
+	SourceEnvironment string               `json:"source_environment"`
 	TargetEnvironment string               `json:"target_environment"`
 	Columns           []string             `json:"columns"`
 	Differences       []DataSyncDifference `json:"differences"`
@@ -123,8 +129,8 @@ func parseSyncQuery(query string) (*syncQuery, error) {
 }
 func normalizeSyncTask(t *DataSyncTask) error {
 	t.Name, t.Service, t.ResourceAlias = strings.TrimSpace(t.Name), strings.TrimSpace(t.Service), strings.TrimSpace(t.ResourceAlias)
-	if t.Name == "" || t.Service == "" || !validResourceName(t.ResourceAlias) || t.SourceEnvironment == "" {
-		return fmt.Errorf("任务名称、应用、数据库资源和来源环境必填")
+	if t.Name == "" || t.Service == "" || !validResourceName(t.ResourceAlias) {
+		return fmt.Errorf("任务名称、应用和数据库资源必填")
 	}
 	source, err := parseSyncQuery(t.SourceSQL)
 	if err != nil {
@@ -194,8 +200,18 @@ func (s *Store) SaveDataSyncTask(t *DataSyncTask) error {
 	if err := normalizeSyncTask(t); err != nil {
 		return err
 	}
-	if _, err := s.sqlBinding(t.Service, t.SourceEnvironment, t.ResourceAlias); err != nil {
+	if s.GetService(t.Service) == nil {
+		return fmt.Errorf("应用不存在")
+	}
+	var kind string
+	if err := s.db.QueryRow(`SELECT kind FROM application_resource_requirements WHERE service=? AND alias=?`, t.Service, t.ResourceAlias).Scan(&kind); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("应用未声明 MySQL 资源 %s", t.ResourceAlias)
+		}
 		return err
+	}
+	if kind != "mysql" {
+		return fmt.Errorf("数据同步任务仅支持 MySQL 资源")
 	}
 	data, _ := json.Marshal(t)
 	if t.ID == 0 {
@@ -303,7 +319,7 @@ func syncRowsDigest(rows []SyncRow) string {
 	sort.Slice(copyRows, func(i, j int) bool { return digestJSON(copyRows[i]) < digestJSON(copyRows[j]) })
 	return digestJSON(copyRows)
 }
-func compareSyncRows(t *DataSyncTask, environment string, source, target []SyncRow) (*DataSyncComparison, error) {
+func compareSyncRows(t *DataSyncTask, scope DataSyncScope, source, target []SyncRow) (*DataSyncComparison, error) {
 	a, err := indexSyncRows(source, t.Keys)
 	if err != nil {
 		return nil, err
@@ -313,7 +329,7 @@ func compareSyncRows(t *DataSyncTask, environment string, source, target []SyncR
 		return nil, err
 	}
 	q, _ := parseSyncQuery(t.TargetSQL)
-	out := &DataSyncComparison{Task: *t, TargetEnvironment: environment, Columns: q.Columns, Differences: []DataSyncDifference{}, TargetDigest: syncRowsDigest(target)}
+	out := &DataSyncComparison{Task: *t, SourceEnvironment: scope.SourceEnvironment, TargetEnvironment: scope.TargetEnvironment, Columns: q.Columns, Differences: []DataSyncDifference{}, TargetDigest: syncRowsDigest(target)}
 	keys := []string{}
 	for k := range a {
 		keys = append(keys, k)
@@ -336,22 +352,27 @@ func compareSyncRows(t *DataSyncTask, environment string, source, target []SyncR
 			out.TargetOnly++
 		}
 	}
-	out.Digest = digestJSON([]any{t, environment, sourceSortedDigest(source), out.TargetDigest, out.Differences})
+	out.Digest = digestJSON([]any{t, scope, sourceSortedDigest(source), out.TargetDigest, out.Differences})
 	return out, nil
 }
 func sourceSortedDigest(rows []SyncRow) string { return syncRowsDigest(rows) }
-func (s *Store) CompareDataSync(ctx context.Context, t *DataSyncTask, environment string) (*DataSyncComparison, error) {
+func (s *Store) CompareDataSync(ctx context.Context, t *DataSyncTask, scope DataSyncScope) (*DataSyncComparison, error) {
 	if err := normalizeSyncTask(t); err != nil {
 		return nil, err
 	}
-	if environment == t.SourceEnvironment {
+	scope.SourceEnvironment = strings.TrimSpace(scope.SourceEnvironment)
+	scope.TargetEnvironment = strings.TrimSpace(scope.TargetEnvironment)
+	if scope.SourceEnvironment == "" || scope.TargetEnvironment == "" {
+		return nil, fmt.Errorf("请选择本次来源和目标环境")
+	}
+	if scope.TargetEnvironment == scope.SourceEnvironment {
 		return nil, fmt.Errorf("来源和目标环境不能相同")
 	}
-	source, err := s.sqlBinding(t.Service, t.SourceEnvironment, t.ResourceAlias)
+	source, err := s.sqlBinding(t.Service, scope.SourceEnvironment, t.ResourceAlias)
 	if err != nil {
 		return nil, err
 	}
-	target, err := s.sqlBinding(t.Service, environment, t.ResourceAlias)
+	target, err := s.sqlBinding(t.Service, scope.TargetEnvironment, t.ResourceAlias)
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +420,7 @@ func (s *Store) CompareDataSync(ctx context.Context, t *DataSyncTask, environmen
 	if err != nil {
 		return nil, err
 	}
-	out, err := compareSyncRows(t, environment, a, b)
+	out, err := compareSyncRows(t, scope, a, b)
 	if err != nil {
 		return nil, err
 	}
@@ -605,11 +626,9 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 	mux.HandleFunc("POST /api/data-sync/tasks", save)
 	mux.HandleFunc("PUT /api/data-sync/tasks/{id}", save)
 	mux.HandleFunc("POST /api/data-sync/tasks/{id}/compare", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Environment string `json:"environment"`
-		}
+		var req DataSyncScope
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req) != nil {
-			writeError(w, 400, "请选择目标环境")
+			writeError(w, 400, "请选择本次来源和目标环境")
 			return
 		}
 		t, err := s.DataSyncTask(idOf(r))
@@ -619,7 +638,7 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
-		out, err := s.CompareDataSync(ctx, t, req.Environment)
+		out, err := s.CompareDataSync(ctx, t, req)
 		if err != nil {
 			writeError(w, 409, err)
 			return
@@ -628,11 +647,11 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 	})
 	mux.HandleFunc("POST /api/data-sync/tasks/{id}/freeze", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Environment string              `json:"environment"`
-			Digest      string              `json:"digest"`
-			WorkItemID  int64               `json:"work_item_id"`
-			WorkDigest  string              `json:"work_digest"`
-			Rows        []DataSyncSelection `json:"rows"`
+			DataSyncScope
+			Digest     string              `json:"digest"`
+			WorkItemID int64               `json:"work_item_id"`
+			WorkDigest string              `json:"work_digest"`
+			Rows       []DataSyncSelection `json:"rows"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req) != nil {
 			writeError(w, 400, "差异计划格式错误")
@@ -645,7 +664,7 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
-		comp, err := s.CompareDataSync(ctx, t, req.Environment)
+		comp, err := s.CompareDataSync(ctx, t, req.DataSyncScope)
 		if err != nil {
 			writeError(w, 409, err)
 			return
@@ -659,7 +678,7 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 			writeError(w, 400, err)
 			return
 		}
-		c := Change{Kind: "mysql", Title: t.Name + " · 数据同步 → " + req.Environment, Service: t.Service, RiskLevel: "medium", Owner: actorOf(r), Summary: fmt.Sprintf("数据同步任务 #%d · 修订 %d · %d 行；目标独有数据保留", t.ID, t.Revision, len(req.Rows)), SQL: &SQLChange{ResourceAlias: t.ResourceAlias, Content: script, MaxAffectedRows: len(req.Rows), DataSync: &DataSyncSnapshot{TaskID: t.ID, TaskRevision: t.Revision, SourceEnvironment: t.SourceEnvironment, TargetEnvironment: req.Environment, TargetSQL: t.TargetSQL, TargetDigest: comp.TargetDigest, TargetDestination: comp.TargetDestination, ComparisonDigest: comp.Digest}}}
+		c := Change{Kind: "mysql", Title: t.Name + " · 数据同步 " + comp.SourceEnvironment + " → " + comp.TargetEnvironment, Service: t.Service, RiskLevel: "medium", Owner: actorOf(r), Summary: fmt.Sprintf("数据同步任务 #%d · 修订 %d · %d 行；目标独有数据保留", t.ID, t.Revision, len(req.Rows)), SQL: &SQLChange{ResourceAlias: t.ResourceAlias, Content: script, MaxAffectedRows: len(req.Rows), DataSync: &DataSyncSnapshot{TaskID: t.ID, TaskRevision: t.Revision, SourceEnvironment: comp.SourceEnvironment, TargetEnvironment: comp.TargetEnvironment, TargetSQL: t.TargetSQL, TargetDigest: comp.TargetDigest, TargetDestination: comp.TargetDestination, ComparisonDigest: comp.Digest}}}
 		c.SQL.DataSync.Keys = t.Keys
 		for _, pick := range req.Rows {
 			for _, d := range comp.Differences {
@@ -683,7 +702,7 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 			writeError(w, 409, err)
 			return
 		}
-		s.Audit(actorOf(r), "freeze-differences", "data-sync-task", fmt.Sprint(t.ID), map[string]any{"change_id": c.ID, "rows": len(req.Rows), "environment": req.Environment})
+		s.Audit(actorOf(r), "freeze-differences", "data-sync-task", fmt.Sprint(t.ID), map[string]any{"change_id": c.ID, "rows": len(req.Rows), "source_environment": comp.SourceEnvironment, "environment": comp.TargetEnvironment})
 		wj(w, s.GetChange(c.ID))
 	})
 }
