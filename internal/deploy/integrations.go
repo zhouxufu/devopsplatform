@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -115,6 +116,10 @@ func testIntegrationConnection(ctx context.Context, c *ResourceConnection) error
 	if err != nil {
 		return err
 	}
+	// User-directory-only connections do not need a Bug product scope.
+	if strings.TrimSpace(c.Config["product_ids"]) == "" {
+		return nil
+	}
 	ids, err := zentaoProductIDs(c)
 	if err != nil {
 		return err
@@ -130,9 +135,16 @@ func testIntegrationConnection(ctx context.Context, c *ResourceConnection) error
 // The 16.0 provider uses documented legacy JSON sessions, not REST v1 tokens.
 // Cookies and passwords are never included in URLs, logs or the public config.
 type zentaoLegacy struct {
-	root   string
-	client *http.Client
+	root     string
+	client   *http.Client
+	pathInfo bool
 }
+
+// Only the anonymous, read-only session request may probe another route.
+// Never retry login or permission failures with the password on another URL.
+type zentaoRouteError struct{ message string }
+
+func (e *zentaoRouteError) Error() string { return e.message }
 
 func newZentaoLegacy(ctx context.Context, c *ResourceConnection) (*zentaoLegacy, error) {
 	if err := validateIntegrationConnection(c); err != nil {
@@ -147,25 +159,96 @@ func newZentaoLegacy(ctx context.Context, c *ResourceConnection) (*zentaoLegacy,
 		SessionName string `json:"sessionName"`
 		SessionID   string `json:"sessionID"`
 	}
-	if err := z.call(ctx, "api", "getSessionID", nil, nil, &session); err != nil {
-		return nil, err
+	err := z.call(ctx, "api", "getSessionID", nil, nil, &session)
+	var routeErr *zentaoRouteError
+	if errors.As(err, &routeErr) || (err == nil && (session.SessionName == "" || session.SessionID == "")) {
+		z.pathInfo = true
+		err = z.call(ctx, "api", "getSessionID", nil, nil, &session)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("获取禅道会话失败（已探测兼容路由）：%w", err)
 	}
 	if session.SessionName == "" || session.SessionID == "" {
 		return nil, fmt.Errorf("禅道未返回 Session，请确认安装根地址与 legacy JSON 接口")
 	}
 	u, _ := url.Parse(z.root + "/index.php")
 	jar.SetCookies(u, []*http.Cookie{{Name: session.SessionName, Value: session.SessionID, Path: "/"}})
-	var logged map[string]any
+	var logged struct {
+		User struct {
+			Account string `json:"account"`
+		} `json:"user"`
+	}
 	if err := z.call(ctx, "user", "login", nil, url.Values{"account": {c.Username}, "password": {c.Password}}, &logged); err != nil {
 		return nil, fmt.Errorf("禅道登录失败：%w", err)
+	}
+	if logged.User.Account != strings.TrimSpace(c.Username) {
+		if logged.User.Account == "" {
+			return nil, fmt.Errorf("禅道登录未返回认证结果（可能仍是登录表单），请检查代理是否正确转发 POST 与同源 Referer，以及禅道 CSRF 设置")
+		}
+		return nil, fmt.Errorf("禅道登录未返回匹配的已认证账号，请检查用户名、密码及账号状态")
 	}
 	return z, nil
 }
 
+func (z *zentaoLegacy) requestURL(module, method string, args url.Values) (string, error) {
+	if !z.pathInfo {
+		q := url.Values{"m": {module}, "f": {method}, "t": {"json"}}
+		for k, v := range args {
+			q[k] = v
+		}
+		return z.root + "/index.php?" + q.Encode(), nil
+	}
+	// PATHINFO parameters are positional, not named query parameters. Defaults
+	// and order match the official zentaopms_16.0 controller signatures.
+	var keys, defaults []string
+	switch module + "/" + method {
+	case "api/getSessionID", "user/login":
+	case "bug/browse":
+		keys = []string{"productID", "branch", "browseType", "param", "orderBy", "recTotal", "recPerPage", "pageID"}
+		defaults = []string{"0", "0", "all", "0", "id_asc", "0", "100", "1"}
+	case "company/browse":
+		keys = []string{"browseType", "param", "type", "orderBy", "recTotal", "recPerPage", "pageID"}
+		defaults = []string{"inside", "0", "bydept", "id_asc", "0", "100", "1"}
+	default:
+		return "", fmt.Errorf("不支持的禅道 PATHINFO 接口")
+	}
+	allowed := map[string]bool{}
+	parts := []string{strings.ToLower(module), strings.ToLower(method)}
+	for i, key := range keys {
+		allowed[key] = true
+		value := defaults[i]
+		if args.Has(key) {
+			value = args.Get(key)
+		}
+		if value == "" {
+			return "", fmt.Errorf("禅道 PATHINFO 参数不能为空")
+		}
+		for _, r := range value {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+				return "", fmt.Errorf("禅道 PATHINFO 参数格式无效")
+			}
+		}
+		parts = append(parts, value)
+	}
+	for key := range args {
+		if !allowed[key] {
+			return "", fmt.Errorf("不支持的禅道 PATHINFO 参数")
+		}
+	}
+	return z.root + "/" + strings.Join(parts, "-") + ".json", nil
+}
+
+func (z *zentaoLegacy) bugURL(id string) string {
+	if z.pathInfo {
+		return z.root + "/bug-view-" + url.PathEscape(id) + ".html"
+	}
+	return z.root + "/index.php?m=bug&f=view&bugID=" + url.QueryEscape(id)
+}
+
 func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, form url.Values, out any) error {
-	q := url.Values{"m": {module}, "f": {method}, "t": {"json"}}
-	for k, v := range args {
-		q[k] = v
+	address, err := z.requestURL(module, method, args)
+	if err != nil {
+		return err
 	}
 	httpMethod := http.MethodGet
 	var body io.Reader
@@ -173,12 +256,15 @@ func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, fo
 		httpMethod = http.MethodPost
 		body = strings.NewReader(form.Encode())
 	}
-	req, err := http.NewRequestWithContext(ctx, httpMethod, z.root+"/index.php?"+q.Encode(), body)
+	req, err := http.NewRequestWithContext(ctx, httpMethod, address, body)
 	if err != nil {
 		return fmt.Errorf("禅道请求地址无效")
 	}
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		// 16.0 filterCSRF clears POST without a same-origin Referer. Keep the
+		// server protection enabled and never put the session/password in URLs.
+		req.Header.Set("Referer", z.root+"/")
 	}
 	resp, err := z.client.Do(req)
 	if err != nil {
@@ -186,6 +272,9 @@ func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, fo
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 404 || resp.StatusCode == 405 || (resp.StatusCode >= 300 && resp.StatusCode < 400) {
+			return &zentaoRouteError{fmt.Sprintf("禅道 %s/%s 返回 HTTP %d，请检查安装路径或路由配置", module, method, resp.StatusCode)}
+		}
 		return fmt.Errorf("禅道接口返回 HTTP %d，请检查地址、权限或代理", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
@@ -195,14 +284,24 @@ func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, fo
 	var envelope struct {
 		Status string          `json:"status"`
 		Data   json.RawMessage `json:"data"`
+		User   json.RawMessage `json:"user"`
 	}
+	raw = []byte(strings.TrimPrefix(strings.TrimSpace(string(raw)), "\ufeff"))
 	if json.Unmarshal(raw, &envelope) != nil {
-		return fmt.Errorf("禅道未返回 JSON，可能跳转到登录页或地址不正确")
+		return &zentaoRouteError{fmt.Sprintf("禅道 %s/%s 未返回 JSON（可能是登录页、代理拦截页或路由不匹配）", module, method)}
 	}
 	if envelope.Status != "success" {
+		if module == "user" && method == "login" {
+			return fmt.Errorf("账号认证未通过，请检查用户名、密码、账号锁定或禁用状态；未自动重试登录")
+		}
 		return fmt.Errorf("禅道接口拒绝请求，请检查账号权限和会话")
 	}
 	data := envelope.Data
+	// ZenTao 16.0 user/login responds with {status:success,user:{...}},
+	// whereas display() endpoints usually put JSON in the data envelope.
+	if module == "user" && method == "login" && len(envelope.User) > 0 {
+		data = raw
+	}
 	if len(data) > 0 && data[0] == '"' {
 		var nested string
 		if json.Unmarshal(data, &nested) != nil {
@@ -235,7 +334,7 @@ func (z *zentaoLegacy) bugs(ctx context.Context, product, page int) ([]zentaoBug
 	var v zentaoBugPage
 	err := z.call(ctx, "bug", "browse", url.Values{"productID": {strconv.Itoa(product)}, "browseType": {"all"}, "recPerPage": {"100"}, "pageID": {strconv.Itoa(page)}}, nil, &v)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("读取禅道产品 %d 的 Bug 列表失败（请检查产品访问及 Bug 列表权限）：%w", product, err)
 	}
 	if len(v.Bugs) == 0 || string(v.Bugs) == "null" {
 		return nil, fmt.Errorf("禅道 Bug 列表缺少 bugs 字段，请检查权限或接口参数")
@@ -386,7 +485,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string) (s
 		if bug.Status == "closed" {
 			status = WorkItemClosed
 		}
-		link := z.root + "/index.php?m=bug&f=view&bugID=" + url.QueryEscape(id)
+		link := z.bugURL(id)
 		if e == sql.ErrNoRows {
 			r, e := tx.Exec(`INSERT INTO work_items(source,external_id,kind,title,url,external_status,description,status,owner,created_at,updated_at) VALUES(?,?,'bug',?,?,?,?,?,?,?,?)`, "zentao:"+name, id, bug.Title, link, bug.Status, bug.Steps, status, actor, state.LastAt, state.LastAt)
 			if e != nil {

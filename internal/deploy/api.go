@@ -507,7 +507,11 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				wj(w, map[string]any{"ok": false, "error": err.Error()})
 				return
 			}
-			wj(w, map[string]any{"ok": true, "status": "认证及读取权限验证成功"})
+			status := "认证及读取权限验证成功"
+			if c.Kind == "zentao" && strings.TrimSpace(c.Config["product_ids"]) == "" {
+				status = "禅道登录认证成功；未配置 Bug 产品 ID，用户列表权限请在成员管理中验证"
+			}
+			wj(w, map[string]any{"ok": true, "status": status})
 			return
 		}
 		if c.Kind == TargetAliyunSAE {

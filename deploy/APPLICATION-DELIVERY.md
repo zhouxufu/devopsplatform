@@ -12,6 +12,12 @@
 
 用户同步由管理员手动发起，确认时重新读取禅道权威数据；分页或权限失败不保存部分用户。当前用户适配使用开源 16.0 的 `company/browse` JSON 会话接口，并不依赖新版 REST v1。身份映射随平台注册表迁移到 MySQL。
 
+禅道地址仍填写安装根地址（例如 `http://host:8888/zentao/`），无需填写具体 API。平台获取会话时先尝试 `index.php?m=api&f=getSessionID&t=json`；遇到 HTML 登录页、路由跳转、404/405 或缺少 Session，自动探测 `api-getsessionid.json` 并沿用 PATHINFO 路由。Bug 与用户分页参数按 16.0 控制器顺序放在路径中，不会只替换登录 URL 而漏掉分页。账号认证失败不会换路由重试密码，以免触发账号锁定。兼容顶层 `user` 登录响应以及普通 `data` JSON/JSON 字符串响应；不把密码、Session 或上游响应正文写进错误提示。
+
+登录 POST 携带同源 Referer，兼容 16.0 的 CSRF 校验，不需要关闭禅道防护，也不把密码或 Session 放进 URL。若代理丢弃 POST/Referer，平台会明确提示登录表单未转为认证结果，而不把 HTTP 200 当成登录成功。
+
+只同步用户时，连接测试只验证登录认证，用户列表权限需到成员管理“读取用户”验证；同步 Bug 必须配置产品 ID。连接失败提示区分获取会话、登录认证、产品/Bug 读取与用户列表权限。旧版本本身不必因路由问题升级。
+
 接口依据：[禅道官方 16.0 用户列表源码](https://github.com/easysoft/zentaopms/blob/zentaopms_16.0/module/company/control.php)、[旧版 JSON API 机制](https://www.zentao.net/book/extension/api-intro-1241.html)。
 
 ## 需求、变更与版本的日常路径
