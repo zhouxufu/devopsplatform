@@ -3,6 +3,7 @@ import { computed, ref, onMounted, watch } from 'vue'
 import Modal from '../../shared/components/Modal.vue'
 import Sel from '../../shared/components/Sel.vue'
 import HelpTip from '../../shared/components/HelpTip.vue'
+import UiIcon from '../../shared/components/UiIcon.vue'
 import { ElButton, ElInput, ElInputNumber } from '../../shared/components/ui.js'
 import { toast } from '../../shared/composables/toast.js'
 import { MULTILINE_MODES, collectEditor, collectMultiline, selectCollectApplication } from '../agentCollection.js'
@@ -18,7 +19,7 @@ const hostKeyScanning=ref(false),pendingHostKey=ref(null)
 const connectionKeyScanning=ref(false),pendingConnectionHostKey=ref(null)
 const agentHost=ref(null),agentForm=ref({}),agentSaving=ref(false),agentApplying=ref(false),agentRemoteState=ref({}),agentInstallState=ref({})
 const KINDS={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 变更数据库',redis:'Redis 缓存维护',nacos:'Nacos 配置中心（2.4 / 2.5）',zentao:'禅道 16.0（需求来源）'}
-const ALL_RESOURCE_TABS={connections:['connections','🔌','连接'],environments:['environments','🌐','环境'],hosts:['hosts','🖥','主机'],groups:['groups','▦','主机组'],variables:['variables','⌘','变量组'],runners:['runners','⚙','构建 Runner'],audit:['audit','◷','审计日志']}
+const ALL_RESOURCE_TABS={connections:['connections','devtools','连接'],environments:['environments','static','环境'],hosts:['hosts','resources','主机'],groups:['groups','apps','主机组'],variables:['variables','logs','变量组'],runners:['runners','build','构建 Runner'],audit:['audit','changes','审计日志']}
 const RESOURCE_SCOPES={dbms:['connections','environments','audit'],redis:['connections','environments','audit'],deploy:['connections','environments','hosts','groups','variables','runners','audit'],logs:['hosts','environments','audit'],monitor:['hosts','environments','audit'],devtools:['environments','audit']}
 const PLUGIN_LABELS={dbms:'数据库工作台',redis:'Redis 工作台',deploy:'部署平台',logs:'日志查询',monitor:'监控大盘',devtools:'AI 开发工具'}
 const connectionKinds=computed(()=>Object.entries(KINDS).filter(([kind])=>!['dbms','redis'].includes(props.plugin)||kind===(props.plugin==='dbms'?'mysql':'redis')).map(([value,label])=>({value,label})))
@@ -168,7 +169,7 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
 <template><div>
   <div class="page-head"><h2>资源中心</h2><span class="plugin-scope">{{pluginLabel}}</span><HelpTip :text="`当前仅展示${pluginLabel}会使用的资源；切换顶部插件工作区后，分类会同步变化。资源数据仍由平台统一管理。`" /></div>
   <div class="resource-layout">
-  <nav class="resource-nav"><button v-for="t in resourceTabs" :key="t[0]" type="button" :class="{active:tab===t[0]}" @click="tab=t[0]"><span>{{t[1]}}</span><b>{{t[2]}}</b></button></nav>
+  <nav class="resource-nav" aria-label="资源分类"><button v-for="t in resourceTabs" :key="t[0]" type="button" :class="{active:tab===t[0]}" @click="tab=t[0]"><UiIcon :name="t[1]" :size="16"/><b>{{t[2]}}</b></button></nav>
   <div class="resource-content">
 
   <EnvironmentsView v-if="tab==='environments'" embedded />
@@ -285,5 +286,6 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
 .resource-card .grow{min-width:0;flex:none}.resource-card .grow>b,.resource-card .grow>small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .resource-card .actions{grid-column:2/-1;display:flex;align-items:center;gap:4px;width:auto;min-width:0;margin:2px 0 0;padding:8px 0 0;align-self:auto}
 @media(max-width:760px){.resource-layout{display:block}.resource-nav{position:static;flex-direction:row;overflow-x:auto;margin-bottom:14px}.resource-nav button{flex:0 0 auto;width:auto}.resource-grid{grid-template-columns:1fr}.resource-card .actions{grid-column:1/-1}}
+.page-head{margin-bottom:20px}.page-head h2{font-size:22px}.resource-nav{padding:6px;border-radius:12px}.resource-nav button{min-height:40px;border-radius:8px}.resource-nav button b{font-size:12px;font-weight:500}.resource-layout{gap:20px}.resource-grid{gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))}.resource-card{padding:18px;border-radius:12px;box-shadow:var(--shadow-sm)}.grow>b{font-size:14px}.grow small{font-size:12px;margin:3px 0}.grow code,.grow span{font-size:12px}.resource-card>.st-ok,.resource-card>.st-run{font-size:11px}.resource-card .actions{padding-top:12px;margin-top:8px}.resource-card .op-btn{min-height:28px}.section-head h3{font-size:16px}.section-head p{font-size:12px}.section-head{gap:12px;flex-wrap:wrap;margin-bottom:16px}@media(max-width:760px){.resource-grid{grid-template-columns:1fr}.resource-card{padding:14px}.resource-card{grid-template-columns:34px minmax(0,1fr)}.resource-card>.st-ok,.resource-card>.st-run,.resource-card>b{grid-column:2}.resource-card .actions{grid-column:1/-1}}
 .plugin-scope{padding:3px 8px;border-radius:10px;background:color-mix(in srgb,var(--brand) 12%,var(--panel2));color:var(--brand);font-size:10px}
 </style>

@@ -757,7 +757,7 @@ onMounted(async () => {
 }
 .tabs {
   display: flex;
-  gap: 20px;
+  gap: 4px;
   border-bottom: 1px solid var(--border);
   margin: 20px 0;
 }
@@ -766,16 +766,25 @@ onMounted(async () => {
   border-bottom: 2px solid transparent;
   background: none;
   color: var(--muted);
-  padding: 12px 4px;
+  padding: 12px 16px;
+  font-size: 13px;
+  border-radius:8px 8px 0 0;
   cursor: pointer;
 }
 .tabs button.active {
-  color: var(--brand);
+  color: var(--brand-ink);
   border-color: var(--brand);
+  background:var(--brand-soft);
+  font-weight:600;
 }
+.tabs button:hover:not(.active){background:var(--panel2);color:var(--text)}
 .toolbar {
   margin-bottom: 16px;
   flex-wrap: wrap;
+  padding:16px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--panel);
 }
 .toolbar span,
 .meta,
@@ -789,7 +798,9 @@ p {
   border: 1px solid var(--border);
   border-radius: 12px;
   margin-bottom: 12px;
+  box-shadow:var(--shadow-sm);
 }
+.record-head strong,.record-link{font-size:14px}.record-summary{margin-top:12px}.record>.actions{padding-top:14px;border-top:1px solid var(--border)}
 .record p {overflow-wrap:anywhere}
 .record-summary { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.7; max-height: 3.4em; }
 .record-head > div {
@@ -826,7 +837,8 @@ p {
 .empty {
   text-align: center;
   padding: 70px;
-  border: 1px dashed var(--border);
+  border: 1px solid var(--border);
+  background:var(--panel);
   border-radius: 12px;
 }
 .form-grid {
@@ -867,6 +879,7 @@ p {
   cursor: pointer;
 }
 @media (max-width: 700px) {
+  .tabs{gap:0;overflow-x:auto;white-space:nowrap}.tabs button{flex-shrink:0;padding:12px 10px}.toolbar{padding:12px}.empty{padding:40px 16px}
   .form-grid {
     grid-template-columns: 1fr;
   }

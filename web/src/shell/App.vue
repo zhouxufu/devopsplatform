@@ -6,6 +6,7 @@ import { ElButton, ElInput } from '../shared/components/ui.js'
 import { isDark, toggleTheme } from '../shared/composables/theme.js'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
 import UserManagement from '../shared/components/UserManagement.vue'
+import UiIcon from '../shared/components/UiIcon.vue'
 import { DEFAULT_RECENT_MINUTES, inferRecentMinutes, recentRange, restoreTimeRange } from '../shared/timeRange.js'
 
 const dark = ref(isDark())
@@ -269,21 +270,22 @@ onBeforeUnmount(() => clearInterval(recentClock))
       <div class="logo"><span class="mark">DO</span>DevOps 控制台</div>
       <div class="wstabs">
         <div class="wstab-list">
-          <div v-for="w in st.workspaces" :key="w.id" class="wstab" :class="{ on: w.id === st.active }" @click="switchWs(w.id)">
-            {{ w.plugin.nav_icon }} {{ w.plugin.display }}
-            <span class="x" @click.stop="closeWs(w.id)">×</span>
+          <div v-for="w in st.workspaces" :key="w.id" class="wstab" :class="{ on: w.id === st.active }" role="button" tabindex="0" :aria-current="w.id === st.active ? 'page' : undefined" @click="switchWs(w.id)" @keydown.enter.self="switchWs(w.id)" @keydown.space.self.prevent="switchWs(w.id)">
+            <UiIcon :name="w.plugin.name" :size="16"/> {{ w.plugin.display }}
+            <button class="x" type="button" :aria-label="`关闭${w.plugin.display}工作区`" @click.stop="closeWs(w.id)">×</button>
           </div>
         </div>
         <div class="wslauncher">
           <button class="wsplus" type="button" aria-label="打开插件工作区" :aria-expanded="st.plusOpen" @click.stop="st.plusOpen = !st.plusOpen">＋</button>
           <div class="pm" v-if="st.plusOpen" @click.stop>
-            <button v-for="p in st.plugins" :key="p.name" type="button" @click="openPlugin(p); st.plusOpen = false">{{ p.nav_icon }} {{ p.display }}</button>
+            <span class="launcher-label">打开工作区</span>
+            <button v-for="p in st.plugins" :key="p.name" type="button" @click="openPlugin(p); st.plusOpen = false"><UiIcon :name="p.name"/> {{ p.display }}</button>
           </div>
         </div>
       </div>
 		<button class="account" type="button" :title="st.me.role==='admin'?'管理平台成员':'当前登录用户'" @click="st.me.role==='admin'&&(st.showUsers=true)">{{st.me.display_name||st.me.username||'本地'}} · {{st.me.role==='admin'?'管理员':'成员'}}</button>
 		<button v-if="st.me.auth_enabled" class="logout" type="button" @click="logout">退出</button>
-		<div class="topr" :title="`${dark ? '切换浅色' : '切换深色'} · ${st.plugins.length} 个模块`" @click="switchTheme">{{ dark ? '🌙' : '☀️' }}</div>
+		<button class="topr" type="button" :aria-label="dark ? '切换浅色主题' : '切换深色主题'" :title="dark ? '切换浅色主题' : '切换深色主题'" @click="switchTheme"><UiIcon :name="dark ? 'sun' : 'moon'"/></button>
     </header>
     <div class="contextbar">
       <span class="context-title">当前上下文</span>
@@ -394,4 +396,12 @@ onBeforeUnmount(() => clearInterval(recentClock))
 .config-head{display:flex;align-items:center;margin-bottom:10px}.config-head p{margin:0;color:var(--muted);font-size:12px}.config-head button{margin-left:auto}.env-row{display:grid;grid-template-columns:1fr 1fr 1.45fr 1.15fr 30px;gap:8px;align-items:center;margin-bottom:8px}.env-row-head{color:var(--dim);font-size:10px;margin-bottom:5px}.env-row input:not([type=checkbox]){min-width:0;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text)}.env-row input:focus{outline:none;border-color:var(--brand)}.env-row input:disabled{opacity:.6}.env-row .checks{display:flex;gap:10px;font-size:11px;white-space:nowrap}.env-row .checks label{display:flex;align-items:center;gap:4px}.remove-env{border:0;background:transparent;color:var(--dim);font-size:18px;cursor:pointer}.remove-env:hover{color:var(--error)}.remove-env:disabled{opacity:.3}.policy-tip{font-size:11px;color:var(--dim);margin:12px 0 0}.confirm-envs{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.confirm-envs>div{display:grid;grid-template-columns:24px 1fr auto;align-items:center;gap:8px;padding:13px;background:var(--panel2);border-radius:8px}.confirm-envs span{color:var(--ok)}.confirm-envs span.protected{color:var(--warn)}.confirm-envs code{color:var(--muted)}.confirm-envs small{grid-column:2/4;color:var(--dim)}.setup-error{padding:9px 11px;border-radius:7px;background:color-mix(in srgb,var(--error) 10%,var(--panel));color:var(--error);font-size:12px}.setup-dialog footer{display:flex;gap:8px;border-top:1px solid var(--border);padding-top:16px;margin-top:18px}.setup-dialog footer span{flex:1}.setup-dialog footer button,.config-head button{padding:8px 14px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);cursor:pointer}.setup-dialog footer button.primary{background:var(--brand);border-color:var(--brand);color:#fff}.setup-dialog footer button:disabled{opacity:.55;cursor:not-allowed}
 @media(max-width:900px){.logo{font-size:0}.logo .mark{flex-shrink:0}.context-tip{display:none}.context-title{display:none}.contextbar{padding:0 10px}.wstab{padding:0 8px}}
 @media(max-width:650px){.context-field>label{display:none}.context-divider{display:none}.seg button{display:none}.template-grid{grid-template-columns:1fr}.env-row{grid-template-columns:1fr 1fr}.env-row-head{display:none}.env-row .remove-env{justify-self:end}.setup-body{min-height:0}.confirm-envs{grid-template-columns:1fr}}
+/* Refreshed chrome: workspace tabs remain alive; only their presentation changes. */
+.topbar{height:56px;padding:0 20px;gap:16px}.logo{font-size:15px;gap:10px;letter-spacing:-.25px}.logo .mark{width:28px;height:28px;border-radius:9px;font-size:11px;box-shadow:0 3px 8px rgb(37 99 235 / 20%)}
+.wstabs{margin-left:12px;padding-top:8px;flex:1}.wstab-list{gap:4px}.wstab{gap:8px;padding:0 14px;border-radius:10px 10px 0 0;font-size:13px}.wstab.on{background:var(--brand-soft);color:var(--brand-ink);font-weight:600}.wstab .x{border:0;background:transparent;color:inherit;padding:0;width:24px;height:28px;opacity:.65;line-height:1}.wsplus{align-self:center;width:36px;height:36px;justify-content:center;padding:0;border-radius:9px;font-size:20px}
+.pm{top:48px;min-width:220px;padding:8px;box-shadow:var(--shadow-float);border-radius:12px}.pm button{display:flex;align-items:center;gap:12px;padding:11px 12px;font-size:13px}.launcher-label{padding:6px 12px 8px;font-size:11px;color:var(--dim);font-weight:600}
+.account{margin-left:0;font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis}.topr{border:1px solid var(--border);background:var(--panel);width:34px;height:34px;display:grid;place-items:center;padding:0;flex-shrink:0}
+.contextbar{height:48px;padding:0 20px;gap:12px;background:var(--panel)}.context-title{font-size:11px;padding-right:12px;border-right:1px solid var(--border);color:var(--muted)}.context-field>label{font-size:12px;color:var(--muted)}.context-tip{font-size:11px}
+@media(max-width:900px){.topbar{padding:0 12px;gap:8px}.logo{font-size:0}.wstabs{margin-left:0}.wstab{padding:0 10px}.account{font-size:11px;max-width:150px}.contextbar{padding:0 12px}.context-title,.context-tip{display:none}}
+@media(max-width:650px){.account{display:none}.wstab{font-size:12px;gap:5px}.wstab .x{width:20px}.logo .mark{width:26px;height:26px}.context-field{flex-shrink:0}}
 </style>

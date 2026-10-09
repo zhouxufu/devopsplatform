@@ -5,6 +5,7 @@ import { ref, onMounted, computed, inject } from 'vue'
 import { useRouter } from 'vue-router'
 import Modal from '../../shared/components/Modal.vue'
 import HelpTip from '../../shared/components/HelpTip.vue'
+import UiIcon from '../../shared/components/UiIcon.vue'
 import Sel from '../../shared/components/Sel.vue'
 import { ElButton, ElInput } from '../../shared/components/ui.js'
 import { toast } from '../../shared/composables/toast.js'
@@ -74,6 +75,7 @@ function openNew() {
   form.value = defaults('jar'); showNew.value = true
 }
 const availableCatalogApps = computed(() => catalogApps.value.filter(app => !services.value.some(service => service.application_id === app.application_id)))
+function openTemplate(type) { openNew(); selectTemplate(type) }
 function selectCatalogApplication(applicationID) {
   form.value.application_id = applicationID || ''
   const app = catalogApps.value.find(item => item.application_id === applicationID)
@@ -177,7 +179,7 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
 </script>
 
 <template>
-  <div>
+  <div class="services-page">
     <div class="page-head">
       <div class="title-row"><h2>基础构建</h2><HelpTip text="管理应用的代码来源、构建配置和不可变制品；单应用可直接发布，多应用交付使用部署编排。" /></div>
       <ElButton type="primary" native-type="button" @click="openNew">＋ 接入应用</ElButton>
@@ -189,9 +191,9 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
     </section>
 
     <div class="app-grid">
-	  <article v-for="s in filteredServices" :key="s.name" class="app-card" @click="router.push(`/svc/${s.name}/overview`)">
+	  <article v-for="s in filteredServices" :key="s.name" class="app-card" role="link" tabindex="0" :aria-label="`查看应用 ${s.name}`" @click="router.push(`/svc/${encodeURIComponent(s.name)}/overview`)" @keydown.enter.self="router.push(`/svc/${encodeURIComponent(s.name)}/overview`)">
         <div class="app-top">
-          <span class="app-icon">{{ TYPES[s.artifact_type]?.icon || '📦' }}</span>
+          <span class="app-icon"><UiIcon :name="s.artifact_type === 'jar' ? 'java' : s.artifact_type" :size="22"/></span>
           <div><h3>{{ s.name }}</h3><span>{{ TYPES[s.artifact_type]?.label || s.artifact_type }}</span></div>
           <details class="card-menu" @click.stop><summary title="应用操作">···</summary><div><button @click="openEdit(s)">构建配置</button><button class="danger" @click="del(s)">删除应用</button></div></details>
         </div>
@@ -210,8 +212,8 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
     </div>
 	<div v-if="services.length && !filteredServices.length" class="empty-state compact"><div>⌕</div><h3>没有匹配的应用</h3><p>换个关键词或清除筛选条件。</p><ElButton @click="clearFilters">清除筛选</ElButton></div>
     <div v-if="!services.length" class="empty-state">
-      <div>📦</div><h3>接入第一个应用</h3><p>选择 Java、前端或 Docker 模板，几步即可开始构建。</p>
-      <ElButton type="primary" @click="openNew">接入应用</ElButton>
+      <div class="empty-symbol"><UiIcon name="build" :size="28"/></div><h3>接入第一个应用</h3><p>连接代码仓库，选择构建环境，生成可发布制品。</p>
+      <div class="onboarding-templates"><button v-for="(type, key) in TYPES" :key="key" type="button" @click="openTemplate(key)"><UiIcon :name="key === 'jar' ? 'java' : key" :size="24"/><strong>{{type.label}}</strong><small>{{type.hint}}</small><span>接入应用 →</span></button></div>
     </div>
 
     <Modal :show="showBC" :title="`构建 ${bcSvc?.name}`" @close="!bcSubmitting && (showBC = false)">
@@ -321,4 +323,8 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
 .discovered-app{padding:10px 11px;margin-bottom:12px;border:1px solid color-mix(in srgb,var(--brand) 35%,var(--border));border-radius:8px;background:color-mix(in srgb,var(--brand) 5%,var(--panel))}.discovered-app .fld{margin-bottom:4px}.discovered-app>small{color:var(--muted);font-size:10px}
 .git-url-warning{display:block;margin-top:5px;color:var(--warn);font-size:10px;line-height:1.45}
 @media(max-width:760px){.filter-main{align-items:stretch;flex-direction:column}.filter-main>:first-child{max-width:none}.result-count{margin-left:0}.category-tabs{align-self:flex-start}.app-grid{grid-template-columns:1fr}.template-grid{grid-template-columns:1fr}.wizard-steps{gap:24px}.wizard-steps span:not(:last-child):after{display:none}}
+</style>
+
+<style scoped>
+.services-page{max-width:1500px;margin:0 auto}.page-head{margin-bottom:24px;gap:12px}.page-head h2{font-size:22px}.filter-panel{padding:16px;margin-bottom:20px;box-shadow:var(--shadow-sm)}.result-count{font-size:12px}.app-grid{gap:20px;grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr))}.app-card{padding:22px;border-radius:14px;box-shadow:var(--shadow-sm)}.app-card:hover{transform:none;border-color:var(--brand);box-shadow:0 6px 20px rgb(29 41 61 / 8%)}.app-top>div{min-width:0}.app-top h3{font-size:17px;overflow-wrap:anywhere}.app-top div span{font-size:12px}.app-icon{width:44px;height:44px;border-radius:12px;background:var(--brand-soft);color:var(--brand-ink);flex-shrink:0}.app-tags{margin:14px 0 0}.app-tags span{font-size:11px;padding:2px 8px}.repo{margin:16px 0;padding:10px;font-size:12px}.app-state b{font-size:14px;margin:4px 0}.app-state small,.app-state code,.app-state span{font-size:12px}.next-action{padding:8px 10px;margin-top:18px;font-size:12px}.app-actions{margin-top:18px;padding-top:16px}.empty-state{padding:48px 24px;background:var(--panel);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-sm)}.empty-state .empty-symbol{display:grid;place-items:center;margin:0 auto 16px;width:60px;height:60px;border-radius:18px;background:var(--brand-soft);color:var(--brand-ink)}.empty-state h3{font-size:20px;margin:0 0 8px}.empty-state p{font-size:13px;margin-bottom:28px}.onboarding-templates{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;max-width:860px;margin:auto;text-align:left}.onboarding-templates button{display:grid;justify-items:start;gap:10px;padding:24px;background:var(--panel);border:1px solid var(--border);border-radius:12px;color:var(--text);transition:border-color .15s,background .15s}.onboarding-templates button:hover{border-color:var(--brand);background:var(--brand-soft)}.onboarding-templates .ui-icon{color:var(--brand-ink)}.onboarding-templates strong{font-size:15px}.onboarding-templates small{font-size:12px;line-height:1.7;color:var(--muted)}.onboarding-templates span{font-size:12px;font-weight:600;color:var(--brand-ink);margin-top:8px}.empty-state.compact{padding:36px 20px}@media(max-width:760px){.page-head{margin-bottom:18px}.onboarding-templates{grid-template-columns:1fr}.onboarding-templates button{grid-template-columns:32px 1fr;gap:6px 12px;padding:16px}.onboarding-templates .ui-icon{grid-row:1/4}.onboarding-templates small,.onboarding-templates span{grid-column:2}.onboarding-templates span{margin:0}.empty-state{padding:32px 20px}.filter-main{flex-wrap:wrap}.filter-main>:first-child{max-width:100%;flex:1 0 100%}.app-card{padding:18px}}
 </style>

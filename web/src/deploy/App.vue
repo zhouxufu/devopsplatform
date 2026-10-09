@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { toast } from '../shared/composables/toast.js'
 import PlatformNav from '../shared/components/PlatformNav.vue'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
+import UiIcon from '../shared/components/UiIcon.vue'
 const embedded = window.parent !== window.window
 const directAPI = !location.pathname.startsWith('/api/plugins/')
 const route = useRoute(), router = useRouter()
@@ -62,12 +63,12 @@ try { if (embedded) window.parent.postMessage({ type: 'context.request' }, locat
 <template>
   <div class="layout" :class="{ embedded }">
     <header>
-      <span class="logo">🚀 部署平台</span>
-      <nav>
-        <RouterLink to="/">🔨<i>构建</i></RouterLink>
-        <RouterLink to="/orchestration">🚀<i>编排</i></RouterLink>
-        <RouterLink to="/changes">🧾<i>变更</i></RouterLink>
-        <RouterLink to="/plugins">🧩<i>扩展</i></RouterLink>
+      <span class="logo"><UiIcon name="deploy"/> 部署平台</span>
+      <nav aria-label="部署平台导航">
+        <RouterLink to="/" title="基础构建"><UiIcon name="build"/><i>构建</i></RouterLink>
+        <RouterLink to="/orchestration" title="部署编排"><UiIcon name="orchestration"/><i>编排</i></RouterLink>
+        <RouterLink to="/changes" title="变更管控"><UiIcon name="changes"/><i>变更</i></RouterLink>
+        <RouterLink to="/plugins" title="插件扩展"><UiIcon name="plugins"/><i>扩展</i></RouterLink>
       </nav>
       <PlatformNav @open="platformPanel=$event" />
     </header>
@@ -89,4 +90,10 @@ nav a.router-link-active{color:var(--text);background:var(--panel2)}
 .layout:not(.embedded) nav a{flex-direction:row;justify-content:flex-start;width:100%;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
 .layout:not(.embedded) :deep(.platform-nav button){flex-direction:row;justify-content:flex-start;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
 .layout>main{flex:1;min-width:0;overflow:auto;padding:14px 16px}
+.layout>header{width:var(--sidebar-width);flex-basis:var(--sidebar-width);padding:12px 6px;gap:16px}
+nav a{min-height:54px;justify-content:center;padding:9px 0;gap:5px;border-radius:10px;font-size:11px;transition:background .15s,color .15s}
+nav a:hover{background:var(--panel2);color:var(--text)}nav a.router-link-active{background:var(--brand-soft);color:var(--brand-ink);font-weight:600}
+.layout:not(.embedded)>header{width:176px;flex-basis:176px;padding:20px 12px}.layout:not(.embedded) .logo{display:flex;align-items:center;gap:8px;margin-bottom:8px}.layout:not(.embedded) nav a{font-size:13px;min-height:44px}.layout:not(.embedded) :deep(.platform-nav button){font-size:13px;min-height:44px}
+.layout>main{padding:24px 28px}
+@media(max-width:760px){.layout>main{padding:18px 16px}.layout:not(.embedded)>header{width:var(--sidebar-width);flex-basis:var(--sidebar-width);padding:12px 6px}.layout:not(.embedded) .logo{display:none}.layout:not(.embedded) nav a,.layout:not(.embedded) :deep(.platform-nav button){flex-direction:column;justify-content:center;padding:9px 0;font-size:11px;gap:5px}}
 </style>

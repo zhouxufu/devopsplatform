@@ -55,7 +55,7 @@ await page.route('**/*', async route => {
 try {
   if (embedded) {
     await page.goto(base)
-    await ui.getByRole('link', { name: '🧾 变更', exact: true }).click()
+    await ui.getByRole('link', { name: '变更', exact: true }).click()
   } else await page.goto(base + (process.env.SHELL_UI_TEST_PATH || '/api/plugins/deploy/ui') + '#/changes?tab=work')
   const card = ui.locator('article.record').filter({ has: ui.getByRole('button', { name: '富文本测试 BUG', exact: true }) })
   await card.waitFor()

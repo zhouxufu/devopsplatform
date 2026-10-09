@@ -761,6 +761,7 @@ onMounted(async () => {
 }
 .heading {
   justify-content: space-between;
+  flex-wrap:wrap;
 }
 .title h2,
 h3 {
@@ -769,7 +770,7 @@ h3 {
 .tabs {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 4px;
   border-bottom: 1px solid var(--border);
   margin: 20px 0;
 }
@@ -778,19 +779,25 @@ h3 {
   border: 0;
   border-bottom: 2px solid transparent;
   color: var(--muted);
-  padding: 12px 0;
+  padding: 12px 16px;
+  font-size:13px;
+  border-radius:8px 8px 0 0;
   cursor: pointer;
 }
 .tabs > button.active {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-ink);
+  background:var(--brand-soft);
+  font-weight:600;
 }
+.tabs > button:hover:not(.active){background:var(--panel2);color:var(--text)}
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px;
   margin-bottom: 14px;
+  box-shadow:var(--shadow-sm);
 }
 .tag,
 .flow span {
@@ -815,10 +822,12 @@ p {
 }
 .empty {
   text-align: center;
-  border: 1px dashed var(--border);
+  border: 1px solid var(--border);
+  background:var(--panel);
   padding: 80px 20px;
   border-radius: 12px;
 }
+.empty h3{font-size:20px;margin-bottom:10px}.empty p{margin:0 auto 20px;max-width:560px}.flow span{border:1px solid var(--border)}
 .form {
   display: grid;
   gap: 16px;

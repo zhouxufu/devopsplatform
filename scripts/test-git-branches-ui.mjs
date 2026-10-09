@@ -47,7 +47,8 @@ async function chooseBranch(dialog,text){
 }
 async function chooseApp(dialog,name){
  const control=dialog.locator('label').filter({hasText:/^影响应用/}).locator('.el-select')
- await control.click();const list=await control.getByRole('combobox').getAttribute('aria-controls')
+ // Click the dropdown arrow, not the wrapper center (which can hit a selected tag's ×).
+ await control.locator('.el-select__suffix').click();const list=await control.getByRole('combobox').getAttribute('aria-controls')
  await ui.locator('#'+list).getByRole('option',{name,exact:true}).click();await dialog.locator('.el-dialog__header').click()
 }
 try{
@@ -83,7 +84,7 @@ try{
  const newBranch=branchControl(wizard).getByRole('combobox');await newBranch.fill('feature/empty-list');const newList=await newBranch.getAttribute('aria-controls');await ui.locator('#'+newList).getByRole('option',{name:'feature/empty-list',exact:true}).waitFor();await newBranch.press('Enter');await wizard.locator('.el-dialog__header').click()
  assert.equal(await selected(wizard),'feature/empty-list','empty repository list dropped manual branch');emptyBranches=false
  await wizard.getByRole('button',{name:'取消',exact:true}).click()
- await ui.getByRole('link',{name:'🧾 变更',exact:true}).click()
+ await ui.getByRole('link',{name:'变更',exact:true}).click()
  await ui.getByRole('button',{name:work.title,exact:true}).click()
  await ui.getByRole('button',{name:'编辑交付内容',exact:true}).click()
  const editor=visibleDialog('交付内容 · '+work.title)

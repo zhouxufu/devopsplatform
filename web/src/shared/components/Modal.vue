@@ -12,7 +12,7 @@ const visible = computed({
 })
 </script>
 <template>
-  <ElDialog v-model="visible" :title="title" :width="extraWide ? 'min(960px, 92vw)' : wide ? 'min(560px, 92vw)' : 'min(480px, 92vw)'" append-to-body align-center>
+  <ElDialog v-model="visible" :title="title" :width="extraWide ? 'min(1060px, 92vw)' : wide ? 'min(720px, 92vw)' : 'min(520px, 92vw)'" append-to-body align-center>
     <slot />
   </ElDialog>
 </template>

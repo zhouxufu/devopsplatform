@@ -4,6 +4,7 @@ import { isDark, toggleTheme } from '../shared/composables/theme.js'
 import { serviceNames } from './services.js'
 import PlatformNav from '../shared/components/PlatformNav.vue'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
+import UiIcon from '../shared/components/UiIcon.vue'
 
 const dark = ref(isDark())
 const platformPanel = ref('')
@@ -42,12 +43,12 @@ onBeforeUnmount(() => window.removeEventListener('message', onContext))
 <template>
   <div class="layout" :class="{ embedded }">
     <header>
-      <span class="logo">▤</span>
-      <nav>
-        <RouterLink to="/search">🔍<i>搜索</i></RouterLink>
-        <RouterLink to="/live">●<i>Live</i></RouterLink>
-        <RouterLink to="/subs">🔔<i>订阅</i></RouterLink>
-        <RouterLink to="/status">◉<i>状态</i></RouterLink>
+      <span class="logo"><UiIcon name="logs"/></span>
+      <nav aria-label="日志平台导航">
+        <RouterLink to="/search"><UiIcon name="search"/><i>搜索</i></RouterLink>
+        <RouterLink to="/live"><UiIcon name="live"/><i>Live</i></RouterLink>
+        <RouterLink to="/subs"><UiIcon name="bell"/><i>订阅</i></RouterLink>
+        <RouterLink to="/status"><UiIcon name="status"/><i>状态</i></RouterLink>
       </nav>
       <PlatformNav @open="platformPanel=$event" />
     </header>
@@ -69,4 +70,6 @@ main{flex:1;min-width:0;display:flex;flex-direction:column}
 .layout:not(.embedded) :deep(.platform-nav button){flex-direction:row;justify-content:flex-start;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
 .themebtn{margin-top:auto;font-size:14px;cursor:pointer;color:var(--muted);padding:4px}
 .themebtn:hover{color:var(--text)}
+.layout>header{width:var(--sidebar-width);flex-basis:var(--sidebar-width);padding:12px 6px;gap:16px}nav a{min-height:54px;justify-content:center;gap:5px;padding:9px 0;border-radius:10px;font-size:11px}nav a i{font-style:normal}nav a:hover{background:var(--panel2);color:var(--text)}nav a.router-link-active{background:var(--brand-soft);color:var(--brand-ink);font-weight:600}.layout:not(.embedded)>header{width:176px;flex-basis:176px;padding:20px 12px}.layout:not(.embedded) nav a,.layout:not(.embedded) :deep(.platform-nav button){font-size:13px;min-height:44px}
+@media(max-width:760px){.layout:not(.embedded)>header{width:var(--sidebar-width);flex-basis:var(--sidebar-width);padding:12px 6px}.layout:not(.embedded) .logo{display:none}.layout:not(.embedded) nav a,.layout:not(.embedded) :deep(.platform-nav button){flex-direction:column;justify-content:center;padding:9px 0;gap:5px;font-size:11px}}
 </style>

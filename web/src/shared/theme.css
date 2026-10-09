@@ -1,24 +1,38 @@
-/* 主题：默认浅色，html.dark 为深色。切换由 shared/composables/theme.js 驱动。 */
+/* Shared console tokens. Preserve theme preference and dense log table geometry. */
 :root{
-  --bg:#f6f8fa; --panel:#ffffff; --panel2:#eff2f5; --border:#d0d7de;
-  --text:#1f2328; --muted:#656d76; --dim:#8c959f;
-  --brand:#0969da; --error:#cf222e; --warn:#9a6700; --info:#0969da;
-  --ok:#1a7f37; --trace:#8250df;
+  --bg:#f3f5f9; --panel:#ffffff; --panel2:#f0f3f8; --border:#dde3ed;
+  --text:#1d293d; --muted:#59687e; --dim:#66768d;
+  --brand:#2563eb; --error:#c73345; --warn:#976000; --info:#2563eb;
+  --ok:#19744e; --trace:#7955c7;
+  --brand-soft:#edf3ff; --brand-ink:#2563eb; --input-bg:#ffffff;
+  --shadow-sm:0 2px 8px rgb(29 41 61 / 4%);
+  --shadow-float:0 20px 64px rgb(29 41 61 / 18%);
+  --radius:12px; --sidebar-width:64px;
   --mono:'SF Mono',Menlo,Consolas,monospace;
 }
 html.dark{
-  --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --border:#30363d;
-  --text:#e6edf3; --muted:#8b949e; --dim:#6e7681;
-  --brand:#2f81f7; --error:#f85149; --warn:#d29922; --info:#58a6ff;
-  --ok:#3fb950; --trace:#a371f7;
+  --bg:#101722; --panel:#182230; --panel2:#202d3e; --border:#304055;
+  --text:#e6edf7; --muted:#a5b3c7; --dim:#93a3ba;
+  --brand:#78a7ff; --error:#ff8696; --warn:#eac073; --info:#78a7ff;
+  --ok:#68d5a5; --trace:#c7a3f5;
+  --brand-soft:#243853; --brand-ink:#78a7ff; --input-bg:#131d2b;
+  --shadow-sm:0 2px 8px rgb(0 0 0 / 12%);
+  --shadow-float:0 24px 72px rgb(0 0 0 / 40%);
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,'PingFang SC',sans-serif;height:100vh;overflow:hidden;transition:background .15s,color .15s}
+body{background:var(--bg);color:var(--text);font:13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;height:100vh;overflow:hidden;transition:background .15s,color .15s;-webkit-font-smoothing:antialiased}
 #app{height:100vh;display:flex;flex-direction:column}
-select,input,button,textarea{background:var(--panel);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;outline:none;cursor:pointer;font-family:inherit}
+select,input,button,textarea{background:var(--input-bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;font-family:inherit}
 input,textarea{cursor:text}
 button:hover{border-color:var(--muted)}
-.btn-p{background:var(--brand)!important;border-color:var(--brand)!important;color:#fff!important}
+button:disabled{cursor:not-allowed}
+:where(button,a,input,select,textarea,summary,[tabindex]):focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+input[type=checkbox]{accent-color:var(--brand)}
+h2{font-size:22px;line-height:1.4;font-weight:650;letter-spacing:-.4px}
+h3{font-weight:600}
+::selection{background:var(--brand-soft);color:var(--text)}
+.ui-icon{flex-shrink:0}
+.btn-p{background:#2563eb!important;border-color:#2563eb!important;color:#fff!important}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{text-align:left;color:var(--dim);font-weight:500;font-size:11px;padding:7px 10px;border-bottom:1px solid var(--border)}
 td{padding:8px 10px;border-bottom:1px solid var(--border)}
@@ -29,7 +43,7 @@ tr:hover td{background:var(--panel2)}
 .table-scroll{width:100%;overflow-x:auto}.table-scroll table{min-width:720px}
 .st-ok{color:var(--ok)}.st-fail{color:var(--error)}.st-run{color:var(--warn)}
 .empty{padding:40px;color:var(--dim);text-align:center}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;box-shadow:var(--shadow-sm)}
 .card h4{font-size:12px;color:var(--muted);margin-bottom:8px}
 .fld{margin-bottom:10px}
 .fld label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
@@ -37,3 +51,29 @@ tr:hover td{background:var(--panel2)}
 /* 图表（SVG）主题适配 */
 .lp-grid{stroke:var(--border)}
 .lp-axis{fill:var(--dim)}
+/* Element Plus follows the same palette; high specificity avoids lazy CSS order drift. */
+:root:root,html.dark:root{
+  --el-color-primary:var(--brand);--el-color-primary-light-3:#5988f0;--el-color-primary-light-5:#8aacfa;
+  --el-color-primary-light-7:color-mix(in srgb,var(--brand) 20%,var(--panel));
+  --el-color-primary-light-8:var(--brand-soft);--el-color-primary-light-9:var(--brand-soft);--el-color-primary-dark-2:#1d4ed8;
+  --el-bg-color:var(--panel);--el-bg-color-page:var(--bg);--el-bg-color-overlay:var(--panel);
+  --el-fill-color-blank:var(--input-bg);--el-fill-color-light:var(--panel2);--el-fill-color:var(--panel2);
+  --el-text-color-primary:var(--text);--el-text-color-regular:var(--text);--el-text-color-secondary:var(--muted);--el-text-color-placeholder:var(--dim);
+  --el-border-color:var(--border);--el-border-color-light:var(--border);--el-border-color-lighter:var(--border);
+  --el-border-radius-base:8px;--el-font-size-base:13px;
+}
+.el-button.el-button{font-weight:500;transition:background .15s,border-color .15s;min-height:34px;padding:8px 14px}
+.el-button.el-button--small{min-height:28px;padding:5px 10px}
+.el-button.el-button--primary:not(.is-plain){background:#2563eb;border-color:#2563eb;color:#fff;box-shadow:0 2px 4px rgb(37 99 235 / 16%)}
+.el-button.el-button--primary:not(.is-plain):hover:not(:disabled){background:#1d4ed8;border-color:#1d4ed8}
+.el-input__wrapper.el-input__wrapper,.el-select__wrapper.el-select__wrapper{background:var(--input-bg);min-height:34px;border-radius:8px}
+.el-input__inner.el-input__inner,.el-select__input.el-select__input{border:0;border-radius:0;padding:0;background:transparent}
+.el-input__inner:focus-visible,.el-select__input:focus-visible{outline:none} /* wrapper supplies the keyboard focus ring */
+.el-textarea__inner.el-textarea__inner{background:var(--input-bg);border-radius:8px;line-height:1.7}
+.el-dialog.el-dialog{padding:24px;border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-float);max-height:90vh;overflow:auto}
+.el-dialog__header.el-dialog__header{padding:0 32px 18px 0;margin-bottom:20px;border-bottom:1px solid var(--border)}
+.el-dialog__title.el-dialog__title{font-size:18px;font-weight:600;line-height:1.5}
+.el-dialog__body.el-dialog__body{padding:0;color:var(--text)}
+.el-dialog__headerbtn.el-dialog__headerbtn{top:14px;right:14px;width:40px;height:40px}
+.el-overlay.el-overlay{background:rgb(8 18 33 / 48%);backdrop-filter:blur(3px)}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}

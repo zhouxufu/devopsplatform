@@ -84,7 +84,7 @@ try {
   assert.equal(saved.plan.services.length,0,'Manual-only version deployed an unrelated app')
   assert.equal((await read('/api/releases')).length,0,'UI regression unexpectedly created a deployment')
   await dialog().locator('.el-dialog__headerbtn').click()
-  await page.getByRole('link',{name:'🧾 变更'}).click()
+  await page.getByRole('link',{name:'变更',exact:true}).click()
   await page.getByRole('button',{name:'发布版本',exact:true}).click()
   await page.locator('.record').filter({hasText:version}).getByRole('button',{name:'进入版本'}).click()
   await page.getByRole('button',{name:`#${saved.id} · UI 回归环境 · 成功`}).click()

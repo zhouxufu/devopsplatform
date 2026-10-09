@@ -32,16 +32,16 @@ try {
     await page.goto(`${base}/api/plugins/${plugin}/ui`+(plugin==='deploy'?'#/orchestration':''))
     for (const width of [1440,900,700]) {
       await page.setViewportSize({width,height:900})
-      await checkLayout(page,160)
+      await checkLayout(page,width<=760?64:176)
     }
   }
   await page.setViewportSize({width:1440,height:1000})
   await page.goto(base)
   const deploy=page.frameLocator('iframe[src*="/api/plugins/deploy/ui"]')
-  await checkLayout(deploy,46)
-  await deploy.getByRole('link',{name:'🚀 编排'}).click()
+  await checkLayout(deploy,64)
+  await deploy.getByRole('link',{name:'编排',exact:true}).click()
   await deploy.getByRole('heading',{name:'部署编排',exact:true}).waitFor()
-  await deploy.getByRole('link',{name:'🧾 变更'}).click()
+  await deploy.getByRole('link',{name:'变更',exact:true}).click()
   await deploy.locator('.platform-nav button').filter({hasText:'资源'}).click()
   const panel=page.getByRole('dialog',{name:'资源中心',exact:true})
   await panel.waitFor()

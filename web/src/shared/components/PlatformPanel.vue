@@ -1,14 +1,35 @@
 <script setup>
-import { onBeforeUnmount, onMounted } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ApplicationCenterView from '../pages/ApplicationCenterView.vue'
 import ResourcesView from '../../deploy/pages/ResourcesView.vue'
+import UiIcon from './UiIcon.vue'
 const props = defineProps({
   view: { type: String, default: '' },
   plugin: { type: String, default: 'deploy' },
   directAPI: Boolean,
 })
 const emit = defineEmits(['close', 'switch'])
-function onKeydown(event) { if (props.view && event.key === 'Escape') emit('close') }
+const dialog = ref(null)
+let returnFocus
+watch(() => !!props.view, async open => {
+  if (open) {
+    returnFocus = document.activeElement
+    await nextTick()
+    dialog.value?.querySelector('.close')?.focus()
+  } else if (returnFocus?.isConnected) returnFocus.focus()
+})
+function onKeydown(event) {
+  if (!props.view) return
+  // Nested Element Plus dialogs manage their own keyboard focus / Escape.
+  if ([...document.querySelectorAll('.el-dialog')].some(el => el.getClientRects().length)) return
+  if (event.key === 'Escape') { event.preventDefault(); emit('close') }
+  if (event.key === 'Tab') {
+    const controls = [...(dialog.value?.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]') || [])].filter(el => el.getClientRects().length)
+    const first = controls[0], last = controls.at(-1)
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+  }
+}
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 </script>
@@ -16,10 +37,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 <template>
   <div v-if="view" class="platform-layer">
     <button class="backdrop" type="button" aria-label="关闭公共中心并返回原页面" @click="$emit('close')"></button>
-    <aside class="platform-panel" role="dialog" aria-modal="true" :aria-label="view==='apps'?'应用中心':'资源中心'">
+    <aside ref="dialog" class="platform-panel" role="dialog" aria-modal="true" :aria-label="view==='apps'?'应用中心':'资源中心'">
       <header>
         <div class="identity"><b>平台公共中心</b><small>关闭后返回原工作位置</small></div>
-        <nav><button type="button" :class="{active:view==='apps'}" @click="$emit('switch','apps')">📦 应用中心</button><button type="button" :class="{active:view==='resources'}" @click="$emit('switch','resources')">🖥 资源中心</button></nav>
+        <nav><button type="button" :class="{active:view==='apps'}" @click="$emit('switch','apps')"><UiIcon name="apps" :size="16"/> 应用中心</button><button type="button" :class="{active:view==='resources'}" @click="$emit('switch','resources')"><UiIcon name="resources" :size="16"/> 资源中心</button></nav>
         <button class="close" type="button" aria-label="关闭并返回原页面" title="关闭并返回原页面" @click="$emit('close')">×</button>
       </header>
       <main><ApplicationCenterView v-if="view==='apps'"/><ResourcesView v-else-if="view==='resources'" :plugin="plugin" :directAPI="directAPI"/></main>
@@ -33,4 +54,5 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 .platform-panel>main{flex:1;min-width:0;overflow:auto;padding:14px 16px}
 @keyframes panel-in{from{transform:translate(-50%,-48%) scale(.99);opacity:.82}to{transform:translate(-50%,-50%) scale(1);opacity:1}}
 @media(max-width:720px){.identity{display:none}.platform-panel{width:calc(100% - 24px);height:calc(100% - 72px)}.platform-panel nav{margin-left:0}.platform-panel nav button{padding:0 10px}}
+.backdrop{inset:56px 0 0;background:rgb(8 18 33 / 46%);backdrop-filter:blur(4px)}.platform-panel{background:var(--bg);border-radius:16px;box-shadow:var(--shadow-float)}.platform-panel>header{height:60px;padding:0 20px}.identity b{font-size:14px}.identity small{font-size:11px}.platform-panel nav button{display:flex;align-items:center;gap:8px;font-size:13px}.platform-panel>main{padding:24px}.platform-panel>header .close{width:36px;height:36px}
 </style>
