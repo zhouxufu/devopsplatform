@@ -34,7 +34,7 @@ async function save(){
       <p v-if="loading">读取资源绑定中…</p>
       <template v-else>
         <article v-for="(r,i) in resources.requirements" :key="i">
-          <div class="binding-row"><ElInput v-model="r.alias" :disabled="!!r.service" placeholder="资源别名，如 business-db" /><Sel v-model="r.kind" :disabled="!!r.service" :options="[{value:'mysql',label:'MySQL'},{value:'nacos',label:'Nacos（待接通）'}]" /><ElButton @click="resources.requirements.splice(i,1);resources.bindings=resources.bindings.filter(b=>b.alias!==r.alias)">删除资源</ElButton></div>
+          <div class="binding-row"><ElInput v-model="r.alias" :disabled="!!r.service" placeholder="资源别名，如 business-db" /><Sel v-model="r.kind" :disabled="!!r.service" :options="[{value:'mysql',label:'MySQL'},{value:'nacos',label:'Nacos'}]" /><ElButton @click="resources.requirements.splice(i,1);resources.bindings=resources.bindings.filter(b=>b.alias!==r.alias)">删除资源</ElButton></div>
           <div v-for="(b,j) in resources.bindings" :key="j">
             <div v-if="b.alias===r.alias" class="binding-row"><Sel v-model="b.environment" :options="environments.map(e=>({value:e.name,label:e.display_name}))" all-label="选择环境" /><Sel v-model="b.connection" :options="connections.filter(c=>c.kind===r.kind).map(c=>({value:c.name,label:`${c.name} · ${c.config?.database||c.endpoint}`}))" all-label="选择连接" filterable /><ElButton @click="resources.bindings.splice(j,1)">移除绑定</ElButton></div>
           </div>

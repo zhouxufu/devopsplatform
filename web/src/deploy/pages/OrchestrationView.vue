@@ -5,6 +5,7 @@ import Modal from "../../shared/components/Modal.vue";
 import Sel from "../../shared/components/Sel.vue";
 import HelpTip from "../../shared/components/HelpTip.vue";
 import SQLPlanPreview from '../components/SQLPlanPreview.vue';
+import NacosPlanPreview from '../components/NacosPlanPreview.vue';
 import { ElButton, ElInput } from "../../shared/components/ui.js";
 import { toast } from "../../shared/composables/toast.js";
 const api = inject("api"),
@@ -19,6 +20,12 @@ const templates = ref([]),
   artifacts = ref([]),
   me = ref({});
 const changes=ref([]);
+const nacosExecutions=ref([]);
+async function restoreNacos(changeID){
+  if(busy.value||!selected.value)return;
+  busy.value=true;
+  try{const draft=await api(`api/delivery/runs/${selected.value.id}/nacos-restore-draft`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({change_id:changeID})});changes.value=await api('api/changes');toast(`已创建恢复草稿 #${draft.id}；请核对、标记就绪并重新发起审核，不会立即执行`,'success')}catch(e){toast(e.message,'error')}finally{busy.value=false}
+}
 const area = ref("runs"),
   showTemplate = ref(false),
   showRun = ref(false),
@@ -51,7 +58,7 @@ const states = {
   waiting: "发布中",
   waiting_next_batch: "等待下一批",
   queued: "排队中",
-  executing:'SQL 执行中 / 中断待核对',
+  executing:'变更执行中 / 中断待核对',
 };
 const changeKinds = {
   code: "代码分支",
@@ -66,7 +73,7 @@ const kinds = [
   { value: "deploy", label: "发布应用" },
   { value: "manual", label: "人工确认" },
   { value: "mysql", label: "SQL 变更" },
-  { value: "nacos", label: "Nacos 配置（待接通）" },
+  { value: "nacos", label: "Nacos 配置" },
   { value: "data-sync", label: "数据同步（待接通）" },
   { value: "redis", label: "Redis 命令（待接通）" },
 ];
@@ -120,6 +127,7 @@ async function load() {
       environments.value,
       artifacts.value,
       changes.value,
+      nacosExecutions.value,
     ] = await Promise.all([
       api("api/delivery/templates"),
       api("api/delivery/runs"),
@@ -128,6 +136,7 @@ async function load() {
       api("api/environments"),
       api("api/artifacts?limit=500"),
       api('api/changes?status=ready&limit=500'),
+      api('api/nacos-executions'),
     ]);
   } catch (e) {
     toast(e.message, "error");
@@ -225,6 +234,7 @@ async function submit() {
 async function openDetail(run) {
   try {
     selected.value = await api(`api/delivery/runs/${run.id}`);
+    nacosExecutions.value = await api(`api/nacos-executions?run_id=${run.id}`);
     router.replace({path:'/orchestration',query:{run:String(run.id)}});
     const entries = await Promise.all(
       selected.value.steps
@@ -437,7 +447,8 @@ onMounted(async () => {
               :rows="2"
           /></label>
           <label v-if="n.kind==='mysql'">指定 SQL 变更（不选时执行版本内全部 SQL）<Sel v-model="n.change_ids" multiple :options="changes.filter(c=>c.kind==='mysql').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" width="100%" /></label>
-          <p v-if="!['deploy', 'manual','mysql'].includes(n.kind)" class="notice">
+          <label v-if="n.kind==='nacos'">指定配置变更（不选时执行版本内全部 Nacos 变更）<Sel v-model="n.change_ids" multiple filterable :options="changes.filter(c=>c.kind==='nacos').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" width="100%" /></label>
+          <p v-if="!['deploy', 'manual','mysql','nacos'].includes(n.kind)" class="notice">
             可保存节点定义；执行器未接通，会阻止提交。
           </p>
         </div>
@@ -534,6 +545,7 @@ onMounted(async () => {
             placeholder="操作与确认说明"
           />
           <label v-if="n.kind==='mysql'">本次 SQL 变更（版本模式仅允许版本内变更）<Sel v-model="n.change_ids" multiple :options="(version?.changes||changes).filter(c=>c.kind==='mysql').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" all-label="版本内全部 SQL" width="100%" /></label>
+          <label v-if="n.kind==='nacos'">本次配置变更（版本模式仅允许版本内变更）<Sel v-model="n.change_ids" multiple filterable :options="(version?.changes||changes).filter(c=>c.kind==='nacos').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" all-label="版本内全部 Nacos 变更" width="100%" /></label>
         </div>
         <ElButton @click="addNode(request.nodes)">＋ 增加本次节点</ElButton
         ><ElButton @click="resolve" :loading="busy">检查范围与配置</ElButton>
@@ -567,6 +579,7 @@ onMounted(async () => {
             ✓ 校验通过。提交后冻结制品、目标和节点；修改需另建执行单。
           </p>
           <SQLPlanPreview :plans="preview.sql_plans" />
+          <NacosPlanPreview :plans="preview.nacos_plans" />
         </section>
         <div class="footer">
           <ElButton @click="showRun = false">取消</ElButton
@@ -649,6 +662,7 @@ onMounted(async () => {
             </article>
           </template>
           <SQLPlanPreview :plans="selected.plan.sql_plans" />
+          <NacosPlanPreview :plans="selected.plan.nacos_plans" :executions="nacosExecutions.filter(e=>e.run_id===selected.id)" :can-restore="canManage(selected)&&['success','failed'].includes(selected.status)" @restore="restoreNacos" />
         </section>
         <div
           v-for="s in selected.steps"

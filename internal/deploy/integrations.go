@@ -25,12 +25,16 @@ func integrationSchema(identity, doc string) []string {
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS release_version_scope (release_version_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS change_payloads (change_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS issue_sync_state (connection VARCHAR(191) PRIMARY KEY, last_at BIGINT NOT NULL, status VARCHAR(32) NOT NULL, detail %s NOT NULL)`, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS nacos_execution_ledger (target_key VARCHAR(80) NOT NULL, change_id BIGINT NOT NULL, run_id BIGINT NOT NULL, node_id VARCHAR(191) NOT NULL, status VARCHAR(32) NOT NULL, detail %s NOT NULL, PRIMARY KEY(target_key,change_id))`, doc),
 		`CREATE TABLE IF NOT EXISTS external_work_items (connection VARCHAR(191) NOT NULL, kind VARCHAR(32) NOT NULL, external_id VARCHAR(191) NOT NULL, work_item_id BIGINT NOT NULL, PRIMARY KEY(connection,kind,external_id))`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS sql_execution_ledger (connection VARCHAR(191) NOT NULL, database_name VARCHAR(191) NOT NULL, change_id BIGINT NOT NULL, digest VARCHAR(80) NOT NULL, status VARCHAR(32) NOT NULL, run_id BIGINT NOT NULL, node_id VARCHAR(191) NOT NULL, detail %s NOT NULL, PRIMARY KEY(connection,database_name,change_id))`, doc),
 	}
 }
 
 func validateIntegrationConnection(c *ResourceConnection) error {
+	if c.Kind == "nacos" {
+		return validateNacosConnection(c)
+	}
 	if c.Kind == "mysql" {
 		host, port, err := net.SplitHostPort(c.Endpoint)
 		portNumber, portErr := strconv.Atoi(port)
@@ -106,6 +110,24 @@ func openChangeMySQL(ctx context.Context, c *ResourceConnection) (*sql.DB, error
 }
 
 func testIntegrationConnection(ctx context.Context, c *ResourceConnection) error {
+	if c.Kind == "nacos" {
+		n, err := newNacosClient(ctx, c)
+		if err != nil {
+			return err
+		}
+		if c.Config["test_data_id"] != "" {
+			group := c.Config["test_group"]
+			if group == "" {
+				group = "DEFAULT_GROUP"
+			}
+			_, err = n.read(ctx, c.Config["test_data_id"], group)
+			return err
+		}
+		if c.Config["nacos_auth"] != "password" {
+			return fmt.Errorf("Token 或无认证模式需指定测试 Data ID，以验证连接和读取权限")
+		}
+		return nil
+	}
 	if c.Kind == "mysql" {
 		db, err := openChangeMySQL(ctx, c)
 		if err != nil {
@@ -600,6 +622,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string, st
 }
 
 func registerIntegrationRoutes(mux *http.ServeMux, s *Store) {
+	registerNacosRoutes(mux, s)
 	registerDataSyncRoutes(mux, s)
 	registerIssueUserRoutes(mux, s)
 	mux.HandleFunc("GET /api/sql-executions", func(w http.ResponseWriter, r *http.Request) { writeIntegrationJSON(w, s.SQLLedger(), nil) })

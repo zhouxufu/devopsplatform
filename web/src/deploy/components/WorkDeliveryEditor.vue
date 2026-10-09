@@ -5,6 +5,7 @@ import Sel from '../../shared/components/Sel.vue';
 import {ElButton,ElInput} from '../../shared/components/ui.js';
 import ApplicationResourcesEditor from './ApplicationResourcesEditor.vue';
 import GitBranchSelect from './GitBranchSelect.vue';
+import NacosChangeFields from './NacosChangeFields.vue';
 import {deliveryRows,expandDeliveryRows} from '../deliveryContent.js';
 import {toast} from '../../shared/composables/toast.js';
 const props=defineProps({show:Boolean,item:Object,services:Array,workItems:Array,canManage:Function});
@@ -59,7 +60,7 @@ function configure(row){bindingService.value=row.service;showBindings.value=true
  <label v-if="row.sql||row.nacos">资源<Sel v-model="(row.sql||row.nacos).resource_alias" :disabled="row.readonly||saving" :options="options(row,row.kind)" width="100%" /></label>
  <ElButton v-if="(row.sql||row.nacos)&&row.service&&!row.readonly" @click="configure(row)">配置该应用资源</ElButton>
  <template v-if="row.sql"><label>允许影响行数<ElInput v-model.number="row.sql.max_affected_rows" type="number" :disabled="row.readonly||saving" /></label><label class="span">SQL 脚本<ElInput v-model="row.sql.content" type="textarea" :rows="7" :disabled="row.readonly||saving" placeholder="整段粘贴 SQL；保存校验语法，执行前再读取结构和影响范围" /></label></template>
- <template v-else-if="row.nacos"><label>Data ID<ElInput v-model="row.nacos.data_id" :disabled="row.readonly||saving" /></label><label>Group<ElInput v-model="row.nacos.group" :disabled="row.readonly||saving" /></label><label>格式<Sel v-model="row.nacos.format" :options="['yaml','properties','json']" :disabled="row.readonly||saving" width="100%" /></label><div class="span"><div v-for="(entry,i) in row.nacos.entries" :key="i" class="config-entry"><ElInput v-model="entry.key" placeholder="配置项，例如 spring.datasource.url" :disabled="row.readonly||saving" /><Sel v-model="entry.action" :options="[{value:'set',label:'设置值'},{value:'delete',label:'删除项'}]" :disabled="row.readonly||saving" width="100px" /><ElInput v-model="entry.value" placeholder="值（允许空字符串）" :disabled="row.readonly||saving||entry.action==='delete'" /><ElButton v-if="!row.readonly" @click="row.nacos.entries.splice(i,1)">移除</ElButton></div><ElButton v-if="!row.readonly" @click="row.nacos.entries.push({key:'',value:'',action:'set'})">＋ 配置项</ElButton></div><p class="hint span">保存配置项意图；Nacos 发布执行器尚未接通，不会直接修改远端配置。请勿在值中粘贴生产密钥。</p></template>
+ <NacosChangeFields v-else-if="row.nacos" :model="row.nacos" :disabled="row.readonly||saving" />
  <label v-else class="span">操作 / 引用<ElInput v-model="row.reference" type="textarea" :rows="3" :disabled="row.readonly||saving" /></label>
  </template>
  <label class="span">说明（选填）<ElInput v-model="row.summary" :disabled="row.readonly||saving" /></label>

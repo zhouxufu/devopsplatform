@@ -10,6 +10,8 @@ import Sel from "../../shared/components/Sel.vue";
 import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor.vue';
 import ResourcesView from './ResourcesView.vue';
 import RichDescription from '../components/RichDescription.vue';
+import NacosPlanPreview from '../components/NacosPlanPreview.vue';
+import NacosChangeFields from '../components/NacosChangeFields.vue';
 import { descriptionSummary } from '../richDescription.js';
 import { ElButton, ElInput } from "../../shared/components/ui.js";
 import { toast } from "../../shared/composables/toast.js";
@@ -29,6 +31,17 @@ const work = ref([]),
   services = ref([]),
   me = ref({});
 const connections=ref([]),environments=ref([]),syncStates=ref([]),showSync=ref(false),syncForm=ref({connection:'',baseline:'',status:''}),showBindings=ref(false),showResources=ref(false),showSQLPreview=ref(false),sqlPreview=ref(null),previewItem=ref(null),previewEnvironment=ref('');
+const showNacosPreview=ref(false),nacosPreview=ref(null),nacosPreviewItem=ref(null),nacosEnvironment=ref('');
+let nacosPreviewSequence=0;
+function checkNacos(item){nacosPreviewSequence++;nacosPreviewItem.value=item;nacosEnvironment.value=environments.value[0]?.name||'';nacosPreview.value=null;showNacosPreview.value=true}
+function closeNacosPreview(){nacosPreviewSequence++;showNacosPreview.value=false}
+async function runNacosPreview(){
+  if(saving.value||!nacosEnvironment.value)return;
+  const sequence=++nacosPreviewSequence,changeID=nacosPreviewItem.value.id,environment=nacosEnvironment.value;
+  saving.value=true;nacosPreview.value=null;
+  try{const result=await api(`api/changes/${changeID}/nacos-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({environment})});if(sequence===nacosPreviewSequence&&showNacosPreview.value)nacosPreview.value=result}catch(e){if(sequence===nacosPreviewSequence&&showNacosPreview.value)toast(e.message,'error')}finally{saving.value=false}
+}
+watch(nacosEnvironment,()=>{nacosPreviewSequence++;nacosPreview.value=null});
 const bugStatuses=[{value:'closed',label:'已关闭'},{value:'active',label:'激活（未解决）'},{value:'resolved',label:'已解决（未关闭）'},{value:'unclosed',label:'未关闭（激活 + 已解决）'},{value:'all',label:'全部状态'}];
 const syncDefaultStatus=computed(()=>connections.value.find(c=>c.name===syncForm.value.connection)?.config?.bug_status||'closed');
 const syncStatusOptions=computed(()=>[{value:'__default',label:`沿用连接默认：${bugStatuses.find(v=>v.value===syncDefaultStatus.value)?.label||'已关闭'}`},...bugStatuses]);
@@ -105,9 +118,9 @@ const sqlResources=ref([]),sqlResourcesLoading=ref(false),sqlResourcesError=ref(
 let resourceRequest=0;
 async function loadSQLResources(){
   const seq=++resourceRequest;sqlResources.value=[];sqlResourcesError.value='';
-  if(dialog.value!=='changes'||form.value.kind!=='mysql'||!form.value.service)return;
+  if(dialog.value!=='changes'||!['mysql','nacos'].includes(form.value.kind)||!form.value.service)return;
   sqlResourcesLoading.value=true;
-  try{const data=await api(`api/services/${encodeURIComponent(form.value.service)}/resources`);if(seq===resourceRequest)sqlResources.value=(data.requirements||[]).filter(r=>r.kind==='mysql')}
+  try{const data=await api(`api/services/${encodeURIComponent(form.value.service)}/resources`);if(seq===resourceRequest)sqlResources.value=(data.requirements||[]).filter(r=>r.kind===form.value.kind)}
   catch(e){if(seq===resourceRequest)sqlResourcesError.value=e.message}finally{if(seq===resourceRequest)sqlResourcesLoading.value=false}
 }
 watch(()=>[dialog.value,form.value.kind,form.value.service],()=>{sqlResourcesLoading.value=false;loadSQLResources()});
@@ -186,6 +199,7 @@ function open(type, item) {
           work_item_ids: [],
         };
   if(type==='changes')form.value.sql=item?.sql?{...item.sql}:{resource_alias:'',content:item?.kind==='mysql'?item.reference||'':'',max_affected_rows:100};
+  if(type==='changes')form.value.nacos=item?.nacos?JSON.parse(JSON.stringify(item.nacos)):{resource_alias:'',data_id:'',group:'DEFAULT_GROUP',format:'yaml',entries:[{key:'',value:'',action:'set'}]};
   if (type === "versions")
     form.value = item
       ? {
@@ -211,6 +225,7 @@ async function save() {
   )
     return toast("请填写版本号", "warning");
   if(dialog.value==='changes'&&form.value.kind==='mysql'&&(!form.value.service||!sqlResources.value.some(r=>r.alias===form.value.sql?.resource_alias)))return toast('请选择应用及已配置的数据库资源','warning');
+  if(dialog.value==='changes'&&form.value.kind==='nacos'&&(!form.value.service||!sqlResources.value.some(r=>r.alias===form.value.nacos?.resource_alias)))return toast('请选择应用及已配置的 Nacos 资源','warning');
   saving.value = true;
   const endpoint = {
     work: "work-items",
@@ -223,7 +238,7 @@ async function save() {
     const result=await api(`api/${endpoint}${form.value.id ? "/" + form.value.id : ""}`, {
       method: form.value.id ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({...form.value,sql:dialog.value==='changes'&&form.value.kind==='mysql'?{...form.value.sql,max_affected_rows:Number(form.value.sql.max_affected_rows)}:undefined}),
+      body: JSON.stringify({...form.value,sql:dialog.value==='changes'&&form.value.kind==='mysql'?{...form.value.sql,max_affected_rows:Number(form.value.sql.max_affected_rows)}:undefined,nacos:dialog.value==='changes'&&form.value.kind==='nacos'?form.value.nacos:undefined}),
     });
     const keepContext=dialog.value===type&&route.fullPath===origin;
     dialog.value = "";
@@ -406,6 +421,7 @@ onMounted(async () => {
       <template v-if="tab === 'changes'"
         ><code v-if="item.reference">{{ item.reference }}</code>
         <p v-if="item.sql">数据库资源：{{item.sql.resource_alias}} · 最多 {{item.sql.max_affected_rows}} 行 <ElButton size="small" @click="checkSQL(item)">SQL 预检</ElButton></p>
+        <p v-if="item.nacos">配置资源：{{item.nacos.resource_alias}} · {{item.nacos.data_id}} <ElButton size="small" @click="checkNacos(item)">Nacos 差异预览</ElButton></p>
         <div class="meta">
           关联需求：{{
             (item.work_items || []).map((v) => v.title).join("、") ||
@@ -513,6 +529,7 @@ onMounted(async () => {
       </div>
     </article>
     </template>
+    <Modal :show="showNacosPreview" title="Nacos 配置差异（只读预览）" extra-wide @close="closeNacosPreview"><div class="form-grid"><p class="span">{{nacosPreviewItem?.title}} · 预览不发布配置；执行单提交时会重新读取并冻结基线。</p><label>目标环境<Sel v-model="nacosEnvironment" :disabled="saving" :options="environments.map(e=>({value:e.name,label:e.display_name||e.name}))" width="100%" /></label><ElButton type="primary" :loading="saving" :disabled="!nacosEnvironment" @click="runNacosPreview">读取目标配置并对比</ElButton><div class="span"><NacosPlanPreview :plans="nacosPreview?[nacosPreview]:[]" /></div></div></Modal>
     <WorkDeliveryEditor ref="deliveryEditor" :show="showDeliveryEditor" :item="deliveryItem" :services="services" :work-items="work" :can-manage="canManage" @close="showDeliveryEditor=false" @saved="load" @open-sync="openSyncTasks" />
     <DataSyncTasks :show="showSyncTasks" :services="services" :environments="environments" :item="deliveryItem" @close="showSyncTasks=false" @generated="syncGenerated" @preview="checkSQL" />
     <Modal :show="showAddVersion" title="纳入发布版本" wide @close="showAddVersion=false"><div class="form-grid"><p class="span">{{addItem?.title}} · 仅调整草稿范围，不触发构建或执行</p><label class="span">草稿版本<Sel v-model="addVersionID" :options="versions.filter(v=>v.status==='draft'&&canManage(v)).map(v=>({value:v.id,label:v.version+' · '+v.title}))" width="100%" /></label><div class="footer span"><ElButton @click="showAddVersion=false;open('versions');form.work_item_ids=addType==='work'?[addItem.id]:[];form.manual_change_ids=addType==='changes'?[addItem.id]:[]">创建新版本</ElButton><ElButton @click="showAddVersion=false">取消</ElButton><ElButton type="primary" :loading="saving" @click="addToVersion">确认纳入</ElButton></div></div></Modal>
@@ -588,7 +605,7 @@ onMounted(async () => {
               all-label="不关联应用"
               filterable
               width="100%" /></label
-          ><label v-if="form.kind==='code'" class="span">代码分支<GitBranchSelect v-model="form.reference" :repositories="form.service?[{service:form.service}]:[]" /></label><label v-if="form.kind!=='mysql'&&form.kind!=='code'" class="span"
+          ><label v-if="form.kind==='code'" class="span">代码分支<GitBranchSelect v-model="form.reference" :repositories="form.service?[{service:form.service}]:[]" /></label><template v-if="form.kind==='nacos'"><label>配置资源<Sel v-model="form.nacos.resource_alias" :disabled="!!form.nacos.restore" :options="sqlResources.map(r=>({value:r.alias,label:r.alias}))" width="100%" /><span v-if="sqlResourcesLoading">正在读取…</span><span v-else-if="sqlResourcesError">{{sqlResourcesError}}</span><ElButton v-if="form.service&&(me.role==='admin'||me.username==='local')" size="small" @click="showBindings=true">配置应用资源</ElButton></label><NacosChangeFields :model="form.nacos" :disabled="saving" /></template><label v-if="!['mysql','code','nacos'].includes(form.kind)" class="span"
             >{{
               form.kind === "code"
                 ? "代码分支"
@@ -633,7 +650,7 @@ onMounted(async () => {
               :rows="3"
           /></label>
           <p
-            v-if="!['code', 'artifact', 'manual','mysql'].includes(form.kind)"
+            v-if="!['code', 'artifact', 'manual','mysql','nacos'].includes(form.kind)"
             class="notice span"
           >
             该类变更目前可登记、关联和进入版本；执行器未接通，编排会阻止提交，不会自动执行或标记成功。

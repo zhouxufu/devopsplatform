@@ -141,8 +141,8 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 	if !validConnectionName(c.Name) {
 		return fmt.Errorf("连接名称支持中文、字母、数字、点、短横线和下划线，长度 1-64")
 	}
-	if c.Kind != "git" && c.Kind != "maven" && c.Kind != "docker" && c.Kind != TargetAliyunSAE && c.Kind != "mysql" && c.Kind != "zentao" {
-		return fmt.Errorf("连接类型仅支持 git、maven、docker、aliyun-sae、mysql、zentao")
+	if c.Kind != "git" && c.Kind != "maven" && c.Kind != "docker" && c.Kind != TargetAliyunSAE && c.Kind != "mysql" && c.Kind != "zentao" && c.Kind != "nacos" {
+		return fmt.Errorf("连接类型仅支持 git、maven、docker、aliyun-sae、mysql、zentao、nacos")
 	}
 	if current != nil && current.Kind != c.Kind {
 		return fmt.Errorf("已有连接不能更换类型，请新建连接")
@@ -207,6 +207,12 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 		currentMode, _ = normalizeGitAuthMode(current.Config["auth_mode"])
 	}
 	modeUnchanged := c.Kind != "git" || currentMode == c.Config["auth_mode"]
+	if current != nil && c.Kind == "nacos" && current.Config["nacos_auth"] != c.Config["nacos_auth"] {
+		modeUnchanged = false
+		if c.Config["nacos_auth"] != "none" && c.Password == "" {
+			return fmt.Errorf("更换 Nacos 认证方式时必须重新填写密码或 Token，不能复用旧凭据")
+		}
+	}
 	if current != nil && modeUnchanged {
 		if c.Username == "" {
 			c.Username = current.Username
@@ -238,6 +244,17 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 			}
 		} else {
 			c.PrivateKey, c.Passphrase = "", ""
+		}
+	}
+	if c.Kind == "nacos" {
+		if c.Config["nacos_auth"] == "none" {
+			c.Username, c.Password = "", ""
+		}
+		if c.Config["nacos_auth"] == "password" && (c.Username == "" || c.Password == "") {
+			return fmt.Errorf("请填写 Nacos 专用账号和密码")
+		}
+		if c.Config["nacos_auth"] == "token" && c.Password == "" {
+			return fmt.Errorf("请填写 Nacos Token")
 		}
 	}
 	config, _ := json.Marshal(c.Config)

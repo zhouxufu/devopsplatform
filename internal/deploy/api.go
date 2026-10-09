@@ -500,7 +500,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 			writeError(w, 404, "连接不存在")
 			return
 		}
-		if c.Kind == "mysql" || c.Kind == "zentao" {
+		if c.Kind == "mysql" || c.Kind == "zentao" || c.Kind == "nacos" {
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 			defer cancel()
 			err := testIntegrationConnection(ctx, c)
@@ -509,6 +509,9 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				return
 			}
 			status := "认证及读取权限验证成功"
+			if c.Kind == "nacos" && c.Config["test_data_id"] == "" {
+				status = "Nacos 登录成功；未指定测试 Data ID，尚未验证配置读取和发布权限"
+			}
 			if c.Kind == "zentao" && strings.TrimSpace(c.Config["product_ids"]) == "" {
 				status = "禅道登录认证成功；未配置 Bug 产品 ID，用户列表权限请在成员管理中验证"
 			}

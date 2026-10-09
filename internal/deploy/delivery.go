@@ -49,15 +49,16 @@ type DeliveryService struct {
 	DestinationDigest string             `json:"destination_digest"`
 }
 type DeliveryPlan struct {
-	Template    DeliveryTemplate    `json:"template"`
-	Version     *ReleaseVersion     `json:"version,omitempty"`
-	Environment Environment         `json:"environment"`
-	Reason      string              `json:"reason"`
-	Services    []DeliveryService   `json:"services"`
-	Nodes       []DeliveryNode      `json:"nodes"`
-	Blockers    []string            `json:"blockers"`
-	Warnings    []string            `json:"warnings"`
-	SQLPlans    []*SQLExecutionPlan `json:"sql_plans,omitempty"`
+	Template    DeliveryTemplate      `json:"template"`
+	Version     *ReleaseVersion       `json:"version,omitempty"`
+	Environment Environment           `json:"environment"`
+	Reason      string                `json:"reason"`
+	Services    []DeliveryService     `json:"services"`
+	Nodes       []DeliveryNode        `json:"nodes"`
+	Blockers    []string              `json:"blockers"`
+	Warnings    []string              `json:"warnings"`
+	SQLPlans    []*SQLExecutionPlan   `json:"sql_plans,omitempty"`
+	NacosPlans  []*NacosExecutionPlan `json:"nacos_plans,omitempty"`
 }
 type DeliveryStep struct {
 	NodeID    string `json:"node_id"`
@@ -79,6 +80,13 @@ type DeliveryRun struct {
 	CreatedAt  int64          `json:"created_at"`
 	Revision   int64          `json:"revision"`
 	envSecrets map[string]string
+}
+
+func (v DeliveryRun) MarshalJSON() ([]byte, error) {
+	type publicRun DeliveryRun
+	p := publicRun(v)
+	p.Plan.NacosPlans = publicNacosPlans(v.Plan.NacosPlans)
+	return json.Marshal(p)
 }
 
 func deliverySchema(dialect string) []string {
@@ -137,7 +145,11 @@ func (s *Store) SaveDeliveryTemplate(v *DeliveryTemplate) error {
 		return err
 	}
 	if v.Mode == "fixed" && len(v.Services) == 0 {
-		return fmt.Errorf("固定服务模式至少选择一个应用")
+		for _, node := range v.Nodes {
+			if node.Kind == "deploy" {
+				return fmt.Errorf("包含部署节点的固定服务模式至少选择一个应用")
+			}
+		}
 	}
 	seen := map[string]bool{}
 	for _, name := range v.Services {
@@ -256,7 +268,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 				} else {
 					services[c.Service] = true
 				}
-			} else if c.Kind != "manual" && c.Kind != "mysql" {
+			} else if c.Kind != "manual" && c.Kind != "mysql" && c.Kind != "nacos" {
 				p.Blockers = append(p.Blockers, "变更执行器尚未接通："+c.Title+"（"+c.Kind+"）")
 			}
 		}
@@ -304,8 +316,58 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	sqlConnections := map[string]bool{}
 	manualCount := 0
 	sqlCount := 0
+	nacosAllocated := map[int64]int{}
+	nacosTargets := map[string]bool{}
+	nacosCount := 0
 	for _, node := range nodes {
 		switch node.Kind {
+		case "nacos":
+			ids := append([]int64{}, node.ChangeIDs...)
+			if p.Version != nil {
+				allowed := map[int64]bool{}
+				for _, c := range p.Version.Changes {
+					if c.Kind == "nacos" {
+						allowed[c.ID] = true
+						if len(node.ChangeIDs) == 0 && (node.Service == "" || node.Service == c.Service) {
+							ids = append(ids, c.ID)
+						}
+					}
+				}
+				for _, id := range ids {
+					if !allowed[id] {
+						p.Blockers = append(p.Blockers, fmt.Sprintf("Nacos 节点引用版本外变更 #%d", id))
+					}
+				}
+			}
+			ready := true
+			for _, id := range ids {
+				nacosAllocated[id]++
+				c := s.GetChange(id)
+				if c == nil || c.Status != ChangeReady {
+					p.Blockers = append(p.Blockers, fmt.Sprintf("Nacos 变更 #%d 尚未就绪", id))
+					ready = false
+				}
+			}
+			if !ready {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			plan, err := s.prepareNacosNode(ctx, node.ID, ids, env.Name)
+			cancel()
+			if err != nil {
+				p.Blockers = append(p.Blockers, node.Name+"："+err.Error())
+				continue
+			}
+			for _, item := range plan.Configs {
+				key := nacosTargetKey(item)
+				if nacosTargets[key] {
+					p.Blockers = append(p.Blockers, "同一 Nacos 配置不能在多个节点重复修改")
+				}
+				nacosTargets[key] = true
+			}
+			p.NacosPlans = append(p.NacosPlans, plan)
+			nacosCount++
+			p.Warnings = append(p.Warnings, "Nacos 多文档顺序发布，不保证跨配置或跨服务原子性；失败停止，已成功项不自动恢复。差异值可能包含敏感信息，请限制执行单访问。")
 		case "deploy":
 			if node.Service != "" && !services[node.Service] {
 				p.Blockers = append(p.Blockers, "部署节点应用不在交付范围："+node.Service)
@@ -373,6 +435,9 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	}
 	if p.Version != nil {
 		for _, c := range p.Version.Changes {
+			if c.Kind == "nacos" && nacosAllocated[c.ID] != 1 {
+				p.Blockers = append(p.Blockers, fmt.Sprintf("Nacos 变更 #%d 必须且只能安排到一个 Nacos 节点", c.ID))
+			}
 			if c.Kind == "mysql" && sqlAllocated[c.ID] != 1 {
 				p.Blockers = append(p.Blockers, fmt.Sprintf("SQL 变更 #%d 必须且只能安排到一个 SQL 节点", c.ID))
 			}
@@ -386,7 +451,12 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			p.Blockers = append(p.Blockers, fmt.Sprintf("SQL 变更 #%d 在多个节点中重复", id))
 		}
 	}
-	if len(names) == 0 && manualCount == 0 && sqlCount == 0 {
+	for id, count := range nacosAllocated {
+		if count != 1 {
+			p.Blockers = append(p.Blockers, fmt.Sprintf("Nacos 变更 #%d 在多个节点重复", id))
+		}
+	}
+	if len(names) == 0 && manualCount == 0 && sqlCount == 0 && nacosCount == 0 {
 		p.Blockers = append(p.Blockers, "交付范围没有可执行应用或人工确认节点")
 	}
 	return p, secrets, nil
@@ -520,6 +590,42 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 		step := &v.Steps[i]
 		if step.Status == "success" {
 			continue
+		}
+		if step.Kind == "nacos" {
+			if step.Status == "executing" {
+				return nil, fmt.Errorf("Nacos 节点正在执行或中断待核对，禁止自动重试")
+			}
+			var plan *NacosExecutionPlan
+			for _, candidate := range v.Plan.NacosPlans {
+				if candidate.NodeID == step.NodeID {
+					plan = candidate
+					break
+				}
+			}
+			if plan == nil {
+				return nil, fmt.Errorf("Nacos 节点缺少已审核快照")
+			}
+			step.Status, v.Status = "executing", "running"
+			if err := s.saveDeliveryRun(v); err != nil {
+				return nil, err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			detail, err := s.executeNacosNode(ctx, v, plan)
+			cancel()
+			step.Detail = detail
+			if err != nil {
+				step.Status, v.Status = "failed", "failed"
+				if detail == "" {
+					step.Detail = err.Error()
+				}
+			} else {
+				step.Status = "success"
+			}
+			if err := s.saveDeliveryRun(v); err != nil {
+				return nil, err
+			}
+			s.Audit(actor, "execute-nacos", "delivery-run", fmt.Sprint(id), map[string]any{"node": step.NodeID, "status": step.Status, "digest": v.Digest})
+			return v, nil
 		}
 		if step.Kind == "mysql" {
 			if step.Status == "executing" {
@@ -713,6 +819,9 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 			return
 		}
 		p, _, err := st.ResolveDelivery(req, manager)
+		if p != nil {
+			p.NacosPlans = publicNacosPlans(p.NacosPlans)
+		}
 		reply(w, p, err)
 	})
 	mux.HandleFunc("GET /api/delivery/runs", func(w http.ResponseWriter, r *http.Request) { reply(w, st.DeliveryRuns(), nil) })

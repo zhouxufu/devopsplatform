@@ -8,14 +8,18 @@ import (
 	"time"
 )
 
-// Nacos edits describe intent, not environment credentials or an executable
-// publish operation. The executor remains fail-closed until it is connected.
+// Nacos edits describe intent; environment credentials are resolved at preview.
 type NacosChange struct {
-	ResourceAlias string       `json:"resource_alias"`
-	DataID        string       `json:"data_id"`
-	Group         string       `json:"group"`
-	Format        string       `json:"format"`
-	Entries       []NacosEntry `json:"entries"`
+	ResourceAlias string        `json:"resource_alias"`
+	DataID        string        `json:"data_id"`
+	Group         string        `json:"group"`
+	Format        string        `json:"format"`
+	Entries       []NacosEntry  `json:"entries"`
+	Restore       *NacosRestore `json:"restore,omitempty"`
+}
+type NacosRestore struct {
+	RunID    int64 `json:"run_id"`
+	ChangeID int64 `json:"change_id"`
 }
 type NacosEntry struct {
 	Key    string `json:"key"`
@@ -32,6 +36,12 @@ func normalizeNacosChange(c *Change) error {
 	if n.Format != "yaml" && n.Format != "properties" && n.Format != "json" {
 		return fmt.Errorf("配置格式仅支持 yaml、properties 或 json")
 	}
+	if n.Restore != nil && (n.Restore.RunID <= 0 || n.Restore.ChangeID <= 0) {
+		return fmt.Errorf("恢复草稿必须引用有效的原执行单与配置变更")
+	}
+	if len(n.DataID) > 255 || len(n.Group) > 255 || strings.ContainsAny(n.DataID+n.Group, "\r\n\x00") {
+		return fmt.Errorf("Nacos 配置标识无效")
+	}
 	if len(n.Entries) == 0 || len(n.Entries) > 200 {
 		return fmt.Errorf("每个配置需包含 1–200 个配置项")
 	}
@@ -39,8 +49,13 @@ func normalizeNacosChange(c *Change) error {
 	for i := range n.Entries {
 		e := &n.Entries[i]
 		e.Key = strings.TrimSpace(e.Key)
-		if e.Key == "" || seen[e.Key] || (e.Action != "set" && e.Action != "delete") {
+		if !nacosKeyRE.MatchString(e.Key) || seen[e.Key] || len(e.Value) > 65536 || (e.Action != "set" && e.Action != "delete") {
 			return fmt.Errorf("配置项不能为空、不能重复；操作仅支持 set 或 delete")
+		}
+		for key := range seen {
+			if strings.HasPrefix(key, e.Key+".") || strings.HasPrefix(e.Key, key+".") {
+				return fmt.Errorf("同一变更不能同时修改父路径和子路径")
+			}
 		}
 		seen[e.Key] = true
 		if e.Action == "delete" {
