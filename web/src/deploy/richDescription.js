@@ -1,4 +1,9 @@
 import DOMPurify from 'dompurify'
+import { Marked } from 'marked'
+
+const markdown = new Marked({ gfm: true, breaks: true, walkTokens(token) {
+  if (token.type === 'image' && /^attachment:[a-f0-9]{32}$/.test(token.href)) token.href = descriptionImageURL(token.href)
+} })
 
 const tags = ['p', 'div', 'span', 'br', 'hr', 'strong', 'b', 'em', 'i', 'u', 's', 'del', 'blockquote', 'pre', 'code', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'a']
 const blocks = new Set(['P', 'DIV', 'HR', 'BLOCKQUOTE', 'PRE', 'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR'])
@@ -16,6 +21,7 @@ export function safeDescriptionURL(value, base) {
 // supplied by the attachment itself. This also handles already-synced records.
 export function descriptionImageURL(value, sourceURL = '') {
   let source = String(value ?? '').trim()
+  if (/^attachment:[a-f0-9]{32}$/.test(source)) return new URL(`api/work-item-attachments/${source.slice(11)}`, location.href).href
   if (!source) return ''
   try { if (/^%7b/i.test(source)) source = decodeURIComponent(source) } catch { return '' }
   if (!/[{}]/.test(source)) return safeDescriptionURL(source, safeDescriptionURL(sourceURL))
@@ -39,9 +45,11 @@ export function descriptionImageURL(value, sourceURL = '') {
 // The list uses text, while details use this same sanitized, basic-HTML allowlist.
 // Images become text markers and explicit preview descriptors, never live <img>
 // nodes. Merely opening a list/detail must not load remote images or beacons.
-export function prepareDescription(value, sourceURL = '') {
-  const raw = String(value ?? '')
-  if (!/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*|\/?)>/i.test(raw)) {
+export function prepareDescription(value, sourceURL = '', format = '') {
+  let raw = String(value ?? '')
+  if (format === 'markdown') raw = markdown.parse(raw)
+  raw = raw.replace(/src=(['"])(attachment:[a-f0-9]{32})\1/g, (_, quote, ref) => `src=${quote}${descriptionImageURL(ref)}${quote}`)
+  if (format === 'text' || !/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*|\/?)>/i.test(raw)) {
     const span = document.createElement('span')
     span.textContent = raw
     return { html: span.innerHTML, text: raw, plain: true, images: [] }

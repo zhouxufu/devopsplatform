@@ -2,12 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { prepareDescription, safeDescriptionURL } from '../richDescription.js'
 import Modal from '../../shared/components/Modal.vue'
-const props = defineProps({ content: { type: String, default: '' }, sourceUrl: { type: String, default: '' }, title: { type: String, default: '需求说明' } })
-const prepared = computed(() => prepareDescription(props.content, props.sourceUrl))
+const props = defineProps({ content: { type: String, default: '' }, format: { type: String, default: '' }, sourceUrl: { type: String, default: '' }, title: { type: String, default: '需求说明' } })
+const prepared = computed(() => prepareDescription(props.content, props.sourceUrl, props.format))
 const body = ref(null), expanded = ref(false), overflowing = ref(false)
 const preview = ref(null), imageLoading = ref(false), imageFailed = ref(false)
+const previewIndex=ref(-1)
+function changeImage(delta){const index=previewIndex.value+delta,next=prepared.value.images[index];if(next)openImage(next,index)}
 const externalRecord = computed(() => safeDescriptionURL(props.sourceUrl))
-function openImage(image) { imageLoading.value = true; imageFailed.value = false; preview.value = image }
+function openImage(image,index) { previewIndex.value=index;imageLoading.value = true; imageFailed.value = false; preview.value = image }
 let observer
 function measure() {
   if (!expanded.value && body.value) overflowing.value = body.value.scrollHeight > body.value.clientHeight + 1
@@ -27,7 +29,7 @@ onBeforeUnmount(() => observer?.disconnect())
     <button v-if="overflowing || expanded" class="description-toggle" type="button" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? '收起说明' : '展开完整说明' }}</button>
     <div v-if="prepared.images.length" class="description-images" aria-label="说明图片">
       <span>图片 {{ prepared.images.length }} 张 · 点击后加载</span>
-      <button v-for="(image, index) in prepared.images" :key="index" type="button" @click="openImage(image)">查看图片 {{ index + 1 }}<template v-if="image.label"> · {{ image.label }}</template></button>
+      <button v-for="(image, index) in prepared.images" :key="index" type="button" @click="openImage(image,index)">查看图片 {{ index + 1 }}<template v-if="image.label"> · {{ image.label }}</template></button>
     </div>
   </section>
   <Modal :show="!!preview" title="图片预览" extra-wide @close="preview = null">
@@ -35,7 +37,7 @@ onBeforeUnmount(() => observer?.disconnect())
       <p v-if="imageLoading" role="status">图片加载中…</p>
       <p v-if="imageFailed" role="alert">图片加载失败，可能需要登录来源平台、网络不可达或附件已失效。可打开原图或外部记录查看。</p>
       <img :key="preview.url" v-show="!imageFailed" :src="preview.url" :alt="preview.label || '说明图片'" referrerpolicy="no-referrer" @load="imageLoading = false" @error="imageLoading = false; imageFailed = true" />
-      <div class="image-actions"><a :href="preview.url" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">打开原图</a><a v-if="externalRecord" :href="externalRecord" target="_blank" rel="noopener noreferrer">打开外部记录</a><button type="button" @click="preview = null">关闭预览</button></div>
+      <div class="image-actions"><template v-if="prepared.images.length>1"><button type="button" :disabled="previewIndex<=0" @click="changeImage(-1)">上一张</button><span>{{previewIndex+1}} / {{prepared.images.length}}</span><button type="button" :disabled="previewIndex>=prepared.images.length-1" @click="changeImage(1)">下一张</button></template><a :href="preview.url" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">打开原图</a><a v-if="externalRecord" :href="externalRecord" target="_blank" rel="noopener noreferrer">打开外部记录</a><button type="button" @click="preview = null">关闭预览</button></div>
     </div>
   </Modal>
 </template>

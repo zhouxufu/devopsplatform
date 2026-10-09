@@ -21,7 +21,7 @@ export function expandDeliveryRows(rows, title) {
     if(row.kind==='code'&&row.originals.some(c=>!names.includes(c.service)))throw new Error('已保存的代码应用不能在此移除；请在变更列表核对版本引用后处理');
     for(const service of [...new Set(names)]){
       const old=row.originals.find(c=>c.service===service);
-      const c={...row,id:old?.id||0,service,title:old?.title||`${title} · ${{code:'代码',mysql:'SQL',nacos:'配置',manual:'人工',redis:'Redis',artifact:'制品'}[row.kind]||row.kind}${service?' · '+service:''}`};
+      const c={...row,id:old?.id||0,service,title:old?.title||row.title||`${title} · ${{code:'代码',mysql:'SQL',nacos:'配置',manual:'人工',redis:'Redis',artifact:'制品'}[row.kind]||row.kind}${service?' · '+service:''}`};
       delete c.key;delete c.services;delete c.originals;delete c.readonly;delete c.work_items;
       if(c.kind!=='mysql')delete c.sql;if(c.kind!=='nacos')delete c.nacos;if(c.kind!=='redis')delete c.redis;
       // Unchanged rows, including shared ones, are not rewritten.

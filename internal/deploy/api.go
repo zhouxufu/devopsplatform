@@ -36,6 +36,7 @@ func sameOrigin(r *http.Request) bool {
 // Routes 管理面
 func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib) *http.ServeMux {
 	mux := http.NewServeMux()
+	registerWorkItemAttachmentRoutes(mux, st)
 	registerGitBranchRoutes(mux, st)
 	registerWorkbenchRoutes(mux, st, busURL)
 	applicationObserver := appcatalog.NewObserver(busURL)
@@ -852,7 +853,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 			return
 		}
 		item.ID, item.Owner = id, current.Owner
-		if err := st.UpdateWorkItem(&item); err != nil {
+		if err := st.UpdateWorkItemAs(&item, actorOf(r)); err != nil {
 			writeError(w, http.StatusConflict, err)
 			return
 		}
@@ -897,6 +898,19 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		}
 		st.Audit(actorOf(r), "create", "change", fmt.Sprint(req.ID), map[string]any{"kind": req.Kind, "service": req.Service})
 		wj(w, st.GetChange(req.ID))
+	})
+	mux.HandleFunc("POST /api/changes/batch", func(w http.ResponseWriter, r *http.Request) {
+		var req WorkDeliverySave
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req) != nil {
+			writeError(w, http.StatusBadRequest, "批量变更参数格式错误或内容过大")
+			return
+		}
+		if err := st.CreateChangeBatch(&req, actorOf(r)); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		st.Audit(actorOf(r), "create-batch", "change", "", map[string]any{"count": len(req.Changes)})
+		wj(w, req.Changes)
 	})
 	mux.HandleFunc("PUT /api/changes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := changeID(r)

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, onMounted, ref, watch } from "vue";
+import { computed, inject, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import WorkDeliveryEditor from '../components/WorkDeliveryEditor.vue';
 import WorkItemsTable from '../components/WorkItemsTable.vue';
@@ -11,6 +11,7 @@ import Sel from "../../shared/components/Sel.vue";
 import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor.vue';
 import ResourcesView from './ResourcesView.vue';
 import RichDescription from '../components/RichDescription.vue';
+import MarkdownEditor from '../components/MarkdownEditor.vue';
 import NacosPlanPreview from '../components/NacosPlanPreview.vue';
 import NacosChangeFields from '../components/NacosChangeFields.vue';
 import RedisChangeFields from '../components/RedisChangeFields.vue';
@@ -81,12 +82,20 @@ const query = ref(""),
   form = ref({}),
   saving = ref(false);
 const associationFilter=ref('');
+const showBatchEditor=ref(false),batchEditor=ref(null),imageUploading=ref(false);
+const newWorkDraft=ref(null);
 const showDeliveryEditor=ref(false),deliveryItem=ref(null),deliveryEditor=ref(null),addedVersion=ref(null);
 const showSyncTasks=ref(false);
-function openSyncTasks(){showSyncTasks.value=true}
+async function openSyncTasks(){
+ const plugins=await fetch('/api/plugins').then(r=>r.ok?r.json():[]).catch(()=>[]);
+ if(plugins.some(p=>p.name==='dbms')){const hash='#/sync'+(deliveryItem.value?'?work_item='+deliveryItem.value.id:'');if(window.parent!==window)window.parent.postMessage({type:'workspace.open',plugin:'dbms',hash},location.origin);else window.open('/api/plugins/dbms/ui'+hash,'_blank','noopener');return}
+ showSyncTasks.value=true
+}
 function syncGenerated(){load();deliveryEditor.value?.refreshAfterSync()}
 function editDelivery(item){deliveryItem.value=item;showDeliveryEditor.value=true}
-onBeforeRouteLeave(()=>!deliveryEditor.value?.hasDraft()||confirm('离开将放弃尚未保存的交付草稿，确定离开？'));
+onBeforeRouteLeave(()=>(!deliveryEditor.value?.hasDraft()&&!batchEditor.value?.hasDraft()&&!imageUploading.value&&!newWorkDraft.value)||confirm('离开将放弃尚未保存的草稿，确定离开？'));
+function warnUnsaved(e){if(newWorkDraft.value||imageUploading.value||(dialog.value==='work'&&!form.value.id&&(form.value.title||form.value.description))){e.preventDefault();e.returnValue=''}}
+window.addEventListener('beforeunload',warnUnsaved);onBeforeUnmount(()=>window.removeEventListener('beforeunload',warnUnsaved));
 watch(()=>form.value.kind,kind=>{if(dialog.value==='changes'&&kind==='mysql'&&!form.value.sql)form.value.sql={resource_alias:'',content:'',max_affected_rows:100}})
 const kinds = [
   { value: "code", label: "代码分支" },
@@ -202,19 +211,24 @@ async function load() {
     toast(e.message, "error");
   }
 }
+function closeDialog(){if(imageUploading.value||saving.value)return;if(dialog.value==='work'&&!form.value.id){newWorkDraft.value=form.value.title||form.value.description?JSON.parse(JSON.stringify(form.value)):null;if(newWorkDraft.value)toast('未保存的需求草稿已保留，下次新建可继续编辑','success')}dialog.value=''}
+function discardWorkDraft(){if(imageUploading.value||saving.value||!confirm('放弃当前未保存的需求草稿？'))return;newWorkDraft.value=null;dialog.value='';form.value={}}
 function open(type, item) {
+  if(type==='changes'&&!item){showBatchEditor.value=true;return}
   dialog.value = type;
   if (type === "work")
     form.value = item
       ? { ...item }
-      : {
+      : newWorkDraft.value ? JSON.parse(JSON.stringify(newWorkDraft.value)) : {
           title: "",
           kind: "requirement",
           source: "manual",
           external_id: "",
           description: "",
           status: "open",
+          description_format: "markdown",
         };
+  if(type==='work'&&!form.value.description_format)form.value.description_format=/<\/?[a-z][^>]*>/i.test(form.value.description||'')?'html':'markdown';
   if (type === "changes")
     form.value = item
       ? { ...item, work_item_ids: (item.work_items || []).map((v) => v.id) }
@@ -249,6 +263,7 @@ function open(type, item) {
         };
 }
 async function save() {
+  if(saving.value||imageUploading.value)return;
   if (!form.value.title?.trim()) return toast("请填写标题", "warning");
   if (
     dialog.value === "versions" &&
@@ -272,6 +287,7 @@ async function save() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({...form.value,sql:dialog.value==='changes'&&form.value.kind==='mysql'?{...form.value.sql,max_affected_rows:Number(form.value.sql.max_affected_rows)}:undefined,nacos:dialog.value==='changes'&&form.value.kind==='nacos'?form.value.nacos:undefined,redis:dialog.value==='changes'&&form.value.kind==='redis'?form.value.redis:undefined}),
     });
+    if(type==='work'&&creating)newWorkDraft.value=null;
     const keepContext=dialog.value===type&&route.fullPath===origin;
     dialog.value = "";
     await load();
@@ -328,18 +344,6 @@ onMounted(async () => {
           text="需求与变更独立存在；发布版本汇总本次交付范围，不绑定环境。执行时由部署编排选择环境，审核的是具体执行快照。"
         />
       </div>
-      <div v-if="!route.query.item" class="actions"><ElButton v-if="tab==='work'" @click="showSync=true">同步工作项</ElButton>
-      <ElButton type="primary" @click="open(tab)"
-        >＋
-        {{
-          tab === "work"
-            ? "新建需求"
-            : tab === "versions"
-              ? "创建发布版本"
-              : "新建变更"
-        }}</ElButton
-      ></div>
-    </div>
     <nav class="tabs">
       <button
         v-for="item in [
@@ -353,8 +357,20 @@ onMounted(async () => {
       >
         {{ item.label }}
       </button>
-      <button @click="deliveryItem=null;openSyncTasks()">数据同步任务</button>
     </nav>
+
+      <div v-if="!route.query.item" class="actions"><ElButton v-if="tab==='work'" @click="showSync=true">同步工作项</ElButton>
+      <ElButton type="primary" @click="open(tab)"
+        >＋
+        {{
+          tab === "work"
+            ? "新建需求"
+            : tab === "versions"
+              ? "创建发布版本"
+              : "新建变更"
+        }}</ElButton
+      ></div>
+    </div>
     <p v-if="addedVersion&&!route.query.item" class="notice">已纳入 {{addedVersion.version}}。<ElButton @click="view('versions',addedVersion);addedVersion=null">进入版本 →</ElButton></p>
     <template v-if="route.query.item">
       <ElButton @click="back">← 返回列表</ElButton>
@@ -366,7 +382,7 @@ onMounted(async () => {
             <ElButton v-else-if="['ready','completed'].includes(detail.status)" type="primary" @click="router.push({path:'/orchestration',query:{version:String(detail.id)}})">发起交付</ElButton>
           </div></div>
         <div v-if="tab==='work'&&detail.source?.startsWith('zentao:')" class="chips"><span>指派给：{{detail.assigned_to==='closed'?'已关闭':detail.assigned_to||'—'}}</span><span>由谁创建：{{detail.opened_by||'—'}}</span><span>由谁解决：{{detail.resolved_by||'—'}}</span><span>由谁关闭：{{detail.closed_by||'—'}}</span></div>
-        <RichDescription :key="`${tab}-${detail.id}`" :content="detail.description || ''" :source-url="detail.url || ''" :title="tab==='versions'?'版本说明':detail.kind==='bug'?'Bug 说明':'需求说明'" />
+        <RichDescription :key="`${tab}-${detail.id}`" :content="detail.description || ''" :format="detail.description_format || ''" :source-url="detail.url || ''" :title="tab==='versions'?'版本说明':detail.kind==='bug'?'Bug 说明':'需求说明'" />
         <div v-if="tab==='versions'&&detail.status==='draft'&&versionBlockers(detail).length" class="notice"><b>发布前待处理</b><p v-for="reason in versionBlockers(detail)" :key="reason">{{reason}}</p></div>
         <ElButton v-if="tab==='versions'&&detail.status==='draft'&&canManage(detail)" :loading="saving" @click="refreshScope(detail)">刷新关联范围</ElButton>
         <div v-if="tab==='versions'" class="record"><h3>需求与 Bug · {{detail.work_items?.length||0}}</h3><div class="chips"><ElButton v-for="w in detail.work_items||[]" :key="w.id" @click="view('work',w)">#{{w.id}} {{w.title}}</ElButton></div><p v-if="!detail.work_items?.length">可先建立空草稿，也可以直接选择独立变更。</p></div>
@@ -568,6 +584,7 @@ onMounted(async () => {
     </div>
     <Modal :show="showRedisPreview" title="Redis 命令预检（只读）" extra-wide @close="closeRedisPreview"><div class="form-grid"><p class="span">{{redisPreviewItem?.title}} · 仅测试连接和命令范围，不执行命令、不读取缓存值。</p><label>目标环境<Sel v-model="redisEnvironment" :disabled="saving" :options="environments.map(e=>({value:e.name,label:e.display_name||e.name}))" width="100%" /></label><ElButton type="primary" :loading="saving" :disabled="!redisEnvironment" @click="runRedisPreview">检查连接与命令范围</ElButton><div class="span"><RedisPlanPreview :plans="redisPreview?[redisPreview]:[]" /></div></div></Modal>
     <Modal :show="showNacosPreview" title="Nacos 配置差异（只读预览）" extra-wide @close="closeNacosPreview"><div class="form-grid"><p class="span">{{nacosPreviewItem?.title}} · 预览不发布配置；执行单提交时会重新读取并冻结基线。</p><label>目标环境<Sel v-model="nacosEnvironment" :disabled="saving" :options="environments.map(e=>({value:e.name,label:e.display_name||e.name}))" width="100%" /></label><ElButton type="primary" :loading="saving" :disabled="!nacosEnvironment" @click="runNacosPreview">读取目标配置并对比</ElButton><div class="span"><NacosPlanPreview :plans="nacosPreview?[nacosPreview]:[]" /></div></div></Modal>
+    <WorkDeliveryEditor ref="batchEditor" batch :show="showBatchEditor" :services="services" :work-items="work" :can-manage="canManage" @close="showBatchEditor=false" @saved="load" />
     <WorkDeliveryEditor ref="deliveryEditor" :show="showDeliveryEditor" :item="deliveryItem" :services="services" :work-items="work" :can-manage="canManage" @close="showDeliveryEditor=false" @saved="load" @open-sync="openSyncTasks" />
     <DataSyncTasks :show="showSyncTasks" :services="services" :environments="environments" :item="deliveryItem" @close="showSyncTasks=false" @generated="syncGenerated" @preview="checkSQL" />
     <Modal :show="showAddVersion" title="纳入发布版本" wide @close="showAddVersion=false"><div class="form-grid"><p class="span">{{addItem?.title}} · 仅调整草稿范围，不触发构建或执行</p><label class="span">草稿版本<Sel v-model="addVersionID" :options="versions.filter(v=>v.status==='draft'&&canManage(v)).map(v=>({value:v.id,label:v.version+' · '+v.title}))" width="100%" /></label><div class="footer span"><ElButton @click="showAddVersion=false;open('versions');form.work_item_ids=addType==='work'?[addItem.id]:[];form.manual_change_ids=addType==='changes'?[addItem.id]:[]">创建新版本</ElButton><ElButton @click="showAddVersion=false">取消</ElButton><ElButton type="primary" :loading="saving" @click="addToVersion">确认纳入</ElButton></div></div></Modal>
@@ -589,7 +606,7 @@ onMounted(async () => {
             : '变更'
       "
       extra-wide
-      @close="dialog = ''"
+      @close="closeDialog"
     >
       <form class="form-grid" @submit.prevent="save">
         <label class="span">标题<ElInput v-model="form.title" /></label>
@@ -620,7 +637,7 @@ onMounted(async () => {
               ]"
               width="100%" /></label
           ><label class="span"
-            >说明<ElInput v-model="form.description" type="textarea" :rows="3"
+            >说明<MarkdownEditor :key="form.id||'new'" v-model="form.description" :format="form.description_format" :source-url="form.url" :disabled="saving" @uploading="imageUploading=$event"
           /></label>
           <p class="notice span">
             外部记录通过“同步工作项”导入；此处用于自定义需求或手工关联。实际同步范围由来源连接的能力决定。
@@ -732,8 +749,9 @@ onMounted(async () => {
           </p></template
         >
         <div class="footer span">
-          <ElButton native-type="button" @click="dialog = ''">取消</ElButton
-          ><ElButton type="primary" native-type="submit" :loading="saving"
+          <ElButton v-if="dialog==='work'&&!form.id&&(form.title||form.description)" native-type="button" :disabled="imageUploading||saving" @click="discardWorkDraft">放弃草稿</ElButton>
+          <ElButton native-type="button" @click="closeDialog">{{dialog==='work'&&!form.id&&(form.title||form.description)?'关闭并保留':'取消'}}</ElButton
+          ><ElButton type="primary" native-type="submit" :loading="saving" :disabled="imageUploading"
             >保存</ElButton
           >
         </div>
@@ -767,7 +785,7 @@ onMounted(async () => {
   justify-content: space-between;
   flex-wrap: wrap;
 }
-.title { min-width: 0; }
+.heading{margin-bottom:12px;gap:14px}.heading>.tabs{margin:0 auto 0 0;border-bottom:0}.title h2{font-size:20px}.title { min-width: 0; }
 .actions { flex-wrap: wrap; }
 .title h2 {
   margin: 0;
@@ -776,14 +794,14 @@ onMounted(async () => {
   display: flex;
   gap: 4px;
   border-bottom: 1px solid var(--border);
-  margin: 20px 0;
+  margin: 10px 0 12px;
 }
 .tabs button {
   border: 0;
   border-bottom: 2px solid transparent;
   background: none;
   color: var(--muted);
-  padding: 12px 16px;
+  padding: 9px 12px;
   font-size: 13px;
   border-radius:8px 8px 0 0;
   cursor: pointer;
@@ -798,7 +816,7 @@ onMounted(async () => {
 .toolbar {
   margin-bottom: 16px;
   flex-wrap: wrap;
-  padding:16px;
+  padding:8px;
   border:1px solid var(--border);
   border-radius:12px;
   background:var(--panel);

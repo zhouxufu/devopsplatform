@@ -124,6 +124,18 @@ func registerWorkbenchRoutes(mux *http.ServeMux, st *Store, busURL string) {
 				return
 			}
 			allowed := rest == "environments" && isGet
+			// A DBMS comparison opened from a work item only needs its optimistic
+			// association digest, not another copy of the change editor.
+			if kind == "dbms" && isGet && len(parts) == 3 && parts[0] == "work-items" && parts[2] == "delivery-content" {
+				id, _ := strconv.ParseInt(parts[1], 10, 64)
+				data, err := st.WorkDelivery(id)
+				if err != nil {
+					writeIntegrationJSON(w, nil, err)
+					return
+				}
+				writeIntegrationJSON(w, map[string]string{"digest": data.Digest}, nil)
+				return
+			}
 			if len(parts) == 3 && parts[0] == "services" && parts[2] == "resources" && (isGet || r.Method == http.MethodPut) {
 				if !isGet && r.Header.Get("X-User") != "" && r.Header.Get("X-Role") != "admin" {
 					http.Error(w, "administrator required", 403)

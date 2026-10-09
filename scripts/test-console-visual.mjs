@@ -35,7 +35,7 @@ const overflow = async surface => {
   assert.equal(await surface.locator('body').evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'Horizontal page overflow')
 }
 // Capture after resize / dialog enter transitions; visibility alone can be true at opacity 0.
-const capture = async name => { await page.waitForTimeout(250); await page.screenshot({ path: `${output}/${name}.png` }) }
+const capture = async name => { await page.mouse.move(1000, 24); await page.waitForTimeout(250); await page.screenshot({ path: `${output}/${name}.png` }) }
 try {
   for (const theme of ['light', 'dark']) {
     await page.addInitScript(value => localStorage.setItem('lp-theme', value), theme)

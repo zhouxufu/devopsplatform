@@ -185,8 +185,11 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		return err
 	}
 	defer tx.Rollback()
-	ids := []int64{id}
-	seen := map[int64]bool{id: true}
+	ids := []int64{}
+	seen := map[int64]bool{}
+	if id > 0 {
+		ids, seen[id] = append(ids, id), true
+	}
 	for _, wid := range req.AlsoWorkItemIDs {
 		if wid < 1 {
 			return fmt.Errorf("关联需求不存在")
@@ -240,7 +243,7 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 	if err != nil {
 		return err
 	}
-	if req.Digest == "" || req.Digest != current.Digest {
+	if id > 0 && (req.Digest == "" || req.Digest != current.Digest) {
 		return fmt.Errorf("交付内容已被其他操作修改；草稿已保留，请重新载入后核对")
 	}
 	existing := map[int64]Change{}
@@ -318,4 +321,15 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		}
 	}
 	return tx.Commit()
+}
+
+// CreateChangeBatch is the same atomic draft transaction without a parent
+// work item. Frozen data-sync plans must come from their comparison endpoint.
+func (s *Store) CreateChangeBatch(req *WorkDeliverySave, actor string) error {
+	for _, c := range req.Changes {
+		if c.ID != 0 || c.Kind == "data-sync" || (c.SQL != nil && c.SQL.DataSync != nil) {
+			return fmt.Errorf("批量新建仅接受新草稿；数据同步请从对比任务生成")
+		}
+	}
+	return s.SaveWorkDelivery(0, req, actor, false)
 }

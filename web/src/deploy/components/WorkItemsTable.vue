@@ -47,20 +47,20 @@ defineExpose({refresh});
 <template>
  <section class="work-list" aria-label="需求与 BUG 列表">
   <div class="work-filters">
-   <ElInput v-model="query" class="work-search" placeholder="搜索标题、描述或禅道编号" aria-label="搜索需求与 BUG" clearable />
+   <ElInput v-model="query" class="work-search" placeholder="搜索标题、描述或外部编号" aria-label="搜索需求与 BUG" clearable />
    <Sel v-model="kind" :options="[{value:'requirement',label:'需求'},{value:'bug',label:'BUG'}]" all-label="全部类型" width="120px" aria-label="需求类型" />
    <Sel v-model="status" :options="statuses" all-label="全部状态" width="180px" aria-label="需求状态" />
    <div class="person-filters">
     <Sel v-model="personRole" :options="roles" width="150px" aria-label="人员关系" />
-    <Sel v-model="person" :options="personOptions" filterable all-label="全部人员（禅道账号）" width="220px" aria-label="筛选人员" />
+    <Sel v-model="person" :options="personOptions" filterable all-label="全部人员" width="220px" aria-label="筛选人员" />
     <HelpTip text="相关人员包含禅道的指派人、创建人、解决人、关闭人；手工需求按创建人筛选。平台同步人不算 Bug 负责人。只看我的使用当前登录账号，请与禅道账号保持一致。历史 Bug 需要重新同步才能补齐人员字段。" />
    </div>
    <ElButton :type="mine?'primary':'default'" :disabled="!canUseMine" :title="canUseMine?'按当前登录账号筛选相关记录':'登录后使用；当前可直接选择禅道账号'" @click="showMine">只看我的</ElButton>
    <ElButton v-if="filtered" text @click="clearFilters">清空筛选</ElButton>
-   <ElButton :loading="loading" @click="refresh">刷新</ElButton>
+   <ElButton :loading="loading" @click="refresh">刷新</ElButton><HelpTip v-if="missingPeople" text="部分历史 Bug 暂无人员信息，重新同步来源平台后补齐。人员筛选不会包含这些历史记录。" />
   </div>
   <p v-if="peopleError" class="list-hint" role="alert">{{peopleError}}</p>
-  <p v-if="missingPeople" class="list-hint">部分历史 Bug 暂无人员信息，重新同步来源平台后补齐。</p>
+
   <div class="work-table-scroll" tabindex="0" aria-label="需求表格，可横向滚动" :aria-busy="loading">
    <table class="work-table">
     <colgroup><col class="type-col" /><col class="number-col" /><col class="title-col" /><col class="status-col" /><col class="person-col" /><col class="person-col" /><col class="date-col" /><col class="actions-col" /></colgroup>
@@ -99,9 +99,9 @@ defineExpose({refresh});
  </section>
 </template>
 <style scoped>
-.work-list{min-width:0}.work-filters{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:14px;margin-bottom:14px;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
+.work-list{min-width:0}.work-filters{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px;margin-bottom:10px;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
 .work-search{width:280px;max-width:100%}.person-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.list-hint{font-size:12px;color:var(--muted);margin:0 0 10px}
-.work-table-scroll{overflow:auto;max-height:calc(100vh - 330px);min-height:180px;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
+.work-table-scroll{overflow:auto;max-height:calc(100vh - 230px);min-height:180px;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
 .work-table{width:100%;min-width:1150px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:13px;line-height:1.4}.work-table th,.work-table td{text-align:left;padding:8px 14px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--panel)}
 .work-table th{position:sticky;top:0;background:var(--panel2);color:var(--muted);font-size:12px;font-weight:600;z-index:2}.work-table tbody tr:hover td{background:var(--panel2)}.work-table tbody tr:last-child td{border-bottom:0}
 .type-col{width:72px}.number-col{width:100px}.title-col{width:auto}.status-col{width:90px}.person-col{width:120px}.date-col{width:140px}.actions-col{width:230px}

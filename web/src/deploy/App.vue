@@ -1,5 +1,5 @@
 <script setup>
-import { provide, ref } from 'vue'
+import { provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from '../shared/composables/toast.js'
 import PlatformNav from '../shared/components/PlatformNav.vue'
@@ -8,6 +8,7 @@ import UiIcon from '../shared/components/UiIcon.vue'
 const embedded = window.parent !== window.window
 const directAPI = !location.pathname.startsWith('/api/plugins/')
 const route = useRoute(), router = useRouter()
+watch(()=>route.path,()=>{if(embedded)window.parent.postMessage({type:'context.visibility',service:!!route.params.name,environment:!!route.params.name},location.origin)},{immediate:true})
 const globalEnvironment = ref(sessionStorage.getItem('lp-deploy-environment') || '')
 const globalService = ref('')
 const platformPanel = ref('')

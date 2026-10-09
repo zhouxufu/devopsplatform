@@ -2,7 +2,10 @@
 // Original, local outline icons: no remote font or image dependency.
 defineProps({ name: { type: String, default: 'apps' }, size: { type: [Number, String], default: 18 } })
 const paths = {
-  deploy: ['M5 19 19 5', 'M5 5h5v5H5z', 'M14 14h5v5h-5z'],
+  deploy: ['M14 4c3-2 6-2 7-1 1 1 1 4-1 7l-6 6-6-6z', 'M8 10 3 11l-1 5 6-1M14 16l-1 6 5-1 1-5', 'M17 6h.01M6 18l-3 3'],
+  sync: ['M3 10a9 9 0 0 1 15-6l3 3M21 3v4h-4', 'M21 14A9 9 0 0 1 6 20l-3-3M3 21v-4h4'],
+  history: ['M3 11a9 9 0 1 1 2 7', 'M3 4v7h7M12 7v5l3 2'],
+  settings: ['M9 3h6l1 4 4 1v8l-4 1-1 4H9l-1-4-4-1V8l4-1z', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z'],
   build: ['m14 6 4-4 4 4-4 4', 'm18 6-9 9', 'm6 12-4 4 6 6 4-4z'],
   changes: ['M8 3H5v18h14V3h-3', 'M8 2h8v4H8z', 'M8 11h8M8 15h5'],
   orchestration: ['M3 3h6v6H3zM15 15h6v6h-6zM15 3h6v6h-6z', 'M9 6h6M6 9v9h9'],

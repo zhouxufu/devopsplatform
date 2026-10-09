@@ -37,6 +37,8 @@ const st = reactive({
 })
 const activeWorkspace = computed(() => st.workspaces.find(w => w.id === st.active))
 const showTimeContext = computed(() => ['logs', 'monitor'].includes(activeWorkspace.value?.plugin?.name))
+const contextFields=computed(()=>activeWorkspace.value?.contextFields||{service:showTimeContext.value,environment:showTimeContext.value})
+const showContext=computed(()=>showTimeContext.value||contextFields.value.service||contextFields.value.environment)
 const defaultPlugin = () => st.plugins.find(p => p.name === 'deploy') || st.plugins.find(p => p.name !== 'devtools')
 function openDefault() { const plugin=defaultPlugin(); if(plugin) openPlugin(plugin); else if(st.plugins.some(p=>p.name==='devtools')) st.platformPanel='mcp' }
 
@@ -207,6 +209,7 @@ window.addEventListener('message', e => {
   if (e.origin !== location.origin) return
   const ws = st.workspaces.find(w => w.el.contentWindow === e.source)
   if (ws && e.data?.type === 'context.request') ctxSync([ws])
+  if (ws && e.data?.type === 'context.visibility') ws.contextFields={service:e.data.service===true,environment:e.data.environment===true}
   if (ws && e.data?.type === 'workspace.open') {
     const p = st.plugins.find(x => x.name === e.data.plugin)
     const hash = typeof e.data.hash === 'string' && e.data.hash.startsWith('#/') ? e.data.hash : ''
@@ -288,13 +291,13 @@ onBeforeUnmount(() => clearInterval(recentClock))
 		<button v-if="st.me.auth_enabled" class="logout" type="button" @click="logout">退出</button>
 		<button class="topr" type="button" :aria-label="dark ? '切换浅色主题' : '切换深色主题'" :title="dark ? '切换浅色主题' : '切换深色主题'" @click="switchTheme"><UiIcon :name="dark ? 'sun' : 'moon'"/></button>
     </header>
-    <div class="contextbar">
+    <div v-if="showContext" class="contextbar">
       <span class="context-title">当前上下文</span>
-      <div class="context-field"><label>应用</label>
+      <div v-if="contextFields.service" class="context-field"><label>应用</label>
         <Sel v-model="st.gSvc" :options="st.services.map(s => ({ value: s.name, label: s.managed ? s.name : s.name + ' · 未接入部署' }))"
           all-label="全部应用" filterable width="190px" @change="ctxSync()" />
       </div>
-      <div class="context-field"><label>环境</label>
+      <div v-if="contextFields.environment" class="context-field"><label>环境</label>
         <Sel v-model="st.gEnv" :options="st.environments.map(e => ({ value: e.name, label: (e.protected ? '🔒 ' : '') + e.display_name }))"
           all-label="全部环境" width="125px" @change="environmentChanged" />
       </div>

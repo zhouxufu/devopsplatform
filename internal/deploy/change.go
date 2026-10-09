@@ -31,22 +31,23 @@ const (
 // WorkItem represents a requirement or bug. It may be synchronized from an
 // external system or entered manually. It has no release/environment owner.
 type WorkItem struct {
-	ID             int64  `json:"id"`
-	Source         string `json:"source"`
-	ExternalID     string `json:"external_id,omitempty"`
-	Kind           string `json:"kind"`
-	Title          string `json:"title"`
-	URL            string `json:"url,omitempty"`
-	ExternalStatus string `json:"external_status,omitempty"`
-	Description    string `json:"description,omitempty"`
-	Status         string `json:"status"`
-	Owner          string `json:"owner,omitempty"`
-	AssignedTo     string `json:"assigned_to,omitempty"`
-	OpenedBy       string `json:"opened_by,omitempty"`
-	ResolvedBy     string `json:"resolved_by,omitempty"`
-	ClosedBy       string `json:"closed_by,omitempty"`
-	CreatedAt      int64  `json:"created_at"`
-	UpdatedAt      int64  `json:"updated_at"`
+	ID                int64  `json:"id"`
+	Source            string `json:"source"`
+	ExternalID        string `json:"external_id,omitempty"`
+	Kind              string `json:"kind"`
+	Title             string `json:"title"`
+	URL               string `json:"url,omitempty"`
+	ExternalStatus    string `json:"external_status,omitempty"`
+	Description       string `json:"description,omitempty"`
+	DescriptionFormat string `json:"description_format,omitempty"`
+	Status            string `json:"status"`
+	Owner             string `json:"owner,omitempty"`
+	AssignedTo        string `json:"assigned_to,omitempty"`
+	OpenedBy          string `json:"opened_by,omitempty"`
+	ResolvedBy        string `json:"resolved_by,omitempty"`
+	ClosedBy          string `json:"closed_by,omitempty"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
 }
 
 // Change is an independent implementation change. The same record is promoted
@@ -120,15 +121,18 @@ type ApplicationResources struct {
 
 type rowScanner interface{ Scan(...any) error }
 
-const workItemSelect = `SELECT id,source,COALESCE(external_id,''),kind,title,COALESCE(url,''),COALESCE(external_status,''),COALESCE(description,''),status,COALESCE(owner,''),created_at,updated_at,COALESCE(assigned_to,''),COALESCE(opened_by,''),COALESCE(resolved_by,''),COALESCE(closed_by,'') FROM work_items`
+const workItemSelect = `SELECT id,source,COALESCE(external_id,''),kind,title,COALESCE(url,''),COALESCE(external_status,''),COALESCE(description,''),status,COALESCE(owner,''),created_at,updated_at,COALESCE(assigned_to,''),COALESCE(opened_by,''),COALESCE(resolved_by,''),COALESCE(closed_by,''),COALESCE(description_format,'') FROM work_items`
 
 func scanWorkItem(row rowScanner) (WorkItem, error) {
 	var v WorkItem
-	err := row.Scan(&v.ID, &v.Source, &v.ExternalID, &v.Kind, &v.Title, &v.URL, &v.ExternalStatus, &v.Description, &v.Status, &v.Owner, &v.CreatedAt, &v.UpdatedAt, &v.AssignedTo, &v.OpenedBy, &v.ResolvedBy, &v.ClosedBy)
+	err := row.Scan(&v.ID, &v.Source, &v.ExternalID, &v.Kind, &v.Title, &v.URL, &v.ExternalStatus, &v.Description, &v.Status, &v.Owner, &v.CreatedAt, &v.UpdatedAt, &v.AssignedTo, &v.OpenedBy, &v.ResolvedBy, &v.ClosedBy, &v.DescriptionFormat)
 	return v, err
 }
 
 func normalizeWorkItem(v *WorkItem) error {
+	if v.DescriptionFormat != "" && v.DescriptionFormat != "markdown" && v.DescriptionFormat != "html" && v.DescriptionFormat != "text" {
+		return fmt.Errorf("说明格式仅支持 markdown、html 或 text")
+	}
 	v.Source, v.ExternalID = strings.TrimSpace(v.Source), strings.TrimSpace(v.ExternalID)
 	v.Kind, v.Title, v.URL = strings.TrimSpace(v.Kind), strings.TrimSpace(v.Title), strings.TrimSpace(v.URL)
 	v.ExternalStatus, v.Description = strings.TrimSpace(v.ExternalStatus), strings.TrimSpace(v.Description)
@@ -155,12 +159,24 @@ func (s *Store) CreateWorkItem(v *WorkItem) error {
 	// External personnel is authoritative only when imported by its connector.
 	v.AssignedTo, v.OpenedBy, v.ResolvedBy, v.ClosedBy = "", "", "", ""
 	v.Status, v.CreatedAt, v.UpdatedAt = WorkItemOpen, now, now
-	res, err := s.db.Exec(`INSERT INTO work_items(source,external_id,kind,title,url,external_status,description,status,owner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		v.Source, v.ExternalID, v.Kind, v.Title, v.URL, v.ExternalStatus, v.Description, v.Status, strings.TrimSpace(v.Owner), now, now)
-	if err == nil {
-		v.ID, _ = res.LastInsertId()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
 	}
-	return err
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO work_items(source,external_id,kind,title,url,external_status,description,status,owner,created_at,updated_at,description_format) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		v.Source, v.ExternalID, v.Kind, v.Title, v.URL, v.ExternalStatus, v.Description, v.Status, strings.TrimSpace(v.Owner), now, now, v.DescriptionFormat)
+	if err != nil {
+		return err
+	}
+	v.ID, err = res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	if err = bindWorkAttachments(tx, v, v.Owner); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) WorkItems(status, query string, limit int) []WorkItem {
@@ -203,6 +219,9 @@ func (s *Store) GetWorkItem(id int64) *WorkItem {
 }
 
 func (s *Store) UpdateWorkItem(v *WorkItem) error {
+	return s.UpdateWorkItemAs(v, v.Owner)
+}
+func (s *Store) UpdateWorkItemAs(v *WorkItem, actor string) error {
 	current := s.GetWorkItem(v.ID)
 	if current == nil {
 		return fmt.Errorf("需求或缺陷不存在")
@@ -210,15 +229,29 @@ func (s *Store) UpdateWorkItem(v *WorkItem) error {
 	if strings.HasPrefix(current.Source, "zentao:") && (v.Source != current.Source || v.ExternalID != current.ExternalID || v.Kind != current.Kind) {
 		return fmt.Errorf("同步的外部记录不能修改来源、编号或类型")
 	}
+	if v.DescriptionFormat == "" {
+		v.DescriptionFormat = current.DescriptionFormat
+	}
 	if err := normalizeWorkItem(v); err != nil {
 		return err
 	}
 	if v.Status != WorkItemOpen && v.Status != WorkItemClosed {
 		return fmt.Errorf("需求状态仅支持 open 或 closed")
 	}
-	_, err := s.db.Exec(`UPDATE work_items SET source=?,external_id=?,kind=?,title=?,url=?,external_status=?,description=?,status=?,owner=?,updated_at=? WHERE id=?`,
-		v.Source, v.ExternalID, v.Kind, v.Title, v.URL, v.ExternalStatus, v.Description, v.Status, strings.TrimSpace(v.Owner), time.Now().Unix(), v.ID)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`UPDATE work_items SET source=?,external_id=?,kind=?,title=?,url=?,external_status=?,description=?,status=?,owner=?,updated_at=?,description_format=? WHERE id=?`,
+		v.Source, v.ExternalID, v.Kind, v.Title, v.URL, v.ExternalStatus, v.Description, v.Status, strings.TrimSpace(v.Owner), time.Now().Unix(), v.DescriptionFormat, v.ID)
+	if err != nil {
+		return err
+	}
+	if err = bindWorkAttachments(tx, v, actor); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteWorkItem(id int64) error {

@@ -21,6 +21,13 @@ func TestDeploymentMigrationCatalogMatchesSQLiteSchema(t *testing.T) {
 				t.Errorf("migration table %s is missing key column %s", table.name, key)
 			}
 		}
+		if table.name == "work_items" || table.name == "work_item_attachments" {
+			for _, column := range table.columns {
+				if !columns[column] {
+					t.Errorf("migration table %s is missing content column %s", table.name, column)
+				}
+			}
+		}
 	}
 }
 

@@ -137,7 +137,7 @@ func migrateMySQLDeploySchema(db *deployDB) error {
 			}
 		}
 	}
-	return nil
+	return (&Store{db: db}).migrateWorkContent()
 }
 
 // mysqlDeploySchema is intentionally explicit. It prevents SQLite affinities,

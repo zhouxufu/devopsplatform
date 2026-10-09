@@ -257,6 +257,10 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db, secretKey: secretKey, dataDir: dir}
+	if err := s.migrateWorkContent(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if db.dialect == "sqlite" {
 		for _, q := range []string{
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_services_application_id ON services(application_id) WHERE application_id<>''`,
