@@ -25,7 +25,7 @@ await page.route('**/*',async route=>{
  if(/\/api\/work-items\/\d+$/.test(p))return route.fulfill({json:items.find(v=>v.id===Number(p.split('/').at(-1)))});
  if(p.endsWith('/api/work-items'))return route.fulfill({json:items.slice(0,500)});
  if(p.endsWith('/api/me'))return route.fulfill({json:{username:'alice',role:'member',auth_enabled:true}});
- if(['/api/changes','/api/release-versions','/api/delivery/runs','/api/issue-sync'].some(end=>p.endsWith(end)))return route.fulfill({json:[]});
+ if(['/api/changes','/api/release-versions','/api/delivery/runs','/api/work-item-sync','/api/work-item-sources'].some(end=>p.endsWith(end)))return route.fulfill({json:[]});
  if(p.endsWith('/delivery-content'))return route.fulfill({json:{changes:[],digest:'fixture'}});
  if(dist){
   let file;if(p==='/')file='shell.html';else if(/\/assets\/[^/]+\.(?:js|css)$/.test(p))file=`assets/${path.basename(p)}`;else if(p==='/api/plugins/deploy/ui')file='deploy.html';

@@ -60,7 +60,7 @@ defineExpose({refresh});
    <ElButton :loading="loading" @click="refresh">刷新</ElButton>
   </div>
   <p v-if="peopleError" class="list-hint" role="alert">{{peopleError}}</p>
-  <p v-if="missingPeople" class="list-hint">部分历史 Bug 暂无人员信息，重新同步禅道后补齐。</p>
+  <p v-if="missingPeople" class="list-hint">部分历史 Bug 暂无人员信息，重新同步来源平台后补齐。</p>
   <div class="work-table-scroll" tabindex="0" aria-label="需求表格，可横向滚动" :aria-busy="loading">
    <table class="work-table">
     <colgroup><col class="type-col" /><col class="number-col" /><col class="title-col" /><col class="status-col" /><col class="person-col" /><col class="person-col" /><col class="date-col" /><col class="actions-col" /></colgroup>

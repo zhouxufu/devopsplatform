@@ -644,8 +644,13 @@ func registerIntegrationRoutes(mux *http.ServeMux, s *Store) {
 	registerDataSyncRoutes(mux, s)
 	registerIssueUserRoutes(mux, s)
 	mux.HandleFunc("GET /api/sql-executions", func(w http.ResponseWriter, r *http.Request) { writeIntegrationJSON(w, s.SQLLedger(), nil) })
-	mux.HandleFunc("GET /api/issue-sync", func(w http.ResponseWriter, r *http.Request) { writeIntegrationJSON(w, s.issueSyncStates(), nil) })
-	mux.HandleFunc("POST /api/issue-sync/{name}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/work-item-sources", func(w http.ResponseWriter, r *http.Request) {
+		writeIntegrationJSON(w, workItemSourceCapabilities(), nil)
+	})
+	states := func(w http.ResponseWriter, r *http.Request) { writeIntegrationJSON(w, s.issueSyncStates(), nil) }
+	mux.HandleFunc("GET /api/work-item-sync", states)
+	mux.HandleFunc("GET /api/issue-sync", states) // Compatibility for existing clients.
+	syncItems := func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Baseline string `json:"baseline"`
 			Status   string `json:"status"`
@@ -660,9 +665,11 @@ func registerIntegrationRoutes(mux *http.ServeMux, s *Store) {
 		if actor == "" {
 			actor = "local"
 		}
-		state, err := s.syncZentao(ctx, r.PathValue("name"), req.Baseline, actor, req.Status)
+		state, err := s.syncWorkItems(ctx, r.PathValue("name"), req.Baseline, actor, req.Status)
 		writeIntegrationJSON(w, state, err)
-	})
+	}
+	mux.HandleFunc("POST /api/work-item-sync/{name}", syncItems)
+	mux.HandleFunc("POST /api/issue-sync/{name}", syncItems)
 	mux.HandleFunc("POST /api/changes/{id}/sql-preview", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Environment string `json:"environment"`
@@ -696,11 +703,11 @@ func (s *Store) syncDueIssues(now time.Time) {
 	}
 	for _, public := range s.Connections() {
 		minutes, _ := strconv.Atoi(public.Config["sync_minutes"])
-		if public.Kind != "zentao" || minutes < 1 || now.Unix()-last[public.Name] < int64(minutes*60) {
+		if _, supported := workItemSources[public.Kind]; !supported || minutes < 1 || now.Unix()-last[public.Name] < int64(minutes*60) {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		_, _ = s.syncZentao(ctx, public.Name, "", "scheduler")
+		_, _ = s.syncWorkItems(ctx, public.Name, "", "scheduler", "")
 		cancel()
 	}
 }

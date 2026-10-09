@@ -60,7 +60,7 @@ const NAV = [
 </script>
 <template>
   <div class="layout" :class="{ embedded }">
-    <header>
+    <header class="workspace-sidebar">
       <span class="logo"><UiIcon name="monitor"/></span>
       <nav aria-label="监控平台导航">
         <RouterLink v-for="n in NAV" :key="n[0]" :to="n[0]"><UiIcon :name="n[1]"/><i>{{ n[2] }}</i></RouterLink>

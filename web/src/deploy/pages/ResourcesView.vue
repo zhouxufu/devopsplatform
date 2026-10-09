@@ -21,7 +21,7 @@ const agentHost=ref(null),agentForm=ref({}),agentSaving=ref(false),agentApplying
 const KINDS={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 变更数据库',redis:'Redis 缓存维护',nacos:'Nacos 配置中心（2.4 / 2.5）',zentao:'禅道 16.0（需求来源）'}
 const ALL_RESOURCE_TABS={connections:['connections','devtools','连接'],environments:['environments','static','环境'],hosts:['hosts','resources','主机'],groups:['groups','apps','主机组'],variables:['variables','logs','变量组'],runners:['runners','build','构建 Runner'],audit:['audit','changes','审计日志']}
 const RESOURCE_SCOPES={dbms:['connections','environments','audit'],redis:['connections','environments','audit'],deploy:['connections','environments','hosts','groups','variables','runners','audit'],logs:['hosts','environments','audit'],monitor:['hosts','environments','audit'],devtools:['environments','audit']}
-const PLUGIN_LABELS={dbms:'数据库工作台',redis:'Redis 工作台',deploy:'部署平台',logs:'日志查询',monitor:'监控大盘',devtools:'AI 开发工具'}
+const PLUGIN_LABELS={dbms:'数据库工作台',redis:'Redis 工作台',deploy:'部署平台',logs:'日志查询',monitor:'监控大盘',devtools:'MCP'}
 const connectionKinds=computed(()=>Object.entries(KINDS).filter(([kind])=>!['dbms','redis'].includes(props.plugin)||kind===(props.plugin==='dbms'?'mysql':'redis')).map(([value,label])=>({value,label})))
 const visibleConnections=computed(()=>connections.value.filter(c=>connectionKinds.value.some(k=>k.value===c.kind)))
 const resourceTabs=computed(()=>(RESOURCE_SCOPES[props.plugin]||['environments','hosts','audit']).map(key=>ALL_RESOURCE_TABS[key]))

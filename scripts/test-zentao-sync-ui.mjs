@@ -13,7 +13,7 @@ await page.route('**/api/**',async route=>{
   {name:'UI只读默认连接',kind:'zentao',endpoint:'http://example.test/zentao',config:{product_ids:'14'}},
   {name:'UI只读激活连接',kind:'zentao',endpoint:'http://example.test/zentao',config:{product_ids:'14',bug_status:'active'}}
  ]})
- if(request.method()==='POST'&&path.includes('/api/issue-sync/')){bodies.push(request.postDataJSON());return route.fulfill({json:{status:'success',detail:'UI mocked synchronization only'}})}
+ if(request.method()==='POST'&&path.includes('/api/work-item-sync/')){bodies.push(request.postDataJSON());return route.fulfill({json:{status:'success',detail:'UI mocked synchronization only'}})}
  if(!['GET','HEAD','OPTIONS'].includes(request.method())){unexpectedWrites.push(path);return route.abort()}
  return route.continue()
 })
@@ -24,17 +24,17 @@ const choose=async(field,option)=>{
 }
 try{
  await page.goto(base+'/api/plugins/deploy/ui#/changes?tab=work')
- await page.getByRole('button',{name:'同步禅道 BUG',exact:true}).click()
- const dialog=page.getByRole('dialog',{name:'同步禅道 BUG（开源 16.0）',exact:true})
- const connection=dialog.locator('label').filter({hasText:/^禅道连接/})
- const status=dialog.locator('label').filter({hasText:/^本次 Bug 状态/})
+ await page.getByRole('button',{name:'同步工作项',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'同步工作项',exact:true})
+ const connection=dialog.locator('label').filter({hasText:/^来源连接/})
+ const status=dialog.locator('label').filter({hasText:/^本次状态/})
  await status.getByText('沿用连接默认：已关闭',{exact:true}).waitFor()
  await choose(connection,'UI只读激活连接')
  await status.getByText('沿用连接默认：激活（未解决）',{exact:true}).waitFor()
  await choose(status,'已关闭')
  await dialog.locator('label').filter({hasText:/^更新或关闭日期基线/}).locator('input').fill('2026-10-06')
  await dialog.getByRole('button',{name:'立即同步',exact:true}).click()
- await page.getByText('禅道同步完成',{exact:true}).waitFor()
+ await page.getByText('工作项同步完成',{exact:true}).waitFor()
  assert.deepEqual(bodies,[{baseline:'2026-10-06',status:'closed'}])
  await choose(status,'沿用连接默认：激活（未解决）')
  await choose(connection,'UI只读默认连接')

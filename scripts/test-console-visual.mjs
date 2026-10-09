@@ -78,7 +78,9 @@ try {
       await page.setViewportSize({ width, height: 960 })
       await page.locator('.layout > header').waitFor()
       await overflow(page)
-      assert.equal(await page.locator('.layout > header').evaluate(e => e.getBoundingClientRect().width), width <= 760 ? 64 : 176)
+      await page.mouse.move(width-10, 900)
+      await page.waitForTimeout(200)
+      assert.equal(await page.locator('.layout > header').evaluate(e => e.getBoundingClientRect().width), 64)
     }
     await page.setViewportSize({ width: 1440, height: 960 })
     await capture(`${plugin}-dark`)

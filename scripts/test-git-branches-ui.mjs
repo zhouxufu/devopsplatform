@@ -36,7 +36,7 @@ await page.route('**/*',async route=>{
  if(p.endsWith('/api/work-items/people'))return route.fulfill({json:[]})
  if(p.endsWith('/api/work-items/'+work.id))return route.fulfill({json:work})
  if(p.endsWith('/api/me'))return route.fulfill({json:{username:'local',role:'admin'}})
- if(['/api/pipeline/runs','/api/artifacts','/api/deploys','/api/changes','/api/release-versions','/api/delivery/runs','/api/issue-sync'].some(end=>p.endsWith(end)))return route.fulfill({json:[]})
+ if(['/api/pipeline/runs','/api/artifacts','/api/deploys','/api/changes','/api/release-versions','/api/delivery/runs','/api/work-item-sync','/api/work-item-sources'].some(end=>p.endsWith(end)))return route.fulfill({json:[]})
  return route.continue()
 })
 const visibleDialog=name=>ui.getByRole('dialog',{name,exact:true})

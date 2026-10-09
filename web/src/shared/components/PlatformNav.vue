@@ -1,5 +1,7 @@
 <script setup>
 import UiIcon from './UiIcon.vue'
+import { usePlatformCapabilities } from '../composables/platformCapabilities.js'
+const { mcpAvailable } = usePlatformCapabilities()
 const emit = defineEmits(['open'])
 function open(view) {
   if (window.parent !== window) {
@@ -15,6 +17,7 @@ function open(view) {
     <span>平台</span>
     <button type="button" title="应用中心 · 保留当前页面" @click="open('apps')"><UiIcon name="apps"/><i>应用</i></button>
     <button type="button" title="资源中心 · 保留当前页面" @click="open('resources')"><UiIcon name="resources"/><i>资源</i></button>
+    <button v-if="mcpAvailable" type="button" title="MCP · 保留当前页面" @click="open('mcp')"><UiIcon name="devtools"/><i>MCP</i></button>
   </div>
 </template>
 

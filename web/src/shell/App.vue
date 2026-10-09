@@ -37,7 +37,8 @@ const st = reactive({
 })
 const activeWorkspace = computed(() => st.workspaces.find(w => w.id === st.active))
 const showTimeContext = computed(() => ['logs', 'monitor'].includes(activeWorkspace.value?.plugin?.name))
-const defaultPlugin = () => st.plugins.find(p => p.name === 'deploy') || st.plugins[0]
+const defaultPlugin = () => st.plugins.find(p => p.name === 'deploy') || st.plugins.find(p => p.name !== 'devtools')
+function openDefault() { const plugin=defaultPlugin(); if(plugin) openPlugin(plugin); else if(st.plugins.some(p=>p.name==='devtools')) st.platformPanel='mcp' }
 
 function openPlugin(p, hash = '') {
   const ws = { id: ++st._seq, plugin: p }
@@ -194,7 +195,7 @@ async function finishSetup() {
     st.showSetup = false
     await loadServices()
     ctxSync()
-    if (!st.workspaces.length && st.plugins.length) openPlugin(defaultPlugin())
+    if (!st.workspaces.length && st.plugins.length) openDefault()
   } catch {
     st.setupError = '无法连接部署服务，请检查服务状态后重试'
   } finally {
@@ -211,7 +212,7 @@ window.addEventListener('message', e => {
     const hash = typeof e.data.hash === 'string' && e.data.hash.startsWith('#/') ? e.data.hash : ''
     if (p) openPlugin(p, hash)
   }
-  if (ws && e.data?.type === 'platform.open' && ['apps', 'resources'].includes(e.data.view)) {
+  if (ws && e.data?.type === 'platform.open' && ['apps', 'resources', 'mcp'].includes(e.data.view) && (e.data.view !== 'mcp' || st.plugins.some(p=>p.name==='devtools'))) {
     st.platformPanel = e.data.view
     st.plusOpen = false
   }
@@ -258,7 +259,7 @@ onMounted(async () => {
   }
   // platform 与插件并行启动，稍后再合并一次，补上启动较慢的插件数据。
   setTimeout(loadServices, 2500)
-  if (st.plugins.length) openPlugin(defaultPlugin())
+  if (st.plugins.length) openDefault()
 })
 const recentClock = setInterval(() => { if (st.rangeMinutes > 0) st.range = recentRange(st.rangeMinutes) }, 30000)
 onBeforeUnmount(() => clearInterval(recentClock))
@@ -279,7 +280,7 @@ onBeforeUnmount(() => clearInterval(recentClock))
           <button class="wsplus" type="button" aria-label="打开插件工作区" :aria-expanded="st.plusOpen" @click.stop="st.plusOpen = !st.plusOpen">＋</button>
           <div class="pm" v-if="st.plusOpen" @click.stop>
             <span class="launcher-label">打开工作区</span>
-            <button v-for="p in st.plugins" :key="p.name" type="button" @click="openPlugin(p); st.plusOpen = false"><UiIcon :name="p.name"/> {{ p.display }}</button>
+            <button v-for="p in st.plugins.filter(p=>p.name!=='devtools')" :key="p.name" type="button" @click="openPlugin(p); st.plusOpen = false"><UiIcon :name="p.name"/> {{ p.display }}</button>
           </div>
         </div>
       </div>
@@ -309,7 +310,7 @@ onBeforeUnmount(() => clearInterval(recentClock))
       <span class="context-tip">切换后同步到所有已打开工作区</span>
     </div>
     <div class="wsarea" id="wsarea">
-      <div class="emptyws" v-if="!st.workspaces.length">点击 ＋ 打开一个插件工作区</div>
+      <div class="emptyws" v-if="!st.workspaces.length"><div>点击 ＋ 打开一个插件工作区</div><ElButton v-if="st.plugins.some(p=>p.name==='devtools')" @click="st.platformPanel='mcp'">打开 MCP</ElButton></div>
     </div>
 		<PlatformPanel :view="st.platformPanel" :plugin="activeWorkspace?.plugin?.name || 'deploy'" @switch="st.platformPanel=$event" @close="closePlatformPanel" />
 		<UserManagement :show="st.showUsers" :current="st.me" @close="st.showUsers=false;loadIdentity()" />
@@ -382,7 +383,7 @@ onBeforeUnmount(() => clearInterval(recentClock))
 .wsarea{flex:1;position:relative;overflow:hidden;background:var(--bg)}
 .ws{position:absolute;inset:0;border:none;width:100%;height:100%;display:none}
 .ws.on{display:block}
-.emptyws{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim)}
+.emptyws{position:absolute;inset:0;display:flex;flex-direction:column;gap:16px;align-items:center;justify-content:center;color:var(--dim)}
 .mask{position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;align-items:center;justify-content:center}
 .mask .box{width:320px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:24px;text-align:center}
 .mask h3{margin-bottom:16px}

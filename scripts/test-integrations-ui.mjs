@@ -74,9 +74,9 @@ try{
   await execution.locator('.el-dialog__headerbtn').click()
   const zentao='UI回归禅道-'+suffix
   await post('/api/connections',{name:zentao,kind:'zentao',endpoint:`http://127.0.0.1:${mock.address().port}`,username:'qa',password:'qa',config:{product_ids:'1',sync_minutes:'0'}})
-  await page.goto(base+'/ui#/changes?tab=work');await page.getByRole('button',{name:'同步禅道 BUG',exact:true}).click()
-  await select(dlg('同步禅道 BUG（开源 16.0）'),'禅道连接',zentao);await dlg('同步禅道 BUG（开源 16.0）').getByRole('button',{name:'立即同步'}).click();await dlg('同步禅道 BUG（开源 16.0）').getByText('上次同步：成功',{exact:false}).waitFor()
-  await dlg('同步禅道 BUG（开源 16.0）').locator('.el-dialog__headerbtn').click();await dlg('同步禅道 BUG（开源 16.0）').waitFor({state:'hidden'});await page.getByText('UI回归禅道BUG-'+suffix,{exact:true}).waitFor()
+  await page.goto(base+'/ui#/changes?tab=work');await page.getByRole('button',{name:'同步工作项',exact:true}).click()
+  await select(dlg('同步工作项'),'来源连接',zentao);await dlg('同步工作项').getByRole('button',{name:'立即同步'}).click();await dlg('同步工作项').getByText('上次同步：成功',{exact:false}).waitFor()
+  await dlg('同步工作项').locator('.el-dialog__headerbtn').click();await dlg('同步工作项').waitFor({state:'hidden'});await page.getByText('UI回归禅道BUG-'+suffix,{exact:true}).waitFor()
   await page.setViewportSize({width:900,height:800});await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth,{},{timeout:5000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
   assert.deepEqual(errors,[]);await page.screenshot({path:'runtime/integrations-ui-qa.png',fullPage:true})
   console.log(JSON.stringify({ok:true,checks:['MySQL connection UI','environment resource binding UI','SQL structured editor','read-only preflight UI','version SQL snapshot','actual SQL node execution','ledger','ZenTao sync UI','browser errors','900px layout'],table}))

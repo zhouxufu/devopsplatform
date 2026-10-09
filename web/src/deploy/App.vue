@@ -62,7 +62,7 @@ try { if (embedded) window.parent.postMessage({ type: 'context.request' }, locat
 </script>
 <template>
   <div class="layout" :class="{ embedded }">
-    <header>
+    <header class="workspace-sidebar">
       <span class="logo"><UiIcon name="deploy"/> 部署平台</span>
       <nav aria-label="部署平台导航">
         <RouterLink to="/" title="基础构建"><UiIcon name="build"/><i>构建</i></RouterLink>

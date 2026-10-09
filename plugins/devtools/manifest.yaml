@@ -1,5 +1,5 @@
 name: devtools
-display: AI 开发工具
+display: MCP
 version: 0.1.0
 binary: ../../bin/devtools
 admin_addr: 127.0.0.1:19804

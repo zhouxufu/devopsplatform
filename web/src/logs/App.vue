@@ -42,7 +42,7 @@ onBeforeUnmount(() => window.removeEventListener('message', onContext))
 </script>
 <template>
   <div class="layout" :class="{ embedded }">
-    <header>
+    <header class="workspace-sidebar">
       <span class="logo"><UiIcon name="logs"/></span>
       <nav aria-label="日志平台导航">
         <RouterLink to="/search"><UiIcon name="search"/><i>搜索</i></RouterLink>
