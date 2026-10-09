@@ -59,6 +59,7 @@ type DeliveryPlan struct {
 	Warnings    []string              `json:"warnings"`
 	SQLPlans    []*SQLExecutionPlan   `json:"sql_plans,omitempty"`
 	NacosPlans  []*NacosExecutionPlan `json:"nacos_plans,omitempty"`
+	RedisPlans  []*RedisExecutionPlan `json:"redis_plans,omitempty"`
 }
 type DeliveryStep struct {
 	NodeID    string `json:"node_id"`
@@ -268,7 +269,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 				} else {
 					services[c.Service] = true
 				}
-			} else if c.Kind != "manual" && c.Kind != "mysql" && c.Kind != "nacos" {
+			} else if c.Kind != "manual" && c.Kind != "mysql" && c.Kind != "nacos" && c.Kind != "redis" {
 				p.Blockers = append(p.Blockers, "变更执行器尚未接通："+c.Title+"（"+c.Kind+"）")
 			}
 		}
@@ -319,8 +320,53 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	nacosAllocated := map[int64]int{}
 	nacosTargets := map[string]bool{}
 	nacosCount := 0
+	redisAllocated := map[int64]int{}
+	redisCount := 0
 	for _, node := range nodes {
 		switch node.Kind {
+		case "redis":
+			if strings.TrimSpace(env.Approvers) == "" {
+				p.Blockers = append(p.Blockers, "Redis 操作必须审核，请先为该环境配置审核人（开发/测试也需要）")
+			}
+			ids := append([]int64{}, node.ChangeIDs...)
+			if p.Version != nil {
+				allowed := map[int64]bool{}
+				for _, c := range p.Version.Changes {
+					if c.Kind == "redis" {
+						allowed[c.ID] = true
+						if len(node.ChangeIDs) == 0 && (node.Service == "" || node.Service == c.Service) {
+							ids = append(ids, c.ID)
+						}
+					}
+				}
+				for _, id := range ids {
+					if !allowed[id] {
+						p.Blockers = append(p.Blockers, fmt.Sprintf("Redis 节点引用版本外变更 #%d", id))
+					}
+				}
+			}
+			ready := true
+			for _, id := range ids {
+				redisAllocated[id]++
+				c := s.GetChange(id)
+				if c == nil || c.Status != ChangeReady {
+					p.Blockers = append(p.Blockers, fmt.Sprintf("Redis 变更 #%d 尚未就绪", id))
+					ready = false
+				}
+			}
+			if !ready {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			plan, err := s.prepareRedisNode(ctx, node.ID, ids, env.Name)
+			cancel()
+			if err != nil {
+				p.Blockers = append(p.Blockers, node.Name+"："+err.Error())
+				continue
+			}
+			p.RedisPlans = append(p.RedisPlans, plan)
+			redisCount++
+			p.Warnings = append(p.Warnings, "Redis 命令必须由另一名环境审核人审核；精确 Key 的当前数据不冻结、不校验内容，命令顺序执行、非事务、无自动回滚；超时不得重试。缓存清理无法恢复，请确认业务可重建缓存。")
 		case "nacos":
 			ids := append([]int64{}, node.ChangeIDs...)
 			if p.Version != nil {
@@ -435,6 +481,9 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	}
 	if p.Version != nil {
 		for _, c := range p.Version.Changes {
+			if c.Kind == "redis" && redisAllocated[c.ID] != 1 {
+				p.Blockers = append(p.Blockers, fmt.Sprintf("Redis 变更 #%d 必须且只能安排到一个 Redis 节点", c.ID))
+			}
 			if c.Kind == "nacos" && nacosAllocated[c.ID] != 1 {
 				p.Blockers = append(p.Blockers, fmt.Sprintf("Nacos 变更 #%d 必须且只能安排到一个 Nacos 节点", c.ID))
 			}
@@ -456,7 +505,12 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			p.Blockers = append(p.Blockers, fmt.Sprintf("Nacos 变更 #%d 在多个节点重复", id))
 		}
 	}
-	if len(names) == 0 && manualCount == 0 && sqlCount == 0 && nacosCount == 0 {
+	for id, count := range redisAllocated {
+		if count != 1 {
+			p.Blockers = append(p.Blockers, fmt.Sprintf("Redis 变更 #%d 在多个节点重复", id))
+		}
+	}
+	if len(names) == 0 && manualCount == 0 && sqlCount == 0 && nacosCount == 0 && redisCount == 0 {
 		p.Blockers = append(p.Blockers, "交付范围没有可执行应用或人工确认节点")
 	}
 	return p, secrets, nil
@@ -473,7 +527,7 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	planJSON, _ := json.Marshal(p)
 	hash := sha256.Sum256(planJSON)
 	run := &DeliveryRun{Plan: *p, Digest: "sha256:" + hex.EncodeToString(hash[:]), Status: "approved", Owner: actor, CreatedAt: time.Now().Unix(), Revision: 1, Steps: []DeliveryStep{}, envSecrets: secrets}
-	if p.Environment.Protected {
+	if p.Environment.Protected || len(p.RedisPlans) > 0 {
 		run.Status = "pending_approval"
 	}
 	for _, node := range p.Nodes {
@@ -583,6 +637,9 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 	if env == nil || (env.Protected && (v.Approver == "" || !allowedApprover(env.Approvers, v.Approver))) {
 		return nil, fmt.Errorf("环境保护策略已变化，请重新提交审核")
 	}
+	if len(v.Plan.RedisPlans) > 0 && (v.Approver == "" || v.Approver == v.Owner || !allowedApprover(env.Approvers, v.Approver) || !allowedApprover(v.Plan.Environment.Approvers, v.Approver)) {
+		return nil, fmt.Errorf("Redis 操作必须经另一名环境审核人审核，且审核人仍须有权限")
+	}
 	if env.RequireReason && v.Plan.Reason == "" {
 		return nil, fmt.Errorf("环境已要求发布原因，请重新提交执行单")
 	}
@@ -590,6 +647,42 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 		step := &v.Steps[i]
 		if step.Status == "success" {
 			continue
+		}
+		if step.Kind == "redis" {
+			if step.Status == "executing" {
+				return nil, fmt.Errorf("Redis 节点正在执行或中断待核对，禁止自动重试")
+			}
+			var plan *RedisExecutionPlan
+			for _, candidate := range v.Plan.RedisPlans {
+				if candidate.NodeID == step.NodeID {
+					plan = candidate
+					break
+				}
+			}
+			if plan == nil {
+				return nil, fmt.Errorf("Redis 节点缺少已审核快照")
+			}
+			step.Status, v.Status = "executing", "running"
+			if err := s.saveDeliveryRun(v); err != nil {
+				return nil, err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			detail, err := s.executeRedisNode(ctx, v, plan)
+			cancel()
+			step.Detail = detail
+			if err != nil {
+				step.Status, v.Status = "failed", "failed"
+				if detail == "" {
+					step.Detail = err.Error()
+				}
+			} else {
+				step.Status = "success"
+			}
+			if err := s.saveDeliveryRun(v); err != nil {
+				return nil, err
+			}
+			s.Audit(actor, "execute-redis", "delivery-run", fmt.Sprint(id), map[string]any{"node": step.NodeID, "status": step.Status, "digest": v.Digest})
+			return v, nil
 		}
 		if step.Kind == "nacos" {
 			if step.Status == "executing" {

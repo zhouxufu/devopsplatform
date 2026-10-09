@@ -103,11 +103,13 @@ func loadWorkDelivery(tx *deployTx, id int64) (*WorkDelivery, error) {
 			var p struct {
 				SQL   *SQLChange   `json:"sql"`
 				Nacos *NacosChange `json:"nacos"`
+				Redis *RedisChange `json:"redis"`
 			}
 			if e = json.Unmarshal([]byte(doc), &p); e != nil {
 				return nil, e
 			}
 			c.SQL, c.Nacos = p.SQL, p.Nacos
+			c.Redis = p.Redis
 		}
 		rs, e := tx.Query(workItemSelect+` WHERE id IN (SELECT work_item_id FROM work_item_changes WHERE change_id=?) ORDER BY id`, c.ID)
 		if e != nil {
@@ -173,6 +175,9 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		}
 		if c.Kind == "mysql" && c.SQL == nil {
 			return fmt.Errorf("第 %d 项：请填写 SQL", i+1)
+		}
+		if c.Kind == "redis" && c.Redis == nil {
+			return fmt.Errorf("第 %d 项：请填写结构化 Redis 命令", i+1)
 		}
 	}
 	tx, err := s.db.Begin()
@@ -277,6 +282,9 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		}
 		if c.Nacos != nil {
 			alias, kind = c.Nacos.ResourceAlias, "nacos"
+		}
+		if c.Redis != nil {
+			alias, kind = c.Redis.ResourceAlias, "redis"
 		}
 		if alias != "" {
 			var actual string

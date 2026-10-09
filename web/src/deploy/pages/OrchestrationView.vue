@@ -6,6 +6,7 @@ import Sel from "../../shared/components/Sel.vue";
 import HelpTip from "../../shared/components/HelpTip.vue";
 import SQLPlanPreview from '../components/SQLPlanPreview.vue';
 import NacosPlanPreview from '../components/NacosPlanPreview.vue';
+import RedisPlanPreview from '../components/RedisPlanPreview.vue';
 import { ElButton, ElInput } from "../../shared/components/ui.js";
 import { toast } from "../../shared/composables/toast.js";
 const api = inject("api"),
@@ -20,7 +21,7 @@ const templates = ref([]),
   artifacts = ref([]),
   me = ref({});
 const changes=ref([]);
-const nacosExecutions=ref([]);
+const nacosExecutions=ref([]),redisExecutions=ref([]);
 async function restoreNacos(changeID){
   if(busy.value||!selected.value)return;
   busy.value=true;
@@ -75,7 +76,7 @@ const kinds = [
   { value: "mysql", label: "SQL 变更" },
   { value: "nacos", label: "Nacos 配置" },
   { value: "data-sync", label: "数据同步（待接通）" },
-  { value: "redis", label: "Redis 命令（待接通）" },
+  { value: "redis", label: "Redis 命令（强制审核）" },
 ];
 const selectedTemplate = computed(() =>
   templates.value.find((t) => t.id === request.value.template_id),
@@ -127,7 +128,7 @@ async function load() {
       environments.value,
       artifacts.value,
       changes.value,
-      nacosExecutions.value,
+      nacosExecutions.value,redisExecutions.value,
     ] = await Promise.all([
       api("api/delivery/templates"),
       api("api/delivery/runs"),
@@ -136,7 +137,7 @@ async function load() {
       api("api/environments"),
       api("api/artifacts?limit=500"),
       api('api/changes?status=ready&limit=500'),
-      api('api/nacos-executions'),
+      api('api/nacos-executions'),api('api/redis-executions'),
     ]);
   } catch (e) {
     toast(e.message, "error");
@@ -235,6 +236,7 @@ async function openDetail(run) {
   try {
     selected.value = await api(`api/delivery/runs/${run.id}`);
     nacosExecutions.value = await api(`api/nacos-executions?run_id=${run.id}`);
+    redisExecutions.value = await api(`api/redis-executions?run_id=${run.id}`);
     router.replace({path:'/orchestration',query:{run:String(run.id)}});
     const entries = await Promise.all(
       selected.value.steps
@@ -448,7 +450,8 @@ onMounted(async () => {
           /></label>
           <label v-if="n.kind==='mysql'">指定 SQL 变更（不选时执行版本内全部 SQL）<Sel v-model="n.change_ids" multiple :options="changes.filter(c=>c.kind==='mysql').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" width="100%" /></label>
           <label v-if="n.kind==='nacos'">指定配置变更（不选时执行版本内全部 Nacos 变更）<Sel v-model="n.change_ids" multiple filterable :options="changes.filter(c=>c.kind==='nacos').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" width="100%" /></label>
-          <p v-if="!['deploy', 'manual','mysql','nacos'].includes(n.kind)" class="notice">
+          <label v-if="n.kind==='redis'">指定 Redis 变更（不选时执行版本内全部 Redis 变更）<Sel v-model="n.change_ids" multiple filterable :options="changes.filter(c=>c.kind==='redis').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" width="100%" /></label>
+          <p v-if="!['deploy', 'manual','mysql','nacos','redis'].includes(n.kind)" class="notice">
             可保存节点定义；执行器未接通，会阻止提交。
           </p>
         </div>
@@ -545,6 +548,7 @@ onMounted(async () => {
             placeholder="操作与确认说明"
           />
           <label v-if="n.kind==='mysql'">本次 SQL 变更（版本模式仅允许版本内变更）<Sel v-model="n.change_ids" multiple :options="(version?.changes||changes).filter(c=>c.kind==='mysql').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" all-label="版本内全部 SQL" width="100%" /></label>
+          <label v-if="n.kind==='redis'">本次 Redis 变更（版本模式仅允许版本内变更）<Sel v-model="n.change_ids" multiple filterable :options="(version?.changes||changes).filter(c=>c.kind==='redis').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" all-label="版本内全部 Redis 变更" width="100%" /></label>
           <label v-if="n.kind==='nacos'">本次配置变更（版本模式仅允许版本内变更）<Sel v-model="n.change_ids" multiple filterable :options="(version?.changes||changes).filter(c=>c.kind==='nacos').map(c=>({value:c.id,label:`#${c.id} ${c.title}`}))" all-label="版本内全部 Nacos 变更" width="100%" /></label>
         </div>
         <ElButton @click="addNode(request.nodes)">＋ 增加本次节点</ElButton
@@ -553,7 +557,7 @@ onMounted(async () => {
           <h4>
             执行预览 ·
             {{
-              preview.environment.protected ? "需要发布审核" : "无需额外审核"
+              preview.environment.protected || preview.redis_plans?.length ? "需要审核（发起人不可自审）" : "无需额外审核"
             }}
           </h4>
           <p v-for="(b, i) in preview.blockers" :key="'b' + i" class="blocker">
@@ -580,6 +584,7 @@ onMounted(async () => {
           </p>
           <SQLPlanPreview :plans="preview.sql_plans" />
           <NacosPlanPreview :plans="preview.nacos_plans" />
+          <RedisPlanPreview :plans="preview.redis_plans" />
         </section>
         <div class="footer">
           <ElButton @click="showRun = false">取消</ElButton
@@ -662,6 +667,7 @@ onMounted(async () => {
             </article>
           </template>
           <SQLPlanPreview :plans="selected.plan.sql_plans" />
+          <RedisPlanPreview :plans="selected.plan.redis_plans" :executions="redisExecutions.filter(e=>e.run_id===selected.id)" />
           <NacosPlanPreview :plans="selected.plan.nacos_plans" :executions="nacosExecutions.filter(e=>e.run_id===selected.id)" :can-restore="canManage(selected)&&['success','failed'].includes(selected.status)" @restore="restoreNacos" />
         </section>
         <div

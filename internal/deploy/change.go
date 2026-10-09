@@ -63,6 +63,7 @@ type Change struct {
 	WorkItems    []WorkItem   `json:"work_items,omitempty"`
 	SQL          *SQLChange   `json:"sql,omitempty"`
 	Nacos        *NacosChange `json:"nacos,omitempty"`
+	Redis        *RedisChange `json:"redis,omitempty"`
 }
 
 type ReleaseVersion struct {
@@ -315,6 +316,11 @@ func normalizeChange(v *Change) error {
 	}
 	if v.Nacos != nil {
 		if err := normalizeNacosChange(v); err != nil {
+			return err
+		}
+	}
+	if v.Redis != nil {
+		if err := normalizeRedisChange(v); err != nil {
 			return err
 		}
 	}
@@ -854,7 +860,9 @@ func (s *Store) SetReleasePromotionStatus(id int64, from []string, status string
 	return s.GetReleasePromotion(id), nil
 }
 
-func validApplicationResourceKind(kind string) bool { return kind == "mysql" || kind == "nacos" }
+func validApplicationResourceKind(kind string) bool {
+	return kind == "mysql" || kind == "nacos" || kind == "redis"
+}
 
 func (s *Store) ApplicationResources(service string) ApplicationResources {
 	service = strings.TrimSpace(service)
@@ -898,7 +906,7 @@ func (s *Store) SaveApplicationResources(service string, resources ApplicationRe
 			return fmt.Errorf("资源别名支持字母、数字、点、短横线和下划线")
 		}
 		if !validApplicationResourceKind(requirement.Kind) {
-			return fmt.Errorf("应用资源类型仅支持 mysql 或 nacos")
+			return fmt.Errorf("应用资源类型仅支持 mysql、nacos 或 redis")
 		}
 		if _, exists := requirements[requirement.Alias]; exists {
 			return fmt.Errorf("资源别名不能重复")

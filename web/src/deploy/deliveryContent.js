@@ -23,9 +23,9 @@ export function expandDeliveryRows(rows, title) {
       const old=row.originals.find(c=>c.service===service);
       const c={...row,id:old?.id||0,service,title:old?.title||`${title} · ${{code:'代码',mysql:'SQL',nacos:'配置',manual:'人工',redis:'Redis',artifact:'制品'}[row.kind]||row.kind}${service?' · '+service:''}`};
       delete c.key;delete c.services;delete c.originals;delete c.readonly;delete c.work_items;
-      if(c.kind!=='mysql')delete c.sql;if(c.kind!=='nacos')delete c.nacos;
+      if(c.kind!=='mysql')delete c.sql;if(c.kind!=='nacos')delete c.nacos;if(c.kind!=='redis')delete c.redis;
       // Unchanged rows, including shared ones, are not rewritten.
-      if(old&&['kind','title','service','reference','summary','risk_level','rollback_plan','sql','nacos'].every(k=>JSON.stringify(c[k])===JSON.stringify(old[k])))continue;
+      if(old&&['kind','title','service','reference','summary','risk_level','rollback_plan','sql','nacos','redis'].every(k=>JSON.stringify(c[k])===JSON.stringify(old[k])))continue;
       out.push(c);
     }
   }

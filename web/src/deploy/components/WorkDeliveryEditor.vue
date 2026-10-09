@@ -6,22 +6,24 @@ import {ElButton,ElInput} from '../../shared/components/ui.js';
 import ApplicationResourcesEditor from './ApplicationResourcesEditor.vue';
 import GitBranchSelect from './GitBranchSelect.vue';
 import NacosChangeFields from './NacosChangeFields.vue';
+import RedisChangeFields from './RedisChangeFields.vue';
 import {deliveryRows,expandDeliveryRows} from '../deliveryContent.js';
 import {toast} from '../../shared/composables/toast.js';
 const props=defineProps({show:Boolean,item:Object,services:Array,workItems:Array,canManage:Function});
 const emit=defineEmits(['close','saved','open-sync']);
 const api=inject('api'),rows=ref([]),baseline=ref(''),initial=ref(''),loading=ref(false),saving=ref(false),error=ref(''),also=ref([]),resources=ref({}),bindingService=ref(''),showBindings=ref(false),section=ref('code');
 let session=0,seq=0;
-const types=[{value:'code',label:'代码与应用'},{value:'mysql',label:'SQL 变更'},{value:'nacos',label:'Nacos 配置'},{value:'manual',label:'其他操作'}];
+const types=[{value:'code',label:'代码与应用'},{value:'mysql',label:'SQL 变更'},{value:'nacos',label:'Nacos 配置'},{value:'redis',label:'Redis 命令'},{value:'manual',label:'其他操作'}];
 const serialized=()=>JSON.stringify({rows:rows.value,also:also.value});
 const dirty=computed(()=>initial.value!==serialized());
-const visibleRows=computed(()=>rows.value.filter(r=>section.value==='manual'?['manual','redis','artifact','data-sync'].includes(r.kind):r.kind===section.value));
+const visibleRows=computed(()=>rows.value.filter(r=>section.value==='manual'?['manual','artifact','data-sync'].includes(r.kind):r.kind===section.value));
 const links=computed(()=>props.workItems.filter(w=>w.id!==props.item?.id).map(w=>({value:w.id,label:'#'+w.id+' '+w.title})));
 async function loadResources(name){if(!name)return;try{const r=await api(`api/services/${encodeURIComponent(name)}/resources`);resources.value={...resources.value,[name]:r.requirements||[]}}catch(e){toast(e.message,'error')}}
 function options(row,kind){return (resources.value[row.service]||[]).filter(r=>r.kind===kind).map(r=>({value:r.alias,label:r.alias+' · '+(r.description||kind)}))}
 async function load(){const current=++session;loading.value=true;error.value='';try{const data=await api(`api/work-items/${props.item.id}/delivery-content`);if(current!==session||!props.show)return;rows.value=deliveryRows(data.changes,props.canManage,props.services);baseline.value=data.digest;also.value=[];initial.value=serialized();for(const name of new Set(rows.value.map(r=>r.service).filter(Boolean)))loadResources(name)}catch(e){if(current===session)error.value=e.message}finally{if(current===session)loading.value=false}}
 watch(()=>props.show,show=>{if(show){section.value='code';load()}else session++});
 function add(kind=section.value){rows.value.push({key:'new-'+(++seq),kind,services:[],originals:[],service:'',reference:'',summary:'',risk_level:'medium',rollback_plan:'',sql:kind==='mysql'?{resource_alias:'',content:'',max_affected_rows:100}:undefined,nacos:kind==='nacos'?{resource_alias:'',data_id:'',group:'DEFAULT_GROUP',format:'yaml',entries:[{key:'',value:'',action:'set'}]}:undefined})}
+watch(()=>rows.value.map(r=>r.kind),()=>{for(const r of rows.value)if(r.kind==='redis'&&!r.redis)r.redis={resource_alias:'',commands:''}});
 function close(){if(saving.value)return;if(dirty.value&&!confirm('保留本次未保存草稿并关闭？下次打开可继续编辑。'))return;if(dirty.value)drafts.value.set(props.item.id,{rows:JSON.parse(JSON.stringify(rows.value)),also:[...also.value],baseline:baseline.value,initial:initial.value});else drafts.value.delete(props.item.id);emit('close')}
 const drafts=ref(new Map());
 async function refreshAfterSync(){
@@ -47,7 +49,7 @@ function configure(row){bindingService.value=row.service;showBindings.value=true
  <p class="hint">一次维护、多应用交付。保存只建立草稿，不构建、不执行 SQL、不发布配置。</p>
  <p v-if="error" class="error" role="alert">{{error}}</p><p v-if="loading">正在读取交付内容…</p>
  <template v-else>
- <nav><ElButton v-for="t in types" :key="t.value" :type="section===t.value?'primary':''" @click="section=t.value">{{t.label}} · {{rows.filter(r=>t.value==='manual'?['manual','redis','artifact','data-sync'].includes(r.kind):r.kind===t.value).length}}</ElButton><ElButton @click="emit('open-sync')">数据同步任务</ElButton></nav>
+ <nav><ElButton v-for="t in types" :key="t.value" :type="section===t.value?'primary':''" @click="section=t.value">{{t.label}} · {{rows.filter(r=>t.value==='manual'?['manual','artifact','data-sync'].includes(r.kind):r.kind===t.value).length}}</ElButton><ElButton @click="emit('open-sync')">数据同步任务</ElButton></nav>
  <div class="tools"><span>已就绪或他人内容只读；新内容自动关联当前需求。</span><ElButton @click="add()">＋ 添加{{types.find(t=>t.value===section)?.label}}</ElButton></div>
  <p v-if="!visibleRows.length" class="empty">本类暂无交付内容，无需填写不涉及的变更。</p>
  <article v-for="row in visibleRows" :key="row.key" class="content-row">
@@ -55,12 +57,13 @@ function configure(row){bindingService.value=row.service;showBindings.value=true
  <div class="grid">
  <template v-if="row.kind==='code'"><label>影响应用<Sel v-model="row.services" :disabled="row.readonly||saving" :options="services.map(s=>s.name)" multiple filterable width="100%" /></label><label>关联分支<GitBranchSelect v-model="row.reference" :disabled="row.readonly||saving" :repositories="row.services.map(service=>({service}))" /></label><p class="hint span" v-if="new Set(services.filter(s=>row.services.includes(s.name)).map(s=>s.git_url)).size>1">当前包含不同仓库，同步后仅列出所有应用的共同分支；不同分支应分开添加。</p></template>
  <template v-else>
- <label v-if="section==='manual'&&!row.originals.length">操作类型<Sel v-model="row.kind" :disabled="saving" :options="[{value:'manual',label:'人工操作'},{value:'redis',label:'Redis 命令（仅保存，执行器未接通）'},{value:'artifact',label:'应用制品引用'}]" width="100%" /></label>
+ <label v-if="section==='manual'&&!row.originals.length">操作类型<Sel v-model="row.kind" :disabled="saving" :options="[{value:'manual',label:'人工操作'},{value:'artifact',label:'应用制品引用'}]" width="100%" /></label>
  <label>应用<Sel v-model="row.service" :disabled="row.readonly||saving" :options="services.map(s=>s.name)" filterable width="100%" @change="loadResources(row.service)" /></label>
- <label v-if="row.sql||row.nacos">资源<Sel v-model="(row.sql||row.nacos).resource_alias" :disabled="row.readonly||saving" :options="options(row,row.kind)" width="100%" /></label>
- <ElButton v-if="(row.sql||row.nacos)&&row.service&&!row.readonly" @click="configure(row)">配置该应用资源</ElButton>
+ <label v-if="row.sql||row.nacos||row.redis">资源<Sel v-model="(row.sql||row.nacos||row.redis).resource_alias" :disabled="row.readonly||saving" :options="options(row,row.kind)" width="100%" /></label>
+ <ElButton v-if="(row.sql||row.nacos||row.redis)&&row.service&&!row.readonly" @click="configure(row)">配置该应用资源</ElButton>
  <template v-if="row.sql"><label>允许影响行数<ElInput v-model.number="row.sql.max_affected_rows" type="number" :disabled="row.readonly||saving" /></label><label class="span">SQL 脚本<ElInput v-model="row.sql.content" type="textarea" :rows="7" :disabled="row.readonly||saving" placeholder="整段粘贴 SQL；保存校验语法，执行前再读取结构和影响范围" /></label></template>
  <NacosChangeFields v-else-if="row.nacos" :model="row.nacos" :disabled="row.readonly||saving" />
+ <RedisChangeFields v-else-if="row.kind==='redis'&&row.redis" :model="row.redis" :disabled="row.readonly||saving" />
  <label v-else class="span">操作 / 引用<ElInput v-model="row.reference" type="textarea" :rows="3" :disabled="row.readonly||saving" /></label>
  </template>
  <label class="span">说明（选填）<ElInput v-model="row.summary" :disabled="row.readonly||saving" /></label>

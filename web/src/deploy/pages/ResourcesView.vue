@@ -17,7 +17,7 @@ const applicationForm=ref({name:''})
 const hostKeyScanning=ref(false),pendingHostKey=ref(null)
 const connectionKeyScanning=ref(false),pendingConnectionHostKey=ref(null)
 const agentHost=ref(null),agentForm=ref({}),agentSaving=ref(false),agentApplying=ref(false),agentRemoteState=ref({}),agentInstallState=ref({})
-const KINDS={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 变更数据库',nacos:'Nacos 配置中心（2.4 / 2.5）',zentao:'禅道 16.0（需求来源）'}
+const KINDS={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 变更数据库',redis:'Redis 缓存维护',nacos:'Nacos 配置中心（2.4 / 2.5）',zentao:'禅道 16.0（需求来源）'}
 const ALL_RESOURCE_TABS={connections:['connections','🔌','连接'],environments:['environments','🌐','环境'],hosts:['hosts','🖥','主机'],groups:['groups','▦','主机组'],variables:['variables','⌘','变量组'],runners:['runners','⚙','构建 Runner'],audit:['audit','◷','审计日志']}
 const RESOURCE_SCOPES={deploy:['connections','environments','hosts','groups','variables','runners','audit'],logs:['hosts','environments','audit'],monitor:['hosts','environments','audit'],devtools:['environments','audit']}
 const PLUGIN_LABELS={deploy:'部署平台',logs:'日志查询',monitor:'监控大盘',devtools:'AI 开发工具'}
@@ -38,7 +38,7 @@ onMounted(load)
 const post=(url,body)=>json(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
 async function remove(url,label){if(!confirm(`删除「${label}」？`))return;try{await json(url,{method:'DELETE'});toast('已删除','success');load()}catch(e){toast(e.message,'error')}}
 function editConnection(v){
-  const config={database:'',tls:'false',nacos_version:'2.4',nacos_auth:'password',namespace:'',test_data_id:'',test_group:'DEFAULT_GROUP',product_ids:'',bug_status:'closed',baseline:'',sync_minutes:'0',settings_path:'',repository_id:'',mirror_of:'*',region:'cn-hangzhou',oss_bucket:'',oss_endpoint:'',oss_prefix:'logplatform/releases',security_token:'',auth_mode:'https',known_hosts:'',ssh_fingerprint:'',...(v?.config||{})}
+  const config={database:'',tls:'false',db:'0',redis_auth:'password',key_prefix:'',nacos_version:'2.4',nacos_auth:'password',namespace:'',test_data_id:'',test_group:'DEFAULT_GROUP',product_ids:'',bug_status:'closed',baseline:'',sync_minutes:'0',settings_path:'',repository_id:'',mirror_of:'*',region:'cn-hangzhou',oss_bucket:'',oss_endpoint:'',oss_prefix:'logplatform/releases',security_token:'',auth_mode:'https',known_hosts:'',ssh_fingerprint:'',...(v?.config||{})}
   connectionForm.value=v?{...v,username:'',password:'',private_key:'',passphrase:'',config}:{name:'',kind:'maven',endpoint:'',username:'',password:'',private_key:'',passphrase:'',config}
   pendingConnectionHostKey.value=null;connectionKeyScanning.value=false;showConnection.value=true
 }
@@ -208,10 +208,15 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
     <div v-if="connectionForm.kind==='git'" class="fld"><label>认证方式</label><Sel v-model="gitAuthMode" :options="[{value:'https',label:'HTTPS + 用户名 / PAT'},{value:'ssh',label:'SSH 私钥'}]" width="100%" /><small class="help">认证方式必须与应用中的仓库地址一致；SSH 地址形如 git@codeup.aliyun.com:组织/仓库.git。</small></div>
     <div v-if="connectionForm.kind!=='aliyun-sae'" class="fld">
       <label>{{connectionForm.kind==='git'&&gitAuthMode==='ssh'?'SSH 服务地址':'服务地址'}}</label>
-      <ElInput :model-value="connectionForm.endpoint" :placeholder="connectionForm.kind==='nacos'?'http://192.168.0.32:8848/nacos':connectionForm.kind==='mysql'?'192.168.0.32:3306':connectionForm.kind==='zentao'?'http://192.168.0.5/zentao':connectionForm.kind==='git'?(gitAuthMode==='ssh'?'codeup.aliyun.com:22':'https://codeup.aliyun.com'):connectionForm.kind==='docker'?'https://registry.example.com':'https://packages.example.com/repository/maven-public'" @update:model-value="updateConnectionEndpoint" />
+      <ElInput :model-value="connectionForm.endpoint" :placeholder="connectionForm.kind==='nacos'?'http://192.168.0.32:8848/nacos':connectionForm.kind==='mysql'?'192.168.0.32:3306':connectionForm.kind==='redis'?'192.168.0.32:6379':connectionForm.kind==='zentao'?'http://192.168.0.5/zentao':connectionForm.kind==='git'?(gitAuthMode==='ssh'?'codeup.aliyun.com:22':'https://codeup.aliyun.com'):connectionForm.kind==='docker'?'https://registry.example.com':'https://packages.example.com/repository/maven-public'" @update:model-value="updateConnectionEndpoint" />
       <small v-if="connectionForm.kind==='git'" class="help">只填写 Git 服务，不填写具体仓库路径；HTTPS 可省略协议，SSH 可省略默认端口 22。</small>
     </div>
     <template v-if="connectionForm.kind==='mysql'"><div class="two"><div class="fld"><label>数据库</label><ElInput v-model="connectionForm.config.database" placeholder="例如 estate_ai" /></div><div class="fld"><label>连接加密</label><Sel v-model="connectionForm.config.tls" :options="[{value:'true',label:'TLS（校验证书）'},{value:'false',label:'内网明文连接'}]" width="100%" /></div></div><small class="help">每个环境使用独立连接和最小权限账号；预检不会试执行 DDL。账号需可读取目标表结构。</small></template>
+    <template v-if="connectionForm.kind==='redis'">
+      <div class="two"><div class="fld"><label>Redis DB</label><ElInput v-model="connectionForm.config.db" placeholder="0" /></div><div class="fld"><label>允许操作的 Key 前缀</label><ElInput v-model="connectionForm.config.key_prefix" placeholder="menu:" /></div></div>
+      <div class="two"><div class="fld"><label>Redis 认证</label><Sel v-model="connectionForm.config.redis_auth" :options="[{value:'password',label:'密码 / ACL 用户密码'},{value:'none',label:'无认证（仅可信内网）'}]" width="100%" /></div><div class="fld"><label>Redis 连接加密</label><Sel v-model="connectionForm.config.tls" :options="[{value:'true',label:'TLS（校验证书）'},{value:'false',label:'内网明文'}]" width="100%" /></div></div>
+      <p class="help">云 Redis 标准代理与自建单机使用同一协议；用户名可留空或填写 ACL 用户。必须配置精确 Key 前缀；每个环境独立连接。仅支持单地址或标准代理，不自动处理原生 Cluster/Sentinel。测试只认证、选择 DB 和 PING，不证明写权限。公网须有网络连通、白名单及 TLS。</p>
+    </template>
     <template v-if="connectionForm.kind==='nacos'">
       <p class="help">服务地址填写完整根路径，例如 http://host:8848/nacos；本阶段适配 2.4/2.5，不支持 3.x 或阿里云 MSE 专用鉴权。</p>
       <div class="two"><div class="fld"><label>Nacos 版本</label><Sel v-model="connectionForm.config.nacos_version" :options="['2.4','2.5']" width="100%" /></div><div class="fld"><label>Nacos 认证</label><Sel v-model="connectionForm.config.nacos_auth" :options="[{value:'password',label:'账号密码（自动登录）'},{value:'token',label:'已有 Token（填在密码字段）'},{value:'none',label:'无认证（仅可信内网）'}]" width="100%" /></div></div>

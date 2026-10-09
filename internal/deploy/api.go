@@ -500,7 +500,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 			writeError(w, 404, "连接不存在")
 			return
 		}
-		if c.Kind == "mysql" || c.Kind == "zentao" || c.Kind == "nacos" {
+		if c.Kind == "mysql" || c.Kind == "zentao" || c.Kind == "nacos" || c.Kind == "redis" {
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 			defer cancel()
 			err := testIntegrationConnection(ctx, c)
@@ -509,6 +509,9 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				return
 			}
 			status := "认证及读取权限验证成功"
+			if c.Kind == "redis" {
+				status = "Redis 认证、DB 选择及 PING 成功；未验证维护命令权限，不执行写操作"
+			}
 			if c.Kind == "nacos" && c.Config["test_data_id"] == "" {
 				status = "Nacos 登录成功；未指定测试 Data ID，尚未验证配置读取和发布权限"
 			}

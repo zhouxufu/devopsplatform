@@ -93,7 +93,8 @@ func saveSQLPayload(tx *deployTx, v *Change) error {
 	doc, _ := json.Marshal(struct {
 		SQL   *SQLChange   `json:"sql,omitempty"`
 		Nacos *NacosChange `json:"nacos,omitempty"`
-	}{v.SQL, v.Nacos})
+		Redis *RedisChange `json:"redis,omitempty"`
+	}{v.SQL, v.Nacos, v.Redis})
 	_, err := tx.Exec(`INSERT INTO change_payloads(change_id,document) VALUES(?,?) ON CONFLICT(change_id) DO UPDATE SET document=excluded.document`, v.ID, string(doc))
 	return err
 }
@@ -103,10 +104,12 @@ func (s *Store) loadSQLPayload(v *Change) {
 		var payload struct {
 			SQL   *SQLChange   `json:"sql"`
 			Nacos *NacosChange `json:"nacos"`
+			Redis *RedisChange `json:"redis"`
 		}
 		if json.Unmarshal([]byte(doc), &payload) == nil {
 			v.SQL = payload.SQL
 			v.Nacos = payload.Nacos
+			v.Redis = payload.Redis
 		}
 	}
 }

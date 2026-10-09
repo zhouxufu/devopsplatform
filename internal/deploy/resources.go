@@ -141,8 +141,8 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 	if !validConnectionName(c.Name) {
 		return fmt.Errorf("连接名称支持中文、字母、数字、点、短横线和下划线，长度 1-64")
 	}
-	if c.Kind != "git" && c.Kind != "maven" && c.Kind != "docker" && c.Kind != TargetAliyunSAE && c.Kind != "mysql" && c.Kind != "zentao" && c.Kind != "nacos" {
-		return fmt.Errorf("连接类型仅支持 git、maven、docker、aliyun-sae、mysql、zentao、nacos")
+	if c.Kind != "git" && c.Kind != "maven" && c.Kind != "docker" && c.Kind != TargetAliyunSAE && c.Kind != "mysql" && c.Kind != "zentao" && c.Kind != "nacos" && c.Kind != "redis" {
+		return fmt.Errorf("连接类型仅支持 git、maven、docker、aliyun-sae、mysql、zentao、nacos、redis")
 	}
 	if current != nil && current.Kind != c.Kind {
 		return fmt.Errorf("已有连接不能更换类型，请新建连接")
@@ -207,6 +207,12 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 		currentMode, _ = normalizeGitAuthMode(current.Config["auth_mode"])
 	}
 	modeUnchanged := c.Kind != "git" || currentMode == c.Config["auth_mode"]
+	if current != nil && c.Kind == "redis" && current.Config["redis_auth"] != c.Config["redis_auth"] {
+		modeUnchanged = false
+		if c.Config["redis_auth"] == "password" && c.Password == "" {
+			return fmt.Errorf("更换 Redis 认证方式时必须重填密码")
+		}
+	}
 	if current != nil && c.Kind == "nacos" && current.Config["nacos_auth"] != c.Config["nacos_auth"] {
 		modeUnchanged = false
 		if c.Config["nacos_auth"] != "none" && c.Password == "" {
@@ -255,6 +261,14 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 		}
 		if c.Config["nacos_auth"] == "token" && c.Password == "" {
 			return fmt.Errorf("请填写 Nacos Token")
+		}
+	}
+	if c.Kind == "redis" {
+		if c.Config["redis_auth"] == "none" {
+			c.Username, c.Password = "", ""
+		}
+		if c.Config["redis_auth"] == "password" && c.Password == "" {
+			return fmt.Errorf("请填写 Redis 密码")
 		}
 	}
 	config, _ := json.Marshal(c.Config)

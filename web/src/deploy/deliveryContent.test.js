@@ -16,3 +16,9 @@ test('different repositories do not silently group equal branch names',()=>{
  const changes=['a','b','c'].map((service,i)=>({id:i+1,service,kind:'code',status:'draft',reference:'main',owner:'me'}));
  const rows=deliveryRows(changes,()=>true,[{name:'a',git_url:'repo1'},{name:'b',git_url:'repo2'},{name:'c',git_url:'repo1'}]);assert.equal(rows.length,2);assert.deepEqual(rows[0].services,['a','c']);
 });
+test('Redis payload edits are preserved and other kinds cannot retain them',()=>{
+ const change={id:9,kind:'redis',title:'cache',service:'api',status:'draft',redis:{resource_alias:'cache',commands:'TTL menu:key'}};
+ const rows=deliveryRows([change],()=>true);assert.equal(expandDeliveryRows(rows,'需求').length,0);
+ rows[0].redis.commands='UNLINK menu:key';const [edited]=expandDeliveryRows(rows,'需求');assert.equal(edited.redis.commands,'UNLINK menu:key');assert.equal(edited.sql,undefined);assert.equal(edited.nacos,undefined);
+ rows[0].kind='manual';assert.equal(expandDeliveryRows(rows,'需求')[0].redis,undefined);
+});

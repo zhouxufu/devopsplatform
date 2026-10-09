@@ -21,6 +21,7 @@ import (
 
 func integrationSchema(identity, doc string) []string {
 	return []string{
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS redis_execution_ledger (target_key VARCHAR(80) NOT NULL, change_id BIGINT NOT NULL, command_index BIGINT NOT NULL, run_id BIGINT NOT NULL, node_id VARCHAR(191) NOT NULL, status VARCHAR(32) NOT NULL, result %s NOT NULL, PRIMARY KEY(target_key,change_id,command_index))`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS data_sync_tasks (id %s, document %s NOT NULL, owner VARCHAR(191) NOT NULL, revision BIGINT NOT NULL)`, identity, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS release_version_scope (release_version_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS change_payloads (change_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
@@ -32,6 +33,9 @@ func integrationSchema(identity, doc string) []string {
 }
 
 func validateIntegrationConnection(c *ResourceConnection) error {
+	if c.Kind == "redis" {
+		return validateRedisConnection(c)
+	}
 	if c.Kind == "nacos" {
 		return validateNacosConnection(c)
 	}
@@ -110,6 +114,13 @@ func openChangeMySQL(ctx context.Context, c *ResourceConnection) (*sql.DB, error
 }
 
 func testIntegrationConnection(ctx context.Context, c *ResourceConnection) error {
+	if c.Kind == "redis" {
+		client, err := newRedisClient(ctx, c)
+		if err == nil {
+			client.Close()
+		}
+		return err
+	}
 	if c.Kind == "nacos" {
 		n, err := newNacosClient(ctx, c)
 		if err != nil {
@@ -622,6 +633,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string, st
 }
 
 func registerIntegrationRoutes(mux *http.ServeMux, s *Store) {
+	registerRedisRoutes(mux, s)
 	registerNacosRoutes(mux, s)
 	registerDataSyncRoutes(mux, s)
 	registerIssueUserRoutes(mux, s)
