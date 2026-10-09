@@ -8,6 +8,8 @@ import HelpTip from "../../shared/components/HelpTip.vue";
 import Sel from "../../shared/components/Sel.vue";
 import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor.vue';
 import ResourcesView from './ResourcesView.vue';
+import RichDescription from '../components/RichDescription.vue';
+import { descriptionSummary } from '../richDescription.js';
 import { ElButton, ElInput } from "../../shared/components/ui.js";
 import { toast } from "../../shared/composables/toast.js";
 import { scopeChanges, scopePayload, frozenChangeIDs } from '../versionScope.js';
@@ -90,6 +92,7 @@ const list = computed(() =>
   ),
 );
 const detail = computed(() => route.query.item ? (tab.value === 'work' ? work.value : tab.value === 'versions' ? versions.value : []).find(v=>v.id===Number(route.query.item)) : null);
+const summaries = computed(() => new Map(list.value.map(item => [item.id, descriptionSummary(item.summary || item.description)])));
 const detailChanges = computed(()=> tab.value==='work' ? changes.value.filter(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id)) : detail.value?.changes || []);
 const detailVersions = computed(()=>versions.value.filter(v=>(v.work_items||[]).some(w=>w.id===detail.value?.id)||(v.changes||[]).some(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id))));
 const detailRuns = computed(()=>deliveries.value.filter(r=>tab.value==='versions' ? r.plan.version?.id===detail.value?.id : detailVersions.value.some(v=>v.id===r.plan.version?.id)));
@@ -308,12 +311,13 @@ onMounted(async () => {
     <template v-if="route.query.item">
       <ElButton @click="back">← 返回列表</ElButton>
       <section v-if="detail" class="workspace">
-        <div class="heading"><div><h2>{{tab==='versions'?detail.version+' · ':''}}{{detail.title}}</h2><p>{{labels[detail.status]}} · {{detail.owner}} · {{detail.description||'暂无说明'}}</p></div>
+        <div class="heading"><div><h2>{{tab==='versions'?detail.version+' · ':''}}{{detail.title}}</h2><p>{{labels[detail.status]}} · {{detail.owner || '未指定负责人'}}<template v-if="detail.external_id"> · {{detail.source}} / {{detail.external_id}}</template> <a v-if="safeURL(detail.url)" :href="safeURL(detail.url)" target="_blank" rel="noopener noreferrer">外部记录</a></p></div>
           <div class="actions"><ElButton v-if="canManage(detail)&&(tab==='work'||detail.status==='draft')" @click="open(tab,detail)">{{tab==='versions'?'编辑范围':'编辑需求'}}</ElButton>
             <template v-if="tab==='work'"><ElButton @click="chooseVersion('work',detail)">纳入版本</ElButton><ElButton type="primary" @click="editDelivery(detail)">编辑交付内容</ElButton></template>
             <ElButton v-else-if="detail.status==='draft'&&canManage(detail)" type="primary" @click="action('versions',detail,'ready')">冻结并标记就绪</ElButton>
             <ElButton v-else-if="['ready','completed'].includes(detail.status)" type="primary" @click="router.push({path:'/orchestration',query:{version:String(detail.id)}})">发起交付</ElButton>
           </div></div>
+        <RichDescription :key="`${tab}-${detail.id}`" :content="detail.description || ''" :source-url="detail.url || ''" :title="tab==='versions'?'版本说明':detail.kind==='bug'?'Bug 说明':'需求说明'" />
         <div v-if="tab==='versions'&&detail.status==='draft'&&versionBlockers(detail).length" class="notice"><b>发布前待处理</b><p v-for="reason in versionBlockers(detail)" :key="reason">{{reason}}</p></div>
         <ElButton v-if="tab==='versions'&&detail.status==='draft'&&canManage(detail)" :loading="saving" @click="refreshScope(detail)">刷新关联范围</ElButton>
         <div v-if="tab==='versions'" class="record"><h3>需求与 Bug · {{detail.work_items?.length||0}}</h3><div class="chips"><ElButton v-for="w in detail.work_items||[]" :key="w.id" @click="view('work',w)">#{{w.id}} {{w.title}}</ElButton></div><p v-if="!detail.work_items?.length">可先建立空草稿，也可以直接选择独立变更。</p></div>
@@ -384,7 +388,7 @@ onMounted(async () => {
         </div>
         <span class="status">{{ labels[item.status] || item.status }}</span>
       </div>
-      <p>{{ item.summary || item.description || "暂无说明" }}</p>
+      <p class="record-summary">{{ summaries.get(item.id) || "暂无说明" }}</p>
       <div class="meta">
         <span>#{{ item.id }} · {{ item.owner }}</span
         ><span v-if="item.service">应用 {{ item.service }}</span
@@ -752,6 +756,7 @@ p {
   margin-bottom: 12px;
 }
 .record p {overflow-wrap:anywhere}
+.record-summary { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.7; max-height: 3.4em; }
 .record-head > div {
   display: flex;
   gap: 12px;
