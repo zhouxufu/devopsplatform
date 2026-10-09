@@ -9,8 +9,11 @@ const errors = [], writes = [], saved = [], comparisons = [], frozen = []
 page.on('pageerror', e => errors.push(e.message))
 let task
 await page.route('**/api/**', async route => {
-  const request = route.request(), path = new URL(request.url()).pathname, method = request.method()
+  const request = route.request(), path = new URL(request.url()).pathname.replace('/api/workbench/dbms/','/api/'), method = request.method()
   const respond = json => route.fulfill({ json })
+  if (method === 'GET' && path.endsWith('/api/me')) return respond({username:'local',role:'admin',auth_enabled:true})
+  if (method === 'GET' && path.endsWith('/api/registry/applications')) return respond([{name:'ui-sync-api'}])
+  if (method === 'GET' && path.endsWith('/api/policy')) return respond({query_approval:false,change_approval:true})
   if (method === 'GET' && path.endsWith('/api/services')) return respond([{ name: 'ui-sync-api' }])
   if (method === 'GET' && path.endsWith('/api/environments')) return respond(['dev', 'test', 'prod'].map(name => ({ name, display_name: name })))
   if (method === 'GET' && path.endsWith('/api/services/ui-sync-api/resources')) return respond({ requirements: [{ alias: 'db', kind: 'mysql' }], bindings: [] })
@@ -37,14 +40,18 @@ async function choose(dialog, label, option) {
   await page.locator(`[id="${popup}"]`).getByRole('option', { name: option, exact: true }).click()
 }
 try {
-  await page.goto(base + (process.env.SHELL_UI_TEST_PATH || '/api/plugins/deploy/ui') + '#/changes?tab=work')
-  await page.getByRole('button', { name: '数据同步任务', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '数据同步任务', exact: true })
+  await page.goto(base + (process.env.SHELL_UI_TEST_PATH || '/api/plugins/dbms/ui') + '#/sync')
+  const dialog = page.locator('.sync-page')
+  await dialog.getByRole('heading', {name:'数据对比同步',exact:true}).waitFor()
+  assert.equal(await page.getByRole('dialog').count(),0,'Sync still opens another window')
   await dialog.getByRole('button', { name: '＋ 新建任务', exact: true }).click()
   await dialog.getByText('尚未保存任务', { exact: true }).waitFor()
   assert.equal(await dialog.locator('.grid .el-select').count(), 2, 'Task definition still has environment selectors')
   await field(dialog, '任务名称').locator('input').fill('可跨环境复用的菜单任务')
   await choose(dialog, '应用', 'ui-sync-api'); await choose(dialog, '逻辑数据库资源', 'db')
+  await field(dialog, '来源查询 SQL').locator('textarea').fill('SELECT id,name FROM menu WHERE id > 0')
+  await field(dialog, '目标查询 SQL').locator('textarea').fill('SELECT id,name FROM menu WHERE id > 0')
+  await field(dialog, '匹配键').locator('input').fill('id')
   await dialog.getByRole('button', { name: '保存任务', exact: true }).click()
   await dialog.getByRole('heading', { name: '本次对比', exact: true }).waitFor()
   assert.equal(saved.length, 1)
@@ -85,7 +92,7 @@ try {
   }
   await dialog.getByRole('button', { name: '关闭并返回原页面', exact: true }).click()
   await dialog.waitFor({ state: 'hidden' })
-  await page.getByRole('heading', { name: '变更管控', exact: true }).waitFor()
+  await page.getByRole('heading', { name: 'SQL 查询', exact: true }).waitFor()
   assert.deepEqual(errors, []); assert.deepEqual(writes, [])
   console.log(JSON.stringify({ ok: true, checks: ['task saved without environments or bindings', 'both environments chosen per comparison', 'same environment rejected', 'source/target changes invalidate selection', 'same task reused dev/test/prod', 'freeze binds selected scope', 'task revision untouched', 'responsive', 'return preserves page', 'no real writes'] }))
 } finally { await browser.close() }

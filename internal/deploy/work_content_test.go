@@ -141,3 +141,76 @@ func TestWorkImagesBindingAndFormats(t *testing.T) {
 		t.Fatal("migration not persistent")
 	}
 }
+
+func TestIndependentChangeBatchHTTPMixedPayloads(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, name := range []string{"api", "web"} {
+		if err = st.UpsertService(Service{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = st.SaveApplicationResources("api", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "config", Kind: "nacos"}, {Alias: "cache", Kind: "redis"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SaveApplicationResources("web", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}}); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewLogHub()
+	h := Routes(st, NewBuilder(st, dir, hub), hub, "", NewStepLib(dir+"/steps", dir+"/custom"))
+	call := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/api/changes/batch", strings.NewReader(body))
+		r.Header.Set("X-User", "alice")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	bad := call(`{"changes":[{"kind":"manual","title":"must rollback"},{"kind":"mysql","title":"invalid resource","service":"web","sql":{"resource_alias":"missing","content":"UPDATE menu SET name='x' WHERE id=1","max_affected_rows":10}}]}`)
+	if bad.Code == 200 || len(st.Changes("", "", "", 100)) != 0 {
+		t.Fatal("partial HTTP batch persisted", bad.Code, bad.Body.String())
+	}
+	w := call(`{"changes":[
+		{"kind":"code","title":"feature","service":"api","reference":"feature/menu"},
+		{"kind":"mysql","title":"menu","service":"web","sql":{"resource_alias":"db","content":"UPDATE menu SET name='new' WHERE id=1","max_affected_rows":10}},
+		{"kind":"nacos","title":"config","service":"api","nacos":{"resource_alias":"config","data_id":"api.yaml","group":"DEFAULT_GROUP","format":"yaml","entries":[{"key":"feature.enabled","value":"true","action":"set"}]}},
+		{"kind":"redis","title":"cache","service":"api","redis":{"resource_alias":"cache","commands":"UNLINK menu:tree"}},
+		{"kind":"manual","title":"verify"}
+	]}`)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var result []Change
+	if err = json.Unmarshal(w.Body.Bytes(), &result); err != nil || len(result) != 5 {
+		t.Fatal("mixed response", err, w.Body.String())
+	}
+	seen := map[string]bool{}
+	for _, c := range result {
+		stored := st.GetChange(c.ID)
+		if stored == nil || stored.Owner != "alice" || stored.Status != "draft" {
+			t.Fatal("not an independent owned draft", c)
+		}
+		seen[stored.Kind] = true
+		switch stored.Kind {
+		case "mysql":
+			if stored.Service != "web" || stored.SQL == nil || !strings.Contains(stored.SQL.Content, "'new'") {
+				t.Fatal("SQL payload lost", stored)
+			}
+		case "nacos":
+			if stored.Nacos == nil || stored.Nacos.Entries[0].Key != "feature.enabled" {
+				t.Fatal("Nacos payload lost", stored)
+			}
+		case "redis":
+			if stored.Redis == nil || stored.Redis.Commands != "UNLINK menu:tree" {
+				t.Fatal("Redis payload lost", stored)
+			}
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatal("mixed types lost", seen)
+	}
+}

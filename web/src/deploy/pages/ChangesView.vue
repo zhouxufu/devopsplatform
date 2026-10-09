@@ -92,6 +92,8 @@ async function openSyncTasks(){
  showSyncTasks.value=true
 }
 function syncGenerated(){load();deliveryEditor.value?.refreshAfterSync()}
+function linkedContentChanged(e){if(e.source!==window.parent||e.origin!==location.origin||e.data?.type!=='work-item.changed')return;if(e.data.id===deliveryItem.value?.id)syncGenerated()}
+window.addEventListener('message',linkedContentChanged);onBeforeUnmount(()=>window.removeEventListener('message',linkedContentChanged));
 function editDelivery(item){deliveryItem.value=item;showDeliveryEditor.value=true}
 onBeforeRouteLeave(()=>(!deliveryEditor.value?.hasDraft()&&!batchEditor.value?.hasDraft()&&!imageUploading.value&&!newWorkDraft.value)||confirm('离开将放弃尚未保存的草稿，确定离开？'));
 function warnUnsaved(e){if(newWorkDraft.value||imageUploading.value||(dialog.value==='work'&&!form.value.id&&(form.value.title||form.value.description))){e.preventDefault();e.returnValue=''}}

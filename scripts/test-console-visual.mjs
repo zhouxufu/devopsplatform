@@ -42,6 +42,11 @@ try {
     await page.goto(base)
     const deploy = page.frameLocator('iframe[src*="/api/plugins/deploy/ui"]')
     await deploy.getByRole('heading', { name: '基础构建', exact: true }).waitFor()
+    await page.locator('.contextbar').waitFor({state:'hidden'})
+    const paths=await deploy.locator('.workspace-sidebar nav a svg, .platform-nav button svg').evaluateAll(icons=>icons.map(icon=>Array.from(icon.querySelectorAll('path'),p=>p.getAttribute('d')).join('|')))
+    assert.equal(new Set(paths).size,paths.length,'Navigation reuses an icon for unrelated operations')
+    const rocket=await page.locator('.wstab svg').first().locator('path').first().getAttribute('d')
+    assert(rocket.startsWith('M14 4c3-2'),'Deployment tab still uses the percent icon')
     for (const width of [1440, 900, 700, 390]) {
       await page.setViewportSize({ width, height: 960 })
       await overflow(page); await overflow(deploy)
@@ -62,6 +67,7 @@ try {
     for (const [link, heading] of [['编排', '部署编排'], ['变更', '变更管控']]) {
       await deploy.getByRole('link', { name: link, exact: true }).click()
       await deploy.getByRole('heading', { name: heading, exact: true }).waitFor()
+      await page.locator('.contextbar').waitFor({state:'hidden'})
       await capture(`${link}-${theme}`)
     }
     await deploy.locator('.platform-nav button').filter({ hasText: '资源' }).click()

@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import path from 'node:path'
 const base='http://127.0.0.1:9800',dist=process.env.CONSOLE_UI_DIST
-assert(dist,'Set CONSOLE_UI_DIST to candidate web/dist')
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright')
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH})
 const page=await browser.newPage({viewport:{width:1440,height:960}}),errors=[],unexpected=[]
@@ -14,7 +13,7 @@ await page.route('**/*',async route=>{
  const r=route.request(),u=new URL(r.url()),p=u.pathname,method=r.method(),reply=json=>route.fulfill({json})
  if(u.origin!==base)return route.abort()
  let file;if(/\/assets\/[^/]+\.(js|css)$/.test(p))file='assets/'+path.basename(p);else if(p==='/api/plugins/deploy/ui')file='deploy.html'
- if(file)return route.fulfill({body:await readFile(path.join(dist,file)),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html'})
+ if(file&&dist)return route.fulfill({body:await readFile(path.join(dist,file)),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html'})
  if(!['xhr','fetch'].includes(r.resourceType())){
   if(/\/work-item-attachments\//.test(p))return route.fulfill({contentType:'image/png',body:png})
   return route.continue()
@@ -50,8 +49,9 @@ try{
  await editor.getByRole('button',{name:'预览',exact:true}).click();assert.equal(await editor.locator('.description-body h1').innerText(),'一级标题');assert.equal(await editor.locator('.description-body li').count(),2);assert.equal(await editor.locator('.description-body script').count(),0)
  assert.equal(await editor.getByRole('button',{name:/^查看图片 /}).count(),2)
  assert.equal(await page.evaluate(()=>window.__qaXSS),undefined)
+ await dialog.getByRole('button',{name:'关闭并保留',exact:true}).click();await dialog.waitFor({state:'hidden'});await page.getByRole('button',{name:'＋ 新建需求',exact:true}).click();assert((await editor.getByRole('textbox',{name:'需求说明编辑器'}).inputValue()).includes('attachment:00000000000000000000000000000002'));assert.equal(await dialog.locator('label').filter({hasText:/^标题/}).locator('input').inputValue(),'Markdown 多图需求')
  await dialog.getByRole('button',{name:'保存',exact:true}).click();await dialog.waitFor({state:'hidden'});assert.equal(work.description_format,'markdown');assert.equal(uploaded,2)
- await page.getByRole('button',{name:'查看图片 2 · image-2.png',exact:true}).click();await page.getByRole('dialog',{name:'图片预览',exact:true}).waitFor();await page.getByRole('button',{name:'关闭预览',exact:true}).click()
+ await page.getByRole('button',{name:'查看图片 2 · image-2.png',exact:true}).click();const gallery=page.getByRole('dialog',{name:'图片预览',exact:true});await gallery.waitFor();await gallery.getByRole('button',{name:'上一张',exact:true}).click();assert((await gallery.locator('img').getAttribute('src')).endsWith('00000000000000000000000000000001'));assert(await gallery.getByRole('button',{name:'上一张',exact:true}).isDisabled());await gallery.getByRole('button',{name:'下一张',exact:true}).click();assert((await gallery.locator('img').getAttribute('src')).endsWith('00000000000000000000000000000002'));assert(await gallery.getByRole('button',{name:'下一张',exact:true}).isDisabled());await page.getByRole('button',{name:'关闭预览',exact:true}).click()
  await page.getByRole('button',{name:'← 返回列表',exact:true}).click();await page.locator('.tabs').getByRole('button',{name:'变更列表',exact:true}).click();await page.getByRole('button',{name:'＋ 新建变更',exact:true}).click()
  const bulk=page.getByRole('dialog',{name:'批量新建变更',exact:true});await bulk.getByRole('button',{name:'移除',exact:true}).click()
  await bulk.getByRole('button',{name:/^其他操作/}).click();await bulk.getByRole('button',{name:'＋ 添加其他操作',exact:true}).click();await choose(bulk,'应用','api');await bulk.locator('label').filter({hasText:/^操作 \/ 引用/}).locator('textarea').fill('上线后核验')
@@ -60,5 +60,5 @@ try{
  await bulk.getByRole('button',{name:'关闭',exact:true}).click();await bulk.waitFor({state:'hidden'});await page.getByRole('button',{name:'＋ 新建变更',exact:true}).click();await bulk.waitFor();await bulk.getByRole('button',{name:/^SQL 变更/}).click();assert((await bulk.locator('textarea').first().inputValue()).includes('新菜单'))
  await bulk.getByRole('button',{name:'保存全部变更',exact:true}).click();await bulk.waitFor({state:'hidden'});assert.equal(batches,1);assert.equal(batch.changes.length,3);assert.deepEqual(new Set(batch.changes.map(c=>c.kind)),new Set(['manual','mysql','nacos']));assert.equal(batch.changes.find(c=>c.kind==='mysql').service,'web')
  assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[])
- console.log(JSON.stringify({ok:true,checks:['Markdown safe preview','two image uploads and preview','persisted format','mixed multi-app batch','closed draft resumes','one atomic save','no real writes']}))
+ console.log(JSON.stringify({ok:true,checks:['Markdown safe preview','two image uploads and gallery navigation','requirement draft closes and resumes','persisted format','mixed multi-app batch','closed batch draft resumes','one atomic save','no real writes']}))
 }catch(e){console.log(await page.getByRole('dialog').allTextContents());await page.screenshot({path:'/tmp/devops-compact-test-failure.png'});throw e}finally{await browser.close()}

@@ -210,6 +210,9 @@ window.addEventListener('message', e => {
   const ws = st.workspaces.find(w => w.el.contentWindow === e.source)
   if (ws && e.data?.type === 'context.request') ctxSync([ws])
   if (ws && e.data?.type === 'context.visibility') ws.contextFields={service:e.data.service===true,environment:e.data.environment===true}
+  if (ws?.plugin.name === 'dbms' && e.data?.type === 'work-item.changed' && Number.isSafeInteger(e.data.id) && e.data.id > 0) {
+    for (const target of st.workspaces.filter(w => w.plugin.name === 'deploy')) target.el.contentWindow?.postMessage({ type: 'work-item.changed', id: e.data.id }, location.origin)
+  }
   if (ws && e.data?.type === 'workspace.open') {
     const p = st.plugins.find(x => x.name === e.data.plugin)
     const hash = typeof e.data.hash === 'string' && e.data.hash.startsWith('#/') ? e.data.hash : ''
