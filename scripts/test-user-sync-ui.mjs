@@ -5,8 +5,8 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 const source='zentao:'+'a'.repeat(64)
-const users=[{username:'admin',display_name:'管理员',role:'admin',enabled:true,password_configured:true}]
-const candidates=[{id:'1',account:'zhangsan',name:'张三',action:'create',reason:'创建成员，待设置平台密码后启用'},{id:'2',account:'admin',name:'远端管理员',action:'skip',reason:'平台保留账号，不自动关联'}]
+const users=[{username:'admin',display_name:'管理员',role:'admin',enabled:true,password_configured:true},{username:'bob',display_name:'本地 Bob',role:'member',enabled:false,password_configured:true}]
+const candidates=[{id:'1',account:'zhangsan',name:'张三',action:'create',reason:'创建成员，待设置平台密码后启用'},{id:'2',account:'admin',name:'远端管理员',action:'skip',reason:'平台保留账号，不自动关联'},{id:'3',account:'bob',name:'远端 Bob',action:'skip',reason:'已有同名平台账号，不自动关联'}]
 const calls=[]
 const server=http.createServer(async(req,res)=>{
   const path=new URL(req.url,'http://localhost').pathname
@@ -22,15 +22,22 @@ const server=http.createServer(async(req,res)=>{
       assert.equal(body.connection,'回归禅道')
       if(path.endsWith('/sync')){
         assert.equal(body.expected_source,source)
-        assert.deepEqual(body.ids,['1'])
-        users.push({username:'zhangsan',display_name:'张三',role:'member',enabled:false,password_configured:false,source})
+        if(!body.links['3']){
+          assert.deepEqual(body.ids,['1']);assert.deepEqual(body.links,{})
+          users.push({username:'zhangsan',display_name:'张三',role:'member',enabled:false,password_configured:false,source})
+          Object.assign(candidates[0],{bound:true,username:'zhangsan'})
+        }else{
+          assert.deepEqual(body.ids,['3']);assert.deepEqual(body.links,{'3':'bob'})
+          Object.assign(users.find(u=>u.username==='bob'),{source})
+          Object.assign(candidates[2],{action:'link',bound:true,username:'bob'})
+        }
       }
       data={source,label:'回归禅道',users:candidates}
     }
     if(req.method==='PUT' && path==='/api/users/zhangsan'){
       let raw='';for await(const chunk of req)raw+=chunk
       const body=JSON.parse(raw);assert.equal(body.password,'temporary-qa-password');assert.equal(body.enabled,true)
-      Object.assign(users[1],{enabled:true,password_configured:true});data=users[1]
+      data=users.find(u=>u.username==='zhangsan');Object.assign(data,{enabled:true,password_configured:true})
     }
     res.end(JSON.stringify(data));return
   }
@@ -54,11 +61,13 @@ try{
   await sync.getByRole('button',{name:'读取用户',exact:true}).click()
   await sync.getByText('张三',{exact:true}).waitFor()
   assert.equal(await sync.locator('input[type=checkbox]:checked').count(),1)
-  assert.equal(await sync.locator('input[type=checkbox]:disabled').count(),1)
+  assert.equal(await sync.locator('input[type=checkbox]:disabled').count(),2)
   for(const width of [1440,900,700]){
     await page.setViewportSize({width,height:900})
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
   }
+  await page.screenshot({path:'runtime/user-association-narrow-ui-qa.png',fullPage:true})
+  await page.setViewportSize({width:1440,height:1000})
   await sync.getByRole('button',{name:'同步所选（1）',exact:true}).click()
   await sync.getByText('同步完成：新增 1',{exact:false}).waitFor()
   await sync.getByRole('button',{name:'关闭',exact:true}).click()
@@ -73,11 +82,28 @@ try{
   await edit.waitFor({state:'hidden'})
   await row.getByText('启用',{exact:true}).waitFor()
   await members.getByRole('button',{name:'从禅道同步',exact:true}).click()
+  await sync.getByRole('button',{name:'读取用户',exact:true}).click()
+  await sync.getByRole('checkbox',{name:'选择 zhangsan',exact:true}).uncheck()
+  const bob=sync.locator('tr').filter({hasText:'远端 Bob'})
+  assert.equal(await bob.getByRole('checkbox').isDisabled(),true)
+  await bob.getByRole('combobox').click()
+  await page.getByRole('option',{name:'本地 Bob（bob） · 停用',exact:true}).click()
+  assert.equal(await bob.getByRole('checkbox').isChecked(),true)
+  assert.equal(await bob.getByRole('checkbox').isDisabled(),false)
+  await page.screenshot({path:'runtime/user-association-ui-qa.png',fullPage:true})
+  await sync.getByRole('textbox',{name:'筛选同步用户'}).fill('bob')
+  assert.equal(await sync.locator('tbody tr').count(),1)
+  await sync.getByRole('button',{name:'同步所选（1）',exact:true}).click()
+  await sync.getByText('同步完成：新增 0，更新 0，关联 1',{exact:false}).waitFor()
+  await bob.getByText('已关联，不可在同步中改绑',{exact:true}).waitFor()
+  assert.equal(await bob.getByRole('combobox').count(),0)
+  assert.equal(users.find(u=>u.username==='bob').display_name,'本地 Bob')
+  assert.equal(users.find(u=>u.username==='bob').enabled,false)
   await sync.getByRole('button',{name:'关闭',exact:true}).click()
   await sync.waitFor({state:'hidden'})
   assert.equal(await sync.isVisible(),false,'Cancel should not validate required fields')
-  assert.equal(calls.filter(c=>c.path.endsWith('/sync')).length,1)
+  assert.equal(calls.filter(c=>c.path.endsWith('/sync')).length,2)
   assert.deepEqual(errors,[])
   await page.screenshot({path:'runtime/user-sync-ui-qa.png',fullPage:true})
-  console.log(JSON.stringify({ok:true,checks:['sync entry','preview','conflict disabled','selected import','pending password','edit and enable','cancel','three widths','no browser errors'],mockOnly:true}))
+  console.log(JSON.stringify({ok:true,checks:['sync entry','preview','conflict disabled','selected import','pending password','edit and enable','existing account association','auto selection','filter','bound identity locked','preserve local profile','cancel','three widths','no browser errors'],mockOnly:true}))
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve))}

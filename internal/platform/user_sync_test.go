@@ -15,6 +15,108 @@ import (
 func directoryFixture() UserDirectory {
 	return UserDirectory{Source: "zentao:" + strings.Repeat("a", 64), Users: []DirectoryUser{{ID: "1", Account: "alice", Name: "张三"}, {ID: "2", Account: "admin", Name: "远端管理员"}, {ID: "3", Account: "bob", Name: "远端 Bob"}}}
 }
+
+func TestDirectoryManualAssociationIsAtomicAndPreservesAccounts(t *testing.T) {
+	r, err := OpenRegistry(filepath.Join(t.TempDir(), "registry.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.SaveUser(User{Username: "disabled", DisplayName: "本地停用成员", Role: RoleMember, Enabled: false}, "local-password"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"existing", "another", "admin"} {
+		if _, err := r.SaveUser(User{Username: name, DisplayName: "本地姓名", Role: RoleAdmin, Enabled: true}, "local-password"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := directoryFixture()
+	before, _ := r.Snapshot()
+	for _, links := range []map[string]string{{"1": "missing"}, {"unknown": "existing"}, {"1": "existing", "3": "existing"}, {"3": "another"}} {
+		if _, err := r.SyncDirectory(d, []string{"1"}, true, links); err == nil {
+			t.Fatal("invalid association accepted", links)
+		}
+		after, _ := r.Snapshot()
+		if len(after.Users) != len(before.Users) || len(after.UserIdentities) != 0 {
+			t.Fatal("invalid association partially wrote users")
+		}
+	}
+	preview, err := r.SyncDirectory(d, nil, false, map[string]string{"1": "existing"})
+	if err != nil || preview.Users[0].Action != "link" || preview.Users[0].Bound {
+		t.Fatal(preview, err)
+	}
+	if snapshot, _ := r.Snapshot(); len(snapshot.UserIdentities) != 0 {
+		t.Fatal("preview persisted association")
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := r.SyncDirectory(d, []string{"1"}, true, map[string]string{"1": "existing"})
+		if err != nil || result.Users[0].Action != "link" || !result.Users[0].Bound || result.Users[0].Username != "existing" {
+			t.Fatal(result, err)
+		}
+	}
+	user, err := r.Authenticate("existing", "local-password")
+	if err != nil || user.DisplayName != "本地姓名" || user.Role != RoleAdmin || !user.Enabled {
+		t.Fatal("association changed login or profile", user, err)
+	}
+	if _, err := r.SyncDirectory(d, []string{"1"}, true, map[string]string{"1": "another"}); err == nil {
+		t.Fatal("rebound external identity")
+	}
+	if _, err := r.SyncDirectory(d, []string{"3"}, true, map[string]string{"3": "existing"}); err == nil {
+		t.Fatal("two source users share one account")
+	}
+	other := d
+	other.Source = "zentao:" + strings.Repeat("b", 64)
+	if _, err := r.SyncDirectory(other, []string{"1"}, true, map[string]string{"1": "existing"}); err == nil {
+		t.Fatal("cross-source identity stolen")
+	}
+	// Linking to an existing administrator is an explicit admin operation, not
+	// an external role import. Password and authorization remain local.
+	if _, err := r.SyncDirectory(d, []string{"2"}, true, map[string]string{"2": "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if user, err := r.Authenticate("admin", "local-password"); err != nil || user.DisplayName != "本地姓名" || user.Role != RoleAdmin {
+		t.Fatal(user, err)
+	}
+	d.Users[0].Account = "renamed"
+	d.Users[0].Name = "来源新姓名"
+	result, err := r.SyncDirectory(d, []string{"1"}, true)
+	if err != nil || result.Users[0].Username != "existing" || !result.Users[0].Bound || result.Users[0].Action != "update" {
+		t.Fatal(result, err)
+	}
+	if user, err := r.Authenticate("existing", "local-password"); err != nil || user.DisplayName != "来源新姓名" || user.Role != RoleAdmin {
+		t.Fatal(user, err)
+	}
+	snapshot, _ := r.Snapshot()
+	if _, err := r.SyncDirectory(d, []string{"3"}, true, map[string]string{"3": "disabled"}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := r.Snapshot()
+	for _, user := range after.Users {
+		if user.Username == "disabled" {
+			user.Source = "" // Only the identity mapping is expected to change.
+			for _, original := range snapshot.Users {
+				if original.Username == "disabled" && user != original {
+					t.Fatal("association mutated disabled account")
+				}
+			}
+		}
+	}
+	snapshot = after
+	if len(snapshot.Users) != 4 || len(snapshot.UserIdentities) != 3 {
+		t.Fatal("duplicate account created", snapshot.Users)
+	}
+	target, err := OpenRegistry(filepath.Join(t.TempDir(), "target.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err := target.Restore(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := target.SyncDirectory(d, nil, false); err != nil || p.Users[0].Username != "existing" || !p.Users[0].Bound {
+		t.Fatal("migration lost link", p, err)
+	}
+}
 func TestDirectorySyncPreservesLocalPermissionsAndPasswords(t *testing.T) {
 	r, err := OpenRegistry(filepath.Join(t.TempDir(), "registry.db"))
 	if err != nil {
@@ -166,6 +268,9 @@ func TestDirectorySyncGatewayAuthorizationAndAuthoritativeFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
+	if _, err := r.SaveUser(User{Username: "existing", DisplayName: "本地姓名", Role: RoleAdmin, Enabled: true}, "local-password"); err != nil {
+		t.Fatal(err)
+	}
 	reads := 0
 	plugin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		reads++
@@ -185,7 +290,7 @@ func TestDirectorySyncGatewayAuthorizationAndAuthoritativeFetch(t *testing.T) {
 		sessionsMu.Unlock()
 		t.Cleanup(func() { sessionsMu.Lock(); delete(sessions, token); sessionsMu.Unlock() })
 		for _, path := range []string{"/api/users/sync-preview", "/api/users/sync"} {
-			payload, _ := json.Marshal(map[string]any{"connection": "zentao", "ids": []string{"1"}, "role": "admin", "name": "forged", "source": "forged", "expected_source": directoryFixture().Source})
+			payload, _ := json.Marshal(map[string]any{"connection": "zentao", "ids": []string{"1"}, "role": "member", "name": "forged", "password": "forged-password", "source": "forged", "expected_source": directoryFixture().Source, "links": map[string]string{"1": "existing"}})
 			req := httptest.NewRequest("POST", path, bytes.NewReader(payload))
 			req.AddCookie(&http.Cookie{Name: "lp_session", Value: token})
 			out := httptest.NewRecorder()
@@ -210,8 +315,11 @@ func TestDirectorySyncGatewayAuthorizationAndAuthoritativeFetch(t *testing.T) {
 		t.Fatal("accepted changed source")
 	}
 	users, _ := r.Users()
-	if len(users) != 1 || users[0].DisplayName != "张三" || users[0].Role != RoleMember || users[0].Enabled {
+	if len(users) != 1 || users[0].Username != "existing" || users[0].DisplayName != "本地姓名" || users[0].Role != RoleAdmin || !users[0].Enabled || users[0].Source != directoryFixture().Source {
 		t.Fatalf("trusted forged payload %+v", users)
+	}
+	if _, err := r.Authenticate("existing", "local-password"); err != nil {
+		t.Fatal("gateway association changed password", err)
 	}
 	encoded, _ := json.Marshal(users)
 	if bytes.Contains(encoded, []byte("password_hash")) {

@@ -18,11 +18,13 @@ type UserIdentity struct {
 	Username   string `json:"username"`
 }
 type DirectoryUser struct {
-	ID      string `json:"id"`
-	Account string `json:"account"`
-	Name    string `json:"name"`
-	Action  string `json:"action"`
-	Reason  string `json:"reason,omitempty"`
+	ID       string `json:"id"`
+	Account  string `json:"account"`
+	Name     string `json:"name"`
+	Action   string `json:"action"`
+	Reason   string `json:"reason,omitempty"`
+	Username string `json:"username,omitempty"` // Current/resulting platform identity, not the remote account.
+	Bound    bool   `json:"bound"`
 }
 type UserDirectory struct {
 	Source string          `json:"source"`
@@ -79,7 +81,7 @@ func directoryAction(u DirectoryUser, source string, identities []UserIdentity, 
 	return "create", "创建成员，待设置平台密码后启用", u.Account
 }
 
-func (r *Registry) SyncDirectory(d UserDirectory, selected []string, apply bool) (*UserDirectory, error) {
+func (r *Registry) SyncDirectory(d UserDirectory, selected []string, apply bool, requestedLinks ...map[string]string) (*UserDirectory, error) {
 	if !strings.HasPrefix(d.Source, "zentao:") || len(d.Source) != 71 || len(d.Users) > 10000 {
 		return nil, fmt.Errorf("用户来源无效")
 	}
@@ -113,6 +115,38 @@ func (r *Registry) SyncDirectory(d UserDirectory, selected []string, apply bool)
 	if apply && len(selection) == 0 {
 		return nil, fmt.Errorf("请至少选择一个用户")
 	}
+	links := map[string]string{}
+	if len(requestedLinks) > 0 && requestedLinks[0] != nil {
+		links = requestedLinks[0]
+	}
+	targets := map[string]bool{}
+	for id, username := range links {
+		if !known[id] || (apply && !selection[id]) {
+			return nil, fmt.Errorf("关联的来源用户必须在本次所选列表中，请重新读取用户")
+		}
+		found := false
+		for _, u := range users {
+			if u.Username == username {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("关联目标平台用户不存在，请重新读取用户")
+		}
+		if targets[username] {
+			return nil, fmt.Errorf("同一平台用户不能关联多个来源用户")
+		}
+		targets[username] = true
+		for _, identity := range identities {
+			if identity.Source == d.Source && identity.ExternalID == id && identity.Username != username {
+				return nil, fmt.Errorf("来源用户已关联其他平台账号，不能在同步中改绑")
+			}
+			if identity.Username == username && (identity.Source != d.Source || identity.ExternalID != id) {
+				return nil, fmt.Errorf("平台用户已关联其他来源身份，请重新读取用户")
+			}
+		}
+	}
 	var tx *sql.Tx
 	if apply {
 		tx, err = r.db.Begin()
@@ -123,8 +157,35 @@ func (r *Registry) SyncDirectory(d UserDirectory, selected []string, apply bool)
 	}
 	for index, u := range d.Users {
 		action, reason, username := directoryAction(u, d.Source, identities, users)
-		d.Users[index].Action, d.Users[index].Reason = action, reason
+		d.Users[index].Bound = false
+		for _, identity := range identities {
+			if identity.Source == d.Source && identity.ExternalID == u.ID {
+				d.Users[index].Bound = true
+				break
+			}
+		}
+		if target, ok := links[u.ID]; ok {
+			action, reason, username = "link", "仅建立身份关联；本次保留平台姓名、角色、密码和启用状态", target
+		}
+		d.Users[index].Action, d.Users[index].Reason, d.Users[index].Username = action, reason, username
 		if !apply || !selection[u.ID] || action == "skip" {
+			continue
+		}
+		if action == "link" {
+			exists := false
+			for _, identity := range identities {
+				if identity.Source == d.Source && identity.ExternalID == u.ID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				if _, err = tx.Exec(`INSERT INTO platform_user_identities(source,external_id,username) VALUES(?,?,?)`, d.Source, u.ID, username); err != nil {
+					return nil, fmt.Errorf("关联冲突，未保存此次同步，请重新读取用户")
+				}
+				identities = append(identities, UserIdentity{Source: d.Source, ExternalID: u.ID, Username: username})
+			}
+			d.Users[index].Bound = true
 			continue
 		}
 		name := strings.TrimSpace(u.Name)
@@ -142,6 +203,7 @@ func (r *Registry) SyncDirectory(d UserDirectory, selected []string, apply bool)
 			}
 			users = append(users, User{Username: username})
 			identities = append(identities, UserIdentity{Source: d.Source, ExternalID: u.ID, Username: username})
+			d.Users[index].Bound = true
 		} else {
 			_, err = tx.Exec(`UPDATE platform_users SET display_name=?,updated_at=? WHERE username=?`, name, now, username)
 		}
@@ -207,9 +269,10 @@ func (g *Gateway) registerUserSync(mux *http.ServeMux, r *Registry) {
 	for _, path := range []string{"/api/users/sync-preview", "/api/users/sync"} {
 		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, req *http.Request) {
 			var body struct {
-				Connection     string   `json:"connection"`
-				IDs            []string `json:"ids"`
-				ExpectedSource string   `json:"expected_source"`
+				Connection     string            `json:"connection"`
+				IDs            []string          `json:"ids"`
+				ExpectedSource string            `json:"expected_source"`
+				Links          map[string]string `json:"links"`
 			}
 			if json.NewDecoder(http.MaxBytesReader(w, req.Body, 128<<10)).Decode(&body) != nil || strings.TrimSpace(body.Connection) == "" {
 				writeJSONStatus(w, 400, map[string]string{"error": "请选择禅道连接"})
@@ -224,7 +287,7 @@ func (g *Gateway) registerUserSync(mux *http.ServeMux, r *Registry) {
 				err = fmt.Errorf("用户来源已变化或未预览，请重新读取用户后同步")
 			}
 			if err == nil {
-				d, err = r.SyncDirectory(*d, body.IDs, req.URL.Path == "/api/users/sync")
+				d, err = r.SyncDirectory(*d, body.IDs, req.URL.Path == "/api/users/sync", body.Links)
 			}
 			if err != nil {
 				writeJSONStatus(w, 400, map[string]string{"error": err.Error()})
