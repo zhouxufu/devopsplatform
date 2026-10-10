@@ -41,7 +41,8 @@ type DeliveryRequest struct {
 	Reason      string           `json:"reason"`
 	Artifacts   map[string]int64 `json:"artifacts"`
 	// A run may override/add/remove nodes without changing the reusable template.
-	Nodes []DeliveryNode `json:"nodes,omitempty"`
+	Nodes         []DeliveryNode `json:"nodes,omitempty"`
+	previewDrafts bool           // Set only by the read-only preview route, never from JSON.
 }
 type DeliveryService struct {
 	Service           string             `json:"service"`
@@ -372,7 +373,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			for _, id := range ids {
 				redisAllocated[id]++
 				c := s.GetChange(id)
-				if c == nil || c.Status != ChangeReady {
+				if c == nil || (c.Status != ChangeReady && !(req.previewDrafts && tpl.Workbench != "" && c.Status == ChangeDraft)) {
 					p.Blockers = append(p.Blockers, fmt.Sprintf("Redis 变更 #%d 尚未就绪", id))
 					ready = false
 				}
@@ -389,7 +390,11 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			}
 			p.RedisPlans = append(p.RedisPlans, plan)
 			redisCount++
-			p.Warnings = append(p.Warnings, "Redis 命令必须由另一名环境审核人审核；精确 Key 的当前数据不冻结、不校验内容，命令顺序执行、非事务、无自动回滚；超时不得重试。缓存清理无法恢复，请确认业务可重建缓存。")
+			review := "提交后仍须手动确认执行；"
+			if deliveryReviewRequired(p) {
+				review = "Redis 命令必须由另一名环境审核人审核；"
+			}
+			p.Warnings = append(p.Warnings, review+"精确 Key 的当前数据不冻结、不校验内容，命令顺序执行、非事务、无自动回滚；超时不得重试。缓存清理无法恢复，请确认业务可重建缓存。")
 		case "nacos":
 			ids := append([]int64{}, node.ChangeIDs...)
 			if p.Version != nil {
@@ -412,7 +417,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			for _, id := range ids {
 				nacosAllocated[id]++
 				c := s.GetChange(id)
-				if c == nil || c.Status != ChangeReady {
+				if c == nil || (c.Status != ChangeReady && !(req.previewDrafts && tpl.Workbench != "" && c.Status == ChangeDraft)) {
 					p.Blockers = append(p.Blockers, fmt.Sprintf("Nacos 变更 #%d 尚未就绪", id))
 					ready = false
 				}
@@ -473,7 +478,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			for _, id := range ids {
 				sqlAllocated[id]++
 				c := s.GetChange(id)
-				if c == nil || c.Status != ChangeReady {
+				if c == nil || (c.Status != ChangeReady && !(req.previewDrafts && tpl.Workbench != "" && c.Status == ChangeDraft)) {
 					p.Blockers = append(p.Blockers, fmt.Sprintf("SQL 变更 #%d 尚未就绪", id))
 					ready = false
 				}
@@ -543,6 +548,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 }
 
 func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *ReleaseManager) (*DeliveryRun, error) {
+	req.previewDrafts = false
 	p, secrets, err := s.ResolveDelivery(req, manager)
 	if err != nil {
 		return nil, err
@@ -953,6 +959,7 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 			reply(w, nil, err)
 			return
 		}
+		req.previewDrafts = true
 		p, _, err := st.ResolveDelivery(req, manager)
 		if p != nil {
 			p.NacosPlans = publicNacosPlans(p.NacosPlans)

@@ -102,7 +102,7 @@ func (s *Store) queryTargets(kind string, q WorkbenchQuery) (map[string]string, 
 			return nil, "", fmt.Errorf("来源与目标环境不能相同")
 		}
 	} else if kind == "dbms" {
-		if _, err := parseSyncQuery(q.SQL); err != nil {
+		if _, err := parseWorkbenchSQL(q.SQL); err != nil {
 			return nil, "", err
 		}
 	} else {
@@ -126,6 +126,15 @@ func (s *Store) queryTargets(kind string, q WorkbenchQuery) (map[string]string, 
 		if err != nil {
 			return nil, "", err
 		}
+		if kind == "redis" && q.TaskID == 0 {
+			commands, e := parseRedisCommandText(q.Commands, redisReadKeys)
+			if e != nil {
+				return nil, "", e
+			}
+			if e = validateRedisReadScope(commands, c); e != nil {
+				return nil, "", e
+			}
+		}
 		connections = append(connections, c)
 	}
 	// Includes credentials and binding overrides only in a hash, never in tickets.
@@ -146,17 +155,6 @@ func (s *Store) queryNeedsReview(kind string, q WorkbenchQuery) (bool, error) {
 	}
 	return required, nil
 }
-func redisReadKeys(a []string) ([]string, error) {
-	switch a[0] {
-	case "GET":
-		if len(a) == 2 {
-			return a[1:], nil
-		}
-	case "PING", "TYPE", "TTL", "PTTL", "STRLEN", "HLEN", "LLEN", "SCARD", "ZCARD", "EXISTS":
-		return redisCommandKeys(a)
-	}
-	return nil, fmt.Errorf("查询仅支持 GET、TYPE、TTL、PTTL、STRLEN、HLEN、LLEN、SCARD、ZCARD、EXISTS、PING；写命令请提交变更")
-}
 func (s *Store) executeWorkbenchQuery(ctx context.Context, kind string, q WorkbenchQuery, actor string) (any, error) {
 	if q.TaskID != 0 {
 		t, err := s.DataSyncTask(q.TaskID)
@@ -166,7 +164,7 @@ func (s *Store) executeWorkbenchQuery(ctx context.Context, kind string, q Workbe
 		return s.CompareDataSync(ctx, t, q.Scope)
 	}
 	if kind == "dbms" {
-		parsed, err := parseSyncQuery(q.SQL)
+		parsed, err := parseWorkbenchSQL(q.SQL)
 		if err != nil {
 			return nil, err
 		}
@@ -174,12 +172,12 @@ func (s *Store) executeWorkbenchQuery(ctx context.Context, kind string, q Workbe
 		if err != nil {
 			return nil, err
 		}
-		rows, err := readSyncRows(ctx, c, parsed)
+		result, err := readWorkbenchSQL(ctx, c, parsed)
 		if err != nil {
-			return nil, fmt.Errorf("只读查询失败，请检查连接、字段、权限或缩小 WHERE 范围")
+			return nil, err
 		}
-		s.Audit(actor, "query", "mysql", c.Name, map[string]any{"environment": q.Environment, "service": q.Service, "table": parsed.Table, "rows": len(rows)})
-		return map[string]any{"columns": parsed.Columns, "rows": rows}, nil
+		s.Audit(actor, "query", "mysql", c.Name, map[string]any{"environment": q.Environment, "service": q.Service, "table": parsed.Table, "rows": len(result["rows"].([]map[string]any))})
+		return result, nil
 	}
 	commands, err := parseRedisCommandText(q.Commands, redisReadKeys)
 	if err != nil {
@@ -189,20 +187,17 @@ func (s *Store) executeWorkbenchQuery(ctx context.Context, kind string, q Workbe
 	if err != nil {
 		return nil, err
 	}
-	for _, a := range commands {
-		keys, _ := redisReadKeys(a)
-		for _, key := range keys {
-			if !strings.HasPrefix(key, c.Config["key_prefix"]) || strings.ContainsAny(key, "*?[]") {
-				return nil, fmt.Errorf("查询 Key 必须匹配资源前缀，不能使用通配符")
-			}
-		}
+	if err = validateRedisReadScope(commands, c); err != nil {
+		return nil, err
 	}
-	client, err := newRedisClient(ctx, c)
+	started := time.Now()
+	client, err := newRedisClient(ctx, c, true)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
 	rows := []map[string]any{}
+	totalBytes := 0
 	for _, a := range commands {
 		args := make([]any, len(a))
 		for i, arg := range a {
@@ -241,10 +236,15 @@ func (s *Store) executeWorkbenchQuery(ctx context.Context, kind string, q Workbe
 				return nil, fmt.Errorf("Redis 查询失败：%s", redisErrorCategory(err))
 			}
 		}
-		rows = append(rows, map[string]any{"command": strings.Join(a, " "), "result": result, "truncated": truncated})
+		encoded, _ := json.Marshal(result)
+		totalBytes += len(encoded)
+		if totalBytes > 2<<20 {
+			return nil, fmt.Errorf("查询结果超过 2 MiB，请减少命令或缩小范围")
+		}
+		rows = append(rows, map[string]any{"command": strings.Join(a, " "), "argv": a, "result": result, "truncated": truncated})
 	}
 	s.Audit(actor, "query", "redis", c.Name, map[string]any{"environment": q.Environment, "service": q.Service, "commands": len(commands)})
-	return map[string]any{"columns": []string{"command", "result", "truncated"}, "rows": rows}, nil
+	return map[string]any{"columns": []string{"command", "result", "truncated"}, "rows": rows, "elapsed_ms": time.Since(started).Milliseconds(), "target": map[string]any{"connection": c.Name, "db": c.Config["db"], "key_prefix": c.Config["key_prefix"]}}, nil
 }
 func (s *Store) queryTicket(id int64, kind string) (*WorkbenchQueryTicket, error) {
 	var data, status string
@@ -286,6 +286,26 @@ func (s *Store) handleWorkbenchQueries(w http.ResponseWriter, r *http.Request, k
 	parts := strings.Split(rest, "/")
 	actor := queryActor(r)
 	respond := func(v any, e error) { writeIntegrationJSON(w, v, e) }
+	if rest == "query-target" && r.Method == http.MethodGet {
+		service, env, alias := r.URL.Query().Get("service"), r.URL.Query().Get("environment"), r.URL.Query().Get("resource_alias")
+		if s.GetEnvironment(env) == nil {
+			respond(nil, fmt.Errorf("请选择有效环境"))
+			return true
+		}
+		var c *ResourceConnection
+		var err error
+		if kind == "dbms" {
+			c, err = s.sqlBinding(service, env, alias)
+		} else {
+			c, err = s.redisBinding(service, env, alias)
+		}
+		if err != nil {
+			respond(nil, err)
+			return true
+		}
+		respond(map[string]any{"connection": c.Name, "database": c.Config["database"], "db": c.Config["db"], "key_prefix": c.Config["key_prefix"], "environment": env, "service": service, "resource_alias": alias}, nil)
+		return true
+	}
 	if rest == "policy" {
 		env := r.URL.Query().Get("environment")
 		if s.GetEnvironment(env) == nil {

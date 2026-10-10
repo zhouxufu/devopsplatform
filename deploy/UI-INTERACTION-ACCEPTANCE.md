@@ -1,5 +1,17 @@
 # 八项 UI 与交互改动验收
 
+## 工作台研发操作补验（2026-10-10）
+
+- 查询与变更提交保持同级，侧栏只保留公共中心入口；审批设置放进“设置”。实际目标只展示连接名、库/DB 和 Key 前缀，不返回凭据，也不在打开页面时查询业务数据。
+- 查询页签分别保留环境、内容和结果，最多 10 个；Ctrl/⌘ + Enter 执行选中内容或全文。SQL 高亮、格式化、查表、结构查看及结构字段插入可用。近期查询与对照结果仅在当前页面保留，不承诺刷新恢复。
+- 交互查询支持单表 `SELECT *`、别名、WHERE、排序、分组、COUNT/MIN/MAX/SUM/AVG、LIMIT，以及 `SHOW TABLES`、`DESCRIBE 表名`。默认 200、最多 1000 行，30 秒超时，结果最多 2 MiB；不支持 JOIN、子查询、任意函数、序列、锁与多语句。数据同步仍使用独立的严格语法。
+- Redis 使用带准确资源前缀、游标与 COUNT 1–100 的 SCAN；结果可点选查看类型/TTL、载入下一游标、生成准确 Key 的清理或过期草稿。Hash/List/Set/Sorted Set 支持有限范围读取，禁用 KEYS、全量集合返回；在 RESP 响应头阶段限制大小，GET 最多显示 64 KiB。所有辅助操作只载入命令或草稿，不自动执行。
+- 查询结果支持复制、详情、JSON 格式显示及基于非空唯一键的两次结果数量对照；仅对比已经返回的范围，不等同于完整数据同步，不自动生成写操作。
+- “以此新建变更”保留核对查询，不把 SELECT/只读命令复制到写编辑器。预检保存草稿但不标记就绪；编辑会使旧预检失效。实际提交才标记就绪，审核与执行仍分开。当前会话中提交的执行单可返回原核对查询，不自动重查。
+- 记录可按我的操作、待我审核和关键词筛选；Redis 执行单显示逐条命令台账（成功/尚未开始/结果不确定），失败不自动重试。仅展示服务端最近返回的记录，不声称完整历史分页。
+- 后端用例：`TestWorkbenchSQLIndependentGrammar`、`TestWorkbenchRedisReadBoundsAndScope`、`TestWorkbenchBoundedRedisScanProtocol`、`TestWorkbenchDraftPreviewNeverCreatesExecutionPermit`、`TestWorkbenchTargetAndLedgerScope`。浏览器用例 `test-workbench-ui.mjs` 覆盖页签和结果保留、选中执行、格式化字面量、结构查看、Key 点选/游标、核对查询、预检可编辑及失效、审批、无自动执行、公共中心连续性和响应式布局。
+- 后端仅使用临时数据库与回环 Redis 协议测试服务；浏览器业务请求全部模拟。真实 MySQL SQL 执行集成需要可丢弃的本地测试库，本次不访问用户业务数据。
+
 日期：2026-10-10。分支：`feature/delivery-platform-v1`。验收对象：本地 `http://127.0.0.1:9800/`，壳内工作区和独立插件页面。
 
 ## 逐项结果

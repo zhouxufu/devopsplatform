@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -73,7 +74,7 @@ func validateRedisConnection(c *ResourceConnection) error {
 	}
 	return nil
 }
-func newRedisClient(ctx context.Context, c *ResourceConnection) (*redis.Client, error) {
+func newRedisClient(ctx context.Context, c *ResourceConnection, bounded ...bool) (*redis.Client, error) {
 	if c == nil || c.Kind != "redis" {
 		return nil, fmt.Errorf("Redis 连接不存在")
 	}
@@ -91,6 +92,28 @@ func newRedisClient(ctx context.Context, c *ResourceConnection) (*redis.Client, 
 	if c.Config["tls"] == "true" {
 		opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
+	if len(bounded) > 0 && bounded[0] {
+		opts.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			d := &net.Dialer{Timeout: 5 * time.Second}
+			var conn net.Conn
+			var err error
+			if opts.TLSConfig != nil {
+				host, _, e := net.SplitHostPort(addr)
+				if e != nil {
+					return nil, e
+				}
+				cfg := opts.TLSConfig.Clone()
+				cfg.ServerName = host
+				conn, err = (&tls.Dialer{NetDialer: d, Config: cfg}).DialContext(ctx, network, addr)
+			} else {
+				conn, err = d.DialContext(ctx, network, addr)
+			}
+			if err != nil {
+				return nil, err
+			}
+			return &boundedRESPConn{Conn: conn}, nil
+		}
+	}
 	client := redis.NewClient(opts)
 	if pong, err := client.Ping(ctx).Result(); err != nil || pong != "PONG" {
 		client.Close()
@@ -101,6 +124,10 @@ func newRedisClient(ctx context.Context, c *ResourceConnection) (*redis.Client, 
 
 // Never echo an upstream reply (it can contain keys, values or credentials).
 func redisErrorCategory(err error) string {
+	var oversized *redisResponseLimitError
+	if errors.As(err, &oversized) {
+		return oversized.message
+	}
 	if err == nil {
 		return "服务未返回 PONG，请确认端口为 Redis 协议"
 	}

@@ -1,11 +1,11 @@
 <script setup>
-const props=defineProps({plans:{type:Array,default:()=>[]},executions:{type:Array,default:()=>[]}});
+const props=defineProps({plans:{type:Array,default:()=>[]},executions:{type:Array,default:()=>[]},requiresReview:{type:Boolean,default:true}});
 const execution=(node,id,i)=>props.executions.find(e=>e.node_id===node&&e.change_id===id&&e.command_index===i);
 const labels={success:'已执行',uncertain:'结果不确定，必须核对',executing:'执行中或中断待核对',reserved:'尚未开始（已保留执行权）'};
 </script>
 <template>
   <section v-if="plans?.length" class="redis-preview">
-    <h4>Redis 执行计划（必须审核）</h4>
+    <h4>Redis 执行计划（{{requiresReview?'需审核':'仍须确认执行'}}）</h4>
     <p>预览仅测试连接，不执行以下命令，不读取缓存值。目标与命令冻结，Key 的实时内容不冻结。非事务、无自动恢复；错误或超时停止，不自动重试。</p>
     <template v-for="plan in plans" :key="plan.node_id">
       <article v-for="item in plan.changes" :key="item.change_id">

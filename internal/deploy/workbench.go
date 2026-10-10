@@ -124,6 +124,15 @@ func registerWorkbenchRoutes(mux *http.ServeMux, st *Store, busURL string) {
 				return
 			}
 			allowed := rest == "environments" && isGet
+			if kind == "redis" && rest == "redis-executions" && isGet {
+				id, _ := strconv.ParseInt(r.URL.Query().Get("run_id"), 10, 64)
+				v := st.DeliveryRun(id)
+				if v == nil || v.Plan.Template.Workbench != kind {
+					fail("执行单不存在或不属于该工作台")
+					return
+				}
+				allowed = true
+			}
 			// A DBMS comparison opened from a work item only needs its optimistic
 			// association digest, not another copy of the change editor.
 			if kind == "dbms" && isGet && len(parts) == 3 && parts[0] == "work-items" && parts[2] == "delivery-content" {
