@@ -15,7 +15,7 @@ try {
   const change={id:910001,kind:kind==='dbms'?'mysql':'redis',title:'Workbench QA',service:'resource-only',status:'ready',owner:'author',rollback_plan:'Manual verification',...(kind==='dbms'?{sql:{resource_alias:'db',content:"UPDATE sys_menu SET name='QA' WHERE id=1",max_affected_rows:10}}:{redis:{resource_alias:'cache',commands:'UNLINK menu:tree'}})}
   const tpl={id:910002,workbench:kind,name:'QA',mode:'fixed',services:[],nodes:[{id:'operation',kind:change.kind,name:'QA',change_ids:[change.id]}]}
   const policies={test:{query_approval:false,change_approval:true},prod:{query_approval:false,change_approval:true}}
-  let lastRead=null
+  let lastRead=null,serviceReads=0,authEnabled=false
   let plan={template:tpl,environment:env,reason:'QA',services:[],nodes:tpl.nodes,blockers:[],warnings:[]},run=null,ticket=null,saved,queries=0,executions=0
   await page.route('**/*',async route=>{
    const r=route.request(),u=new URL(r.url()),p=u.pathname.replace(`/api/workbench/${kind}/`,'/api/'),method=r.method(),reply=json=>route.fulfill({json})
@@ -23,8 +23,8 @@ try {
    if(process.env.WORKBENCH_UI_DIST){let file;if(/\/assets\/[^/]+\.(js|css)$/.test(p))file='assets/'+path.basename(p);else if(p===`/ui/${kind}`||p===`/api/plugins/${kind}/ui`)file='workbench.html';if(file)return route.fulfill({body:await readFile(path.join(process.env.WORKBENCH_UI_DIST,file)),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html'})}
    if(!['fetch','xhr'].includes(r.resourceType()))return route.continue()
    if(method==='GET'){
-    if(p.endsWith('/api/me'))return reply({username:'reviewer',role:'admin',auth_enabled:true})
-    if(p.endsWith('/api/services')||p.endsWith('/api/registry/applications'))return reply([{name:'resource-only'}])
+    if(p.endsWith('/api/me'))return reply({username:'reviewer',role:'admin',auth_enabled:authEnabled})
+    if(p.endsWith('/api/services')||p.endsWith('/api/registry/applications')){serviceReads++;return reply([{name:'resource-only'}])}
     if(p.endsWith('/api/environments'))return reply([env,{...env,name:'prod',display_name:'生产',protected:true}])
     if(p.endsWith('/api/query-target'))return reply({connection:'QA resource',database:kind==='dbms'?'qa':'',db:'0',key_prefix:kind==='redis'?'menu:':''})
     if(p.endsWith('/api/policy'))return reply(policies[u.searchParams.get('environment')])
@@ -56,7 +56,28 @@ try {
   await page.goto(base+(process.env.WORKBENCH_GATEWAY==='1'?`/api/plugins/${kind}/ui`:`/ui/${kind}`))
   const nav=page.getByRole('navigation',{name:'工作台导航'})
   const choose=async(label,option)=>{const field=page.locator('label:visible').filter({hasText:new RegExp('^'+label)}).first(),control=field.locator('.el-select');await control.click();const id=await control.getByRole('combobox').getAttribute('aria-controls');await page.locator('#'+id).getByRole('option',{name:option,exact:true}).click();await page.locator('h2').click()}
-  await page.getByRole('heading',{name:kind==='dbms'?'SQL 查询':'Redis 查询',exact:true}).waitFor()
+  await page.getByRole('heading',{name:kind==='dbms'?'数据库工作台':'Redis 工作台',exact:true}).waitFor()
+  await page.locator('.el-notification').filter({hasText:'未启用登录'}).waitFor()
+  assert.equal(await page.locator('main>.notice,main>.error').count(),0,'global alerts still occupy content')
+  await page.locator('.el-notification').filter({hasText:'未启用登录'}).locator('.el-notification__closeBtn').click()
+  assert.equal(await nav.locator('xpath=..').getAttribute('class'),'workspace-sidebar')
+  assert.equal(await page.locator('.query h3').count(),0,'duplicate query title')
+  assert.equal(await page.locator('.platform-page-header .scope').count(),1,'environment not in header')
+  const envBox=await page.locator('.scope').boundingBox(),titleBox=await page.getByRole('heading',{name:kind==='dbms'?'数据库工作台':'Redis 工作台',exact:true}).boundingBox()
+  assert(Math.abs(envBox.y+envBox.height/2-titleBox.y-titleBox.height/2)<10,'environment and title not aligned')
+  for(const label of await page.locator('.query-context>label').all()){
+   const text=await label.locator('span').first().boundingBox(),select=await label.locator('.el-select').boundingBox()
+   assert(text.x<select.x&&Math.abs(text.y+text.height/2-select.y-select.height/2)<8,'resource label and select must be inline')
+  }
+  await page.getByRole('button',{name:'执行只读查询',exact:true}).click()
+  const errorNotice=page.locator('.el-notification').filter({hasText:'请选择应用、资源和环境'})
+  await errorNotice.waitFor();await errorNotice.locator('.el-notification__closeBtn').click()
+  authEnabled=true
+  const beforeRefresh=serviceReads
+  assert.equal(await page.getByRole('button',{name:/^刷新/}).count(),0,'refresh should be removed')
+  await Promise.all([page.waitForResponse(r=>r.url().endsWith('/api/me')),nav.getByRole('button',{name:'执行记录',exact:true}).click()])
+  assert(serviceReads>beforeRefresh,'entering history did not reread metadata');assert.equal(queries,0);assert.equal(executions,0)
+  await nav.getByRole('button',{name:'查询',exact:true}).click()
   await choose('应用','resource-only');await choose(kind==='dbms'?'逻辑数据库资源':'逻辑 Redis 资源',kind==='dbms'?'db':'cache')
   await page.locator('.query textarea').fill(kind==='dbms'?'SELECT id, name FROM sys_menu WHERE id > 0':'TYPE menu:tree\nTTL menu:tree');await page.getByRole('button',{name:'执行只读查询',exact:true}).click();await page.getByText('QA <script>not executed</script>',{exact:true}).waitFor();assert.equal(await page.locator('tbody script').count(),0)
   assert.equal(await page.getByRole('dialog').count(),0)
@@ -134,7 +155,7 @@ try {
   await page.locator('.workbench-settings summary').click();await page.getByRole('button',{name:'审批设置',exact:true}).click();const switches=page.locator('.policy-row input[type=checkbox]');assert.equal(await switches.nth(0).isChecked(),false);assert.equal(await switches.nth(1).isChecked(),true)
   await switches.nth(0).check();await switches.nth(1).uncheck();await Promise.all([page.waitForResponse(r=>r.request().method()==='PUT'&&r.url().includes('/policy')),page.getByRole('button',{name:'保存审批设置',exact:true}).click()]);assert.deepEqual(policies.test,{query_approval:true,change_approval:false})
   await nav.getByRole('button',{name:'查询',exact:true}).click();const before=queries;await page.getByRole('button',{name:'提交查询申请',exact:true}).click();await page.getByRole('heading',{name:'查询申请 #910004',exact:true}).waitFor();assert.equal(queries,before);assert.equal(await page.getByRole('button',{name:'批准查询',exact:true}).count(),0,'self approval shown')
-  ticket={...ticket,status:'approved',approver:'second-reviewer'};await page.getByRole('button',{name:'刷新',exact:true}).click();await page.getByRole('button',{name:'执行已批准查询',exact:true}).click();await page.getByText('approved snapshot',{exact:true}).waitFor()
+  ticket={...ticket,status:'approved',approver:'second-reviewer'};await nav.getByRole('button',{name:'查询',exact:true}).click();await nav.getByRole('button',{name:'执行记录',exact:true}).click();await page.mouse.move(1000,100);await page.waitForFunction(()=>document.querySelector('.workspace-sidebar').getBoundingClientRect().width<=65);await page.getByRole('button',{name:'执行已批准查询',exact:true}).click();await page.getByText('approved snapshot',{exact:true}).waitFor()
   if(kind==='dbms'){await nav.getByRole('button',{name:'数据对比同步',exact:true}).click();assert.equal(await page.locator('.sync-page label').filter({hasText:/^任务名称/}).locator('input').inputValue(),'continuous sync draft')}
   for(const width of [1440,900,700,390]){await page.setViewportSize({width,height:960});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page overflow')}
   if(process.env.WORKBENCH_SCREENSHOT){await page.setViewportSize({width:1440,height:960});await nav.getByRole('button',{name:'查询',exact:true}).click();await page.screenshot({path:process.env.WORKBENCH_SCREENSHOT+'-'+kind+'.png'})}

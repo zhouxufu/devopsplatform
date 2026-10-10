@@ -92,7 +92,7 @@ try {
   }
   await dialog.getByRole('button', { name: '关闭并返回原页面', exact: true }).click()
   await dialog.waitFor({ state: 'hidden' })
-  await page.getByRole('heading', { name: 'SQL 查询', exact: true }).waitFor()
+  await page.getByRole('heading', { name: '数据库工作台', exact: true }).waitFor()
   assert.deepEqual(errors, []); assert.deepEqual(writes, [])
   console.log(JSON.stringify({ ok: true, checks: ['task saved without environments or bindings', 'both environments chosen per comparison', 'same environment rejected', 'source/target changes invalidate selection', 'same task reused dev/test/prod', 'freeze binds selected scope', 'task revision untouched', 'responsive', 'return preserves page', 'no real writes'] }))
 } finally { await browser.close() }
