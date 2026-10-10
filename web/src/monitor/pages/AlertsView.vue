@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from "../../shared/components/PageHeader.vue"
 import { ref, computed, inject, watch, onMounted, onUnmounted } from 'vue'
 import Sel from '../../shared/components/Sel.vue'
 import { ElButton, ElInput, ElInputNumber } from '../../shared/components/ui.js'
@@ -105,7 +106,7 @@ const KC = { 触发: 'var(--error)', 持续中: 'var(--warn)', 已恢复: 'var(-
 </script>
 <template>
   <div style="padding:16px">
-    <div style="display:flex;margin-bottom:12px"><ElButton type="primary" size="small" style="margin-left:auto" @click="open()">＋ 新建指标报警</ElButton></div>
+<PageHeader title="指标报警"><template #actions><ElButton type="primary" size="small" @click="open()">＋ 新建指标报警</ElButton></template></PageHeader>
     <div class="table-scroll"><table>
       <thead><tr><th>名称</th><th>对象</th><th>条件</th><th>状态</th><th>最近评估</th><th>已发送</th><th>操作</th></tr></thead>
       <tbody>

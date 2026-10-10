@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from "../../shared/components/PageHeader.vue"
 import BuildEnvironmentEditor from '../components/BuildEnvironmentEditor.vue'
 import GitBranchSelect from '../components/GitBranchSelect.vue'
 import { ref, onMounted, computed, inject } from 'vue'
@@ -180,10 +181,7 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
 
 <template>
   <div class="services-page">
-    <div class="page-head">
-      <div class="title-row"><h2>基础构建</h2><HelpTip text="管理应用的代码来源、构建配置和不可变制品；单应用可直接发布，多应用交付使用部署编排。" /></div>
-      <ElButton type="primary" native-type="button" @click="openNew">＋ 接入应用</ElButton>
-    </div>
+<PageHeader title="基础构建" help="管理应用的代码来源、构建配置和不可变制品；单应用可直接发布，多应用交付使用部署编排。"><template #actions><ElButton type="primary" native-type="button" @click="openNew">＋ 接入应用</ElButton></template></PageHeader>
 
     <section v-if="services.length" class="filter-panel">
       <div class="filter-main"><ElInput v-model="searchText" clearable placeholder="搜索应用名、仓库、分支或标签" /><div class="category-tabs"><button v-for="item in [['all','全部'],['frontend','前端'],['backend','后端']]" :key="item[0]" :class="{active:category===item[0]}" @click="category=item[0]">{{item[1]}}<small>{{item[0]==='all'?services.length:services.filter(s=>roleOf(s)===item[0]).length}}</small></button></div><span class="result-count">{{filteredServices.length}} 个应用</span></div>

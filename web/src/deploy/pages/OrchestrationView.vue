@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from '../../shared/components/PageHeader.vue'
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import Modal from "../../shared/components/Modal.vue";
@@ -311,24 +312,24 @@ onMounted(async () => {
 </script>
 <template>
   <div class="delivery-page">
-    <div class="heading">
-      <div class="title">
+    <PageHeader>
+      <template #title><div class="title">
         <h2>部署编排</h2>
         <HelpTip
           text="模板定义顺序节点；执行单选择环境、版本和制品并冻结快照。生产需要指定审核人审核；本版按节点显式推进，多服务不会因多个 BUG 重复发布。"
         />
-      </div>
-      <ElButton v-if="area==='templates'" type="primary" @click="editTemplate()">＋ 新建编排</ElButton><ElButton v-else type="primary" @click="startDelivery">发起交付</ElButton>
-    </div>
-    <nav class="tabs">
+      </div></template>
+      <template #actions><ElButton @click="load">刷新</ElButton><ElButton v-if="area==='templates'" type="primary" @click="editTemplate()">＋ 新建编排</ElButton><ElButton v-else type="primary" @click="startDelivery">发起交付</ElButton></template>
+    <template #navigation><nav class="tabs" aria-label="部署编排视图">
       <button :class="{ active: area === 'runs' }" @click="area = 'runs'">执行与审核 <small>{{runs.filter(r=>r.status==='pending_approval').length||''}}</small></button>
       <button
         :class="{ active: area === 'templates' }"
         @click="area = 'templates'"
       >
         编排模板</button
-      ><ElButton size="small" @click="load">刷新</ElButton>
-    </nav>
+      >
+    </nav></template>
+    </PageHeader>
     <div v-if="route.query.version" class="notice"><ElButton size="small" @click="router.push({path:'/changes',query:{tab:'versions',item:String(route.query.version)}})">← 返回版本</ElButton> 当前交付版本：{{versions.find(v=>v.id===Number(route.query.version))?.version||route.query.version}}</div>
     <template v-if="area === 'templates'"
       ><div v-if="!templates.length" class="empty">

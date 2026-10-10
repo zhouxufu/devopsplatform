@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from '../../shared/components/PageHeader.vue'
 import { ref, onMounted, onUnmounted, inject, watch } from 'vue'
 import Sel from '../../shared/components/Sel.vue'
 import Chart from '../../shared/components/Chart.vue'
@@ -25,11 +26,9 @@ watch(curEnvironment, load)
 </script>
 <template>
   <div style="padding:16px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-      <h3 style="font-size:14px">机器指标</h3>
+    <PageHeader title="机器指标" help="上方为实时快照；Agent 每 15 秒采样，页面每 30 秒刷新。"><template #navigation>
       <Sel v-model="agent" :options="machines.map(m => ({ value: m.agent_id, label: m.agent_id + (curEnvironment ? '' : ' · ' + (m.environment || '未标记')) }))" width="180px" @change="load" />
-      <span style="color:var(--dim);font-size:11px;margin-left:auto">上方为实时快照 · agent 15s 采样 · 30s 刷新</span>
-    </div>
+    </template></PageHeader>
     <div v-if="machines.length" class="machine-grid">
       <div class="card"><div class="t">CPU</div><div class="v" :style="{ color: (machines.find(m => m.agent_id === agent) || {}).cpu > 80 ? 'var(--error)' : 'var(--ok)' }">{{ (machines.find(m => m.agent_id === agent) || {}).cpu }}%</div><div class="s">{{ agent }}</div></div>
       <div class="card"><div class="t">内存</div><div class="v">{{ (machines.find(m => m.agent_id === agent) || {}).mem_used }}<small style="font-size:12px;color:var(--dim)"> / {{ (machines.find(m => m.agent_id === agent) || {}).mem_total }}G</small></div></div>

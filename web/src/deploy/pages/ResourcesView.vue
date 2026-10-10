@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from "../../shared/components/PageHeader.vue"
 import { computed, ref, onMounted, watch } from 'vue'
 import Modal from '../../shared/components/Modal.vue'
 import Sel from '../../shared/components/Sel.vue'
@@ -167,7 +168,7 @@ const envName=name=>environments.value.find(e=>e.name===name)?.display_name||nam
 const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
 </script>
 <template><div>
-  <div class="page-head"><h2>资源中心</h2><span class="plugin-scope">{{pluginLabel}}</span><HelpTip :text="`当前仅展示${pluginLabel}会使用的资源；切换顶部插件工作区后，分类会同步变化。资源数据仍由平台统一管理。`" /></div>
+  <PageHeader><template #title><h2>资源中心</h2><span class="plugin-scope">{{pluginLabel}}</span><HelpTip :text="`当前仅展示${pluginLabel}会使用的资源；切换顶部插件工作区后，分类会同步变化。资源数据仍由平台统一管理。`" /></template></PageHeader>
   <div class="resource-layout">
   <nav class="resource-nav" aria-label="资源分类"><button v-for="t in resourceTabs" :key="t[0]" type="button" :class="{active:tab===t[0]}" @click="tab=t[0]"><UiIcon :name="t[1]" :size="16"/><b>{{t[2]}}</b></button></nav>
   <div class="resource-content">

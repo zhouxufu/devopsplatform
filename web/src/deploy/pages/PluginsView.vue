@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from "../../shared/components/PageHeader.vue"
 import {ref,onMounted,computed} from 'vue'
 import HelpTip from '../../shared/components/HelpTip.vue'
 const steps=ref([]),drivers=ref([]),tab=ref('steps')
@@ -6,7 +7,7 @@ onMounted(async()=>{[steps.value,drivers.value]=await Promise.all([fetch('api/st
 const kindText=k=>({source:'源码',build:'构建',package:'制品',deploy:'部署'}[k]||k)
 const buildSteps=computed(()=>steps.value.filter(v=>v.kind!=='deploy'))
 </script>
-<template><div><div class="head"><h2>插件中心</h2><HelpTip text="构建步骤负责生成制品；部署驱动根据应用环境解析目标并执行发布。" /></div><nav><a :class="{active:tab==='steps'}" @click="tab='steps'">构建步骤（{{buildSteps.length}}）</a><a :class="{active:tab==='drivers'}" @click="tab='drivers'">部署驱动（{{drivers.length}}）</a></nav>
+<template><div><PageHeader title="插件中心" help="构建步骤负责生成制品；部署驱动根据应用环境解析目标并执行发布。"><template #navigation><nav aria-label="插件类型"><button :class="{active:tab==='steps'}" @click="tab='steps'">构建步骤（{{buildSteps.length}}）</button><button :class="{active:tab==='drivers'}" @click="tab='drivers'">部署驱动（{{drivers.length}}）</button></nav></template></PageHeader>
 <div v-if="tab==='steps'" class="grid"><article v-for="v in buildSteps" :key="v.id"><header><span>🧩</span><div><b>{{v.name}}</b><code>{{v.id}}</code></div><em>{{kindText(v.kind)}}</em></header><p>{{v.description||'无说明'}}</p><dl><div><dt>API</dt><dd>{{v.api_version}}</dd></div><div><dt>输入制品</dt><dd>{{v.accepts?.join(', ')||'—'}}</dd></div><div><dt>输出制品</dt><dd>{{v.produces||'—'}}</dd></div><div><dt>参数</dt><dd>{{v.params?.length||0}} 个</dd></div></dl></article></div>
 <div v-else class="grid"><article v-for="v in drivers" :key="v.id"><header><span>🚀</span><div><b>{{v.name}}</b><code>{{v.id}}</code></div><em>部署</em></header><p>接受 {{v.accepts.join(', ')}} 制品</p><dl><div><dt>API</dt><dd>{{v.api_version}}</dd></div><div><dt>能力</dt><dd>{{v.capabilities.join(' · ')}}</dd></div><div><dt>扩展参数</dt><dd>{{v.params?.length||0}} 个</dd></div></dl></article></div>
 <div class="contract"><b>通用插件契约</b><span>构建步骤声明 <code>kind / produces / accepts</code>；部署驱动声明 <code>accepts / capabilities / params</code>，由发布单注入环境和主机快照。两者不能混在同一条构建流水线中。</span></div></div></template>

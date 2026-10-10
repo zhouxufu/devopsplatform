@@ -9,7 +9,7 @@
 | 1. 图标 | 部署使用火箭；构建、编排、变更、应用、资源、MCP、查询、同步、历史、设置区分 | `test-console-visual.mjs` 检查实际 SVG 路径无重复、部署标签不是百分号；截图检查 |
 | 2. 批量新建 | 单编辑器连续录入多类型、多应用内容；一次事务生成独立草稿；无效项全部回滚，不执行 | `TestIndependentChangeBatchAtomic`、`TestIndependentChangeBatchHTTPMixedPayloads` 覆盖代码/SQL/Nacos/Redis/人工操作、资源校验及结构化内容持久化；`test-compact-delivery-ui.mjs` 覆盖单次批量提交与关闭后恢复 |
 | 3. 说明和图片 | Markdown 编辑/预览，多图选择、粘贴、拖入，图片前后切换；兼容来源 HTML 和禅道附件路径 | `TestWorkImagesBindingAndFormats` 验证上传、所有权、格式持久化和安全响应；`test-compact-delivery-ui.mjs` 验证两图上传、预览、切换和需求草稿恢复；`test-rich-description-ui.mjs` 验证富文本、安全清洗、禅道路径、不自动加载外图 |
-| 4. 纵向空间 | 变更标题、导航和动作同一行；列表无展开正文；说明移至问号；全局页隐藏无关上下文；共享紧凑间距、侧栏 | `test-console-visual.mjs` 检查构建/编排/变更、DBMS/Redis/日志/监控，明暗主题和 1440/900/700/390 宽度，检查无横向溢出与无关上下文；`test-work-items-table-ui.mjs` 验证 621 条的分页、人员筛选及响应式布局 |
+| 4. 纵向空间 | 公共 `PageHeader` 统一构建、应用详情、编排、变更、插件中心、DBMS/Redis、公共中心与日志/监控管理页；桌面标题、页签和动作同排，窄屏自动换行；说明移至问号 | `test-page-header-ui.mjs` 检查实际页头高度不超过 48px、标题/导航/动作纵向对齐、长应用名、省略后完整提示、壳内和独立页面、公共中心返回；明暗主题及 1440/900/700/390 宽度均检查溢出；配合 `test-console-visual.mjs` 和人员筛选分页用例 |
 | 5. 同步入口 | DBMS 独立“数据对比同步”；部署编辑器引用并携带需求关联；任务定义无环境，本次对比再选两侧环境；未启用 DBMS 时保留就地入口 | `TestDataSyncTaskIndependentOfEnvironments`；`test-data-sync-scope-ui.mjs` 验证同一任务跨环境复用、差异编辑、冻结范围和旧选择失效；`test-cross-workspace-continuity-ui.mjs` 验证实际壳内跳转及需求关联 |
 | 6. DBMS 操作 | SQL 查询和提交 SQL 为同级显著入口；编辑器直接展示而非叠窗；同步独立；查询和变更审批分别设置 | `test-workbench-ui.mjs` 验证查询/提交/审核全页路径、无嵌套编辑弹窗、独立审批开关；`TestWorkbenchIndependentPoliciesAndReadApproval`、`TestWorkbenchChangePolicySnapshotsAndProtection` 验证服务端策略隔离及保护环境限制 |
 | 7. Redis 操作 | 命令查询与命令变更显著；设置和绑定次级化；批准不自动执行，执行仍需明确确认 | `test-workbench-ui.mjs` 验证操作路径与无自动执行；`TestRedisReviewExecutionLedgerAndNoSecrets`、`TestRedisBindingApprovalAndScopeDrift`、`TestRedisSyntaxAndConnectionValidation` 验证审核、审计、范围漂移、风险命令与凭据保护 |
@@ -34,9 +34,20 @@ node scripts/test-cross-workspace-continuity-ui.mjs
 WORKBENCH_GATEWAY=1 node scripts/test-workbench-ui.mjs
 node scripts/test-data-sync-scope-ui.mjs
 node scripts/test-console-visual.mjs
+node scripts/test-page-header-ui.mjs
 node scripts/test-work-items-table-ui.mjs
 SHELL_UI_TEST_EMBEDDED=1 node scripts/test-rich-description-ui.mjs
 node scripts/test-platform-utilities-ui.mjs
 ```
 
 这份验收针对八项 UI/交互目标，不代表已完成代码自动合并、版本制品自动映射、通用任意 SQL、生产数据库集成或其他独立规划。
+
+## 页头一致性补验（2026-10-10）
+
+此前视觉用例主要覆盖边距、侧栏、主题与溢出，不能证明各页面标题和页签同排；这一缺口已由公共组件与专用布局断言补齐。
+
+- 构建、编排、变更、应用详情和插件中心使用同一组件；应用代码来源说明转入问号，长名称截断后仍有完整名称提示，环境状态和构建/部署动作保留。
+- 数据库 SQL 查询和提交 SQL、Redis 查询和提交命令变更仍是同级入口；没有改变审批策略、执行行为和草稿保活方式。
+- 日志订阅、监控报警、规则、机器、JVM 和接口页复用公共页头；接口页筛选条件较多时允许自然换行，不把筛选误作页签。
+- 日志搜索/实时日志、Trace 查询和监控总览原本直接展示操作工具栏或数据，不为形式一致额外增加标题占用。资源中心仍保留自身分类导航，避免挤入页头产生拥堵。
+- 应用详情验收使用只读模拟应用和环境，覆盖长名称和运行环境徽标，不依赖本地恰好存在应用，也不会创建真实应用或执行部署。

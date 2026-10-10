@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from '../../shared/components/PageHeader.vue'
 import { computed, inject, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import WorkDeliveryEditor from '../components/WorkDeliveryEditor.vue';
@@ -339,14 +340,14 @@ onMounted(async () => {
 </script>
 <template>
   <div class="change-center">
-    <div class="heading">
-      <div class="title">
+    <PageHeader>
+      <template #title><div class="title">
         <h2>变更管控</h2>
         <HelpTip
           text="需求与变更独立存在；发布版本汇总本次交付范围，不绑定环境。执行时由部署编排选择环境，审核的是具体执行快照。"
         />
-      </div>
-    <nav class="tabs">
+      </div></template>
+    <template #navigation><nav class="tabs" aria-label="变更管控视图">
       <button
         v-for="item in [
           { key: 'work', label: '需求与 BUG' },
@@ -359,9 +360,9 @@ onMounted(async () => {
       >
         {{ item.label }}
       </button>
-    </nav>
+    </nav></template>
 
-      <div v-if="!route.query.item" class="actions"><ElButton v-if="tab==='work'" @click="showSync=true">同步工作项</ElButton>
+      <template #actions><div v-if="!route.query.item" class="actions"><ElButton v-if="tab==='work'" @click="showSync=true">同步工作项</ElButton>
       <ElButton type="primary" @click="open(tab)"
         >＋
         {{
@@ -371,8 +372,8 @@ onMounted(async () => {
               ? "创建发布版本"
               : "新建变更"
         }}</ElButton
-      ></div>
-    </div>
+      ></div></template>
+    </PageHeader>
     <p v-if="addedVersion&&!route.query.item" class="notice">已纳入 {{addedVersion.version}}。<ElButton @click="view('versions',addedVersion);addedVersion=null">进入版本 →</ElButton></p>
     <template v-if="route.query.item">
       <ElButton @click="back">← 返回列表</ElButton>

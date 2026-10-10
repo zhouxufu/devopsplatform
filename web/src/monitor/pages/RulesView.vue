@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from "../../shared/components/PageHeader.vue"
 import { ref, inject, onMounted, watch, computed } from 'vue'
 import Sel from '../../shared/components/Sel.vue'
 import { ElButton, ElInput } from '../../shared/components/ui.js'
@@ -41,7 +42,7 @@ async function del(r) {
 </script>
 <template>
   <div style="padding:16px">
-    <div style="display:flex;align-items:center;margin-bottom:12px"><h3 style="font-size:14px">可用率规则</h3><ElButton type="primary" size="small" style="margin-left:auto" @click="open()">＋ 新建规则</ElButton></div>
+<PageHeader title="可用率规则"><template #actions><ElButton type="primary" size="small" @click="open()">＋ 新建规则</ElButton></template></PageHeader>
     <div style="color:var(--dim);font-size:11px;margin-bottom:10px">规则默认按当前环境隔离；只有显式选择“全部环境”才作为跨环境兜底。优先级：环境指标 → 环境默认 → 全环境指标 → 全环境默认 → 内置。</div>
     <div class="table-scroll"><table>
       <thead><tr><th>服务</th><th>环境</th><th>指标</th><th>成功码</th><th>忽略码</th><th>操作</th></tr></thead>

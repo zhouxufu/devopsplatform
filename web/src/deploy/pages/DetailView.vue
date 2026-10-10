@@ -1,4 +1,6 @@
 <script setup>
+import PageHeader from "../../shared/components/PageHeader.vue"
+import HelpTip from '../../shared/components/HelpTip.vue'
 import BuildEnvironmentEditor from '../components/BuildEnvironmentEditor.vue'
 import GitBranchSelect from '../components/GitBranchSelect.vue'
 import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor.vue'
@@ -525,17 +527,14 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
 </script>
 <template>
   <div>
-    <div class="app-header">
-      <span class="back" @click="router.push('/')">← 应用</span>
-      <span class="type-icon">{{ typeMeta.icon }}</span>
-      <div><h2>{{ name }}</h2><p>{{ typeMeta.label }} · {{ svc?.git_url || '未连接代码仓库' }}</p></div>
-      <div v-if="deployEnv" :class="['header-environment',{missing:!selectedTarget}]"><small>当前环境</small><b>{{ currentEnvironment?.protected ? '🔒 ' : '' }}{{ currentEnvironment?.display_name || deployEnv }}{{ selectedTarget ? '' : ' · 未接入' }}</b></div>
-      <ElButton size="small" @click="runPipeline">开始构建</ElButton>
-      <ElButton type="primary" size="small" @click="openOneClickDeploy()">一键部署</ElButton>
-    </div>
-    <nav class="app-tabs">
+    <PageHeader>
+      <template #title><button class="back op-btn" @click="router.push('/')" aria-label="返回基础构建">←</button><h2 class="app-name" :title="String(name)">{{ name }}</h2><HelpTip :text="typeMeta.label + ' · ' + (svc?.git_url || '未连接代码仓库')" /></template>
+      <template #navigation><nav class="app-tabs" aria-label="应用交付视图">
       <button v-for="t in [['overview','概览'],['build','构建'],['artifact','制品'],['environment','环境'],['release','发布单'],['resources','资源配置']]" :key="t[0]" :class="{ active: tab === t[0] }" @click="setTab(t[0])">{{ t[1] }}</button>
-    </nav>
+    </nav></template>
+      <template #actions>      <div v-if="deployEnv" :class="['header-environment',{missing:!selectedTarget}]"><small>当前环境</small><b>{{ currentEnvironment?.protected ? '🔒 ' : '' }}{{ currentEnvironment?.display_name || deployEnv }}{{ selectedTarget ? '' : ' · 未接入' }}</b></div>
+<ElButton size="small" @click="runPipeline">开始构建</ElButton><ElButton type="primary" size="small" @click="openOneClickDeploy()">一键部署</ElButton></template>
+    </PageHeader>
     <div v-if="globalEnvironmentMissing" class="context-warning">当前全局环境 <b>{{globalEnvironment}}</b> 尚未为此应用配置。<button class="op op-btn" @click="editTarget()">立即配置发布目标 →</button></div>
 
     <section v-if="tab==='resources'" class="section"><h3>应用资源配置</h3><p>声明应用使用的逻辑资源，并按环境绑定实际连接。日常构建和发布无需重复配置。</p><ElButton @click="showAppResources=true">配置应用资源</ElButton></section>
@@ -843,7 +842,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
   </div>
 </template>
 <style scoped>
-.app-header{display:flex;align-items:center;gap:10px}.back{color:var(--brand);cursor:pointer;margin-right:4px}.type-icon{display:grid;place-items:center;width:34px;height:34px;background:var(--panel2);border-radius:8px;font-size:18px}.app-header h2{font-size:17px}.app-header p{color:var(--muted);font-size:11px;max-width:440px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.app-header>button{margin-left:0}.header-environment{display:flex;align-items:center;gap:7px;margin-left:auto;padding:5px 9px;border:1px solid var(--border);border-radius:6px;background:var(--panel2)}.header-environment>small{color:var(--dim);white-space:nowrap}.header-environment>b{font-size:11px;white-space:nowrap}.header-environment.missing{border-color:color-mix(in srgb,var(--warn) 45%,var(--border));color:var(--warn)}
+.app-name{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.back{color:var(--brand);cursor:pointer;padding:6px;min-width:36px;min-height:36px}.header-environment{display:flex;align-items:center;gap:7px;padding:5px 9px;border:1px solid var(--border);border-radius:6px;background:var(--panel2)}.header-environment>small{display:none}.header-environment>b{font-size:11px;white-space:nowrap}.header-environment.missing{border-color:color-mix(in srgb,var(--warn) 45%,var(--border));color:var(--warn)}
 .app-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:14px 0 18px}.app-tabs button{padding:8px 14px;color:var(--muted);cursor:pointer;border:0;border-radius:0;background:transparent;border-bottom:2px solid transparent;margin-bottom:-1px}.app-tabs button.active{color:var(--brand);border-bottom-color:var(--brand);font-weight:600}
 .more-tabs{position:relative;margin-left:auto;color:var(--muted)}.more-tabs summary{list-style:none;cursor:pointer;padding:8px 12px}.more-tabs summary::-webkit-details-marker{display:none}.more-tabs.active summary{color:var(--brand);font-weight:600}.more-tabs>div{position:absolute;right:0;top:34px;z-index:20;display:flex;flex-direction:column;min-width:170px;padding:5px;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18)}.more-tabs>div button{margin:0;border:0;text-align:left;border-radius:5px}.more-tabs>div button:hover,.more-tabs>div button.active{background:var(--panel2)}
 .overview-strip{display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel);border:1px solid var(--border);border-radius:10px;margin-bottom:20px}.overview-strip>div{display:flex;flex-direction:column;padding:14px 16px;border-right:1px solid var(--border)}.overview-strip>div:last-child{border:0}.overview-strip small{color:var(--muted)}.overview-strip b{font-size:17px;margin:3px 0}.overview-strip span{font-size:10px;color:var(--dim)}

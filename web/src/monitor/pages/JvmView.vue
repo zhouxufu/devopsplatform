@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from '../../shared/components/PageHeader.vue'
 import { ref, inject, watch, onMounted } from 'vue'
 import Sel from '../../shared/components/Sel.vue'
 import Chart from '../../shared/components/Chart.vue'
@@ -43,12 +44,10 @@ import { computed } from 'vue'
   <div style="padding:16px">
     <div v-if="embedded && !curSvc" class="empty">请先在顶部“全局上下文”选择服务</div>
     <template v-else>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-      <h3 style="font-size:14px">服务指标（OTLP）</h3>
+    <PageHeader title="服务指标" help="OTLP 指标来自 Java Agent 或 Micrometer，无需侵入业务代码。"><template #navigation>
       <Sel v-model="svc" :options="otlpSvcs" width="160px" />
       <Sel v-model="instance" :options="instances" all-label="全部实例" width="160px" @change="loadNames" />
-      <span style="color:var(--dim);font-size:11px;margin-left:auto">javaagent / Micrometer · 业务零侵入</span>
-    </div>
+    </template></PageHeader>
     <div v-if="!otlpSvcs.length" class="empty">暂无 OTLP 数据——给服务加 OTel javaagent 或 Micrometer OTLP 后出现</div>
     <template v-else>
       <div style="margin-bottom:8px"><Sel v-model="name" :options="names" filterable width="230px" @change="loadSeries" /></div>

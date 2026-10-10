@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from "../../shared/components/PageHeader.vue"
 import { ref, onMounted } from 'vue'
 import Modal from '../../shared/components/Modal.vue'
 import HelpTip from '../../shared/components/HelpTip.vue'
@@ -41,7 +42,7 @@ onMounted(load)
 
 <template>
   <div>
-    <div class="page-head"><div class="title-row"><component :is="embedded ? 'h3' : 'h2'">环境管理</component><HelpTip text="环境是运行资源和发布策略的隔离边界；同一个应用可以配置多个环境，无需复制应用。" /></div><ElButton type="primary" native-type="button" size="small" @click="open()">＋ 新增环境</ElButton></div>
+<PageHeader title="环境管理" :heading-tag="embedded ? 'h3' : 'h2'" help="环境是运行资源和发布策略的隔离边界；同一个应用可以配置多个环境，无需复制应用。"><template #actions><ElButton type="primary" native-type="button" size="small" @click="open()">＋ 新增环境</ElButton></template></PageHeader>
     <div class="scope-note">主机、主机组和应用部署配置只能属于同一环境；受保护环境必须审批后才能发布。</div>
     <table>
       <thead><tr><th>环境</th><th>标识</th><th>保护策略</th><th>审批人</th><th>顺序</th><th>操作</th></tr></thead>

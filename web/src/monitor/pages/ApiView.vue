@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from '../../shared/components/PageHeader.vue'
 import { ref, inject, watch } from 'vue'
 import Sel from '../../shared/components/Sel.vue'
 import Chart from '../../shared/components/Chart.vue'
@@ -68,15 +69,14 @@ watch(iface, async () => {
   <div style="padding:16px">
     <div v-if="embedded && !curSvc" class="empty">请先在顶部“全局上下文”选择服务</div>
     <template v-else>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-      <h3 style="font-size:14px">接口分位</h3>
+    <PageHeader title="接口分位"><template #navigation>
       <Sel v-model="ifaceSvcs" :options="otlpSvcs" width="150px" @change="loadInstances" />
       <Sel v-model="instance" :options="instances" all-label="全部实例" width="160px" @change="loadNames" />
       <Sel v-model="metric" :options="names" width="190px" @change="loadIfaces" />
       <Sel v-model="iface" :options="ifaces.map(i => ({ value: i.iface, label: (i.iface || '（无接口维度）') + ' · ' + Math.round(i.cnt) + '/h' }))" width="260px" />
       <Sel v-model="meth" :options="[...new Set(attrs.map(a => a.meth).filter(Boolean))]" all-label="全部方法" width="120px" @change="loadQ" />
       <Sel v-model="status" :options="[...new Set(attrs.map(a => a.status).filter(Boolean))]" all-label="全部状态" width="110px" @change="loadQ" />
-    </div>
+    </template></PageHeader>
     <div v-if="last" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:12px">
       <div class="card"><div class="t">请求量</div><div class="v">{{ Math.round(last.cnt) }}<small style="font-size:12px;color:var(--dim)"> /分</small></div></div>
       <div class="card"><div class="t">平均耗时</div><div class="v">{{ ms(last.avg).toFixed(1) }}<small style="font-size:12px;color:var(--dim)"> ms</small></div><div class="s">{{ isSec ? '源单位:秒' : '源单位:毫秒' }}</div></div>

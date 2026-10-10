@@ -1,4 +1,5 @@
 <script setup>
+import PageHeader from "../components/PageHeader.vue"
 import { computed, onMounted, ref } from 'vue'
 import Modal from '../components/Modal.vue'
 import HelpTip from '../components/HelpTip.vue'
@@ -21,7 +22,7 @@ onMounted(load)
 </script>
 
 <template><div class="application-center">
-  <div class="page-head"><div class="title-row"><h2>应用中心</h2><HelpTip text="应用是日志、监控、构建和部署共享的稳定身份。数据可以先从任意入口接入，后续仍关联到同一个 application_id。" /></div><ElButton type="primary" @click="showCreate=true">＋ 新建应用</ElButton></div>
+<PageHeader title="应用中心" help="应用是日志、监控、构建和部署共享的稳定身份。数据可以先从任意入口接入，后续仍关联到同一个 application_id。"><template #actions><ElButton type="primary" @click="showCreate=true">＋ 新建应用</ElButton></template></PageHeader>
   <div class="toolbar"><ElInput v-model="keyword" placeholder="搜索应用名称" clearable /></div>
   <div v-if="loading" class="empty">正在加载…</div>
   <div v-else-if="filtered.length" class="app-grid"><article v-for="app in filtered" :key="app.application_id"><div class="app-title"><span><UiIcon name="apps" :size="22"/></span><div><b>{{app.name}}</b><code>{{app.application_id}}</code></div></div><div class="sources"><span v-for="source in app.sources||[]" :key="source">{{sourceLabel[source]||source}}</span><em v-if="!(app.sources||[]).length">待接入</em></div><small>{{app.status==='managed'?'已纳入平台管理':'由数据上报自动发现'}}</small></article></div>
