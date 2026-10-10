@@ -3,13 +3,13 @@ import { reactive, ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import RangePicker from '../shared/components/RangePicker.vue'
 import Sel from '../shared/components/Sel.vue'
 import { ElButton, ElInput } from '../shared/components/ui.js'
-import { isDark, toggleTheme } from '../shared/composables/theme.js'
+import { themeDark, toggleTheme } from '../shared/composables/theme.js'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
 import UserManagement from '../shared/components/UserManagement.vue'
 import UiIcon from '../shared/components/UiIcon.vue'
 import { DEFAULT_RECENT_MINUTES, inferRecentMinutes, recentRange, restoreTimeRange } from '../shared/timeRange.js'
 
-const dark = ref(isDark())
+const dark = themeDark
 function switchTheme() {
   dark.value = toggleTheme()
   // 广播给全部工作区 iframe（EP/自有变量同源各自动态生效）

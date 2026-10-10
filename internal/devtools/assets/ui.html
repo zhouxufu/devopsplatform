@@ -19,7 +19,11 @@
 <script>
 const $=id=>document.getElementById(id), api=(p,o)=>fetch('api/'+p,o), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function openPlatform(view){if(window.parent!==window)window.parent.postMessage({type:'platform.open',view},location.origin)}
-document.documentElement.classList.toggle('dark',matchMedia('(prefers-color-scheme:dark)').matches);addEventListener('message',e=>{if(e.source===window.parent&&e.origin===location.origin&&e.data?.type==='theme.sync')document.documentElement.classList.toggle('dark',!!e.data.dark)});
+function savedTheme(){try{return localStorage.getItem('lp-theme')!=='light'}catch{return true}}
+function applyTheme(dark){document.documentElement.classList.toggle('dark',dark);document.documentElement.style.colorScheme=dark?'dark':'light'}
+applyTheme(savedTheme());
+addEventListener('message',e=>{if(window.parent!==window&&e.source===window.parent&&e.origin===location.origin&&e.data?.type==='theme.sync'&&typeof e.data.dark==='boolean')applyTheme(e.data.dark)});
+addEventListener('storage',e=>{if(e.key!=='lp-theme'&&e.key!==null)return;try{if(e.storageArea!==localStorage)return}catch{return}applyTheme(savedTheme())});
 if(new URLSearchParams(location.search).has('panel'))document.querySelectorAll('.head-actions button:not(#createBtn)').forEach(b=>b.hidden=true);
 if(new URLSearchParams(location.search).has('panel'))addEventListener('keydown',e=>{
  if(document.querySelector('dialog[open]'))return;
