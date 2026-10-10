@@ -58,6 +58,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		}
 		return "local"
 	}
+	registerDeliveryRecordListRoutes(mux, st, wj, writeError)
 	errorStatus := func(err error, fallback int) int {
 		if errors.Is(err, ErrRunConflict) {
 			return http.StatusConflict
