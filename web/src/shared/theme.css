@@ -95,3 +95,6 @@ tr:hover td{background:var(--panel2)}
 :root:root:root .layout>header.workspace-sidebar.is-pinned{box-shadow:none}
 :root:root:root .layout:has(>header.workspace-sidebar.is-pinned)>main{margin-left:176px}
 :root:root:root .workspace-sidebar a:focus-visible,:root:root:root .workspace-sidebar button:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
+/* All calendars and advanced date panels float above the page, never take up
+   filter-row height. Keep oversized native calendars scrollable on narrow screens. */
+.platform-date-popper,.date-bounds-popover,.work-number-popover{max-width:calc(100vw - 24px);max-height:80dvh;overflow:auto}

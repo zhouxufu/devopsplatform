@@ -4,6 +4,7 @@
 import { computed } from 'vue'
 import { ElConfigProvider, ElDatePicker } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import { useDatePopup } from '../composables/datePopup.js'
 import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
 
@@ -13,6 +14,7 @@ const props = defineProps({
   width: { type: String, default: '230px' },
 })
 const emit = defineEmits(['update:modelValue', 'change'])
+const { picker, dateVisible } = useDatePopup()
 
 const inner = computed({
   get: () => (props.modelValue && props.modelValue.length === 2 ? [new Date(props.modelValue[0]), new Date(props.modelValue[1])] : null),
@@ -51,8 +53,8 @@ const shortcuts = [
 </script>
 <template>
   <ElConfigProvider :locale="zhCn">
-    <ElDatePicker v-model="inner" type="datetimerange" :shortcuts="shortcuts" range-separator="→"
-      start-placeholder="开始" end-placeholder="结束" :size="size" :clearable="true"
+    <ElDatePicker ref="picker" v-model="inner" type="datetimerange" :shortcuts="shortcuts" range-separator="→" popper-class="platform-date-popper" @visible-change="dateVisible"
+      start-placeholder="不限开始" end-placeholder="不限结束" :size="size" :clearable="true"
       format="MM-DD HH:mm" date-format="MM-DD" time-format="HH:mm"
       :style="{ width, '--el-date-editor-datetime-range-width': width }" />
   </ElConfigProvider>
