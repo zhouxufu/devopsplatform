@@ -1,6 +1,6 @@
 <script setup>
 import PageHeader from "../../shared/components/PageHeader.vue"
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import Modal from '../../shared/components/Modal.vue'
 import Sel from '../../shared/components/Sel.vue'
 import HelpTip from '../../shared/components/HelpTip.vue'
@@ -18,7 +18,14 @@ const connectionForm=ref({}),hostForm=ref({}),editingHost=ref(null),groupForm=re
 const applicationForm=ref({name:''})
 const hostKeyScanning=ref(false),pendingHostKey=ref(null)
 const connectionKeyScanning=ref(false),pendingConnectionHostKey=ref(null)
-const agentHost=ref(null),agentForm=ref({}),agentSaving=ref(false),agentApplying=ref(false),agentRemoteState=ref({}),agentInstallState=ref({})
+const agentHost=ref(null),agentForm=ref({}),agentSaving=ref(false),agentApplying=ref(false),agentRemoteState=ref({})
+const hostPending=ref({}),agentLoading=ref(false),agentPhase=ref('')
+const agentBusy=computed(()=>agentSaving.value||agentApplying.value)
+let agentLoadRequest=0
+function startHostOperation(h,operation){if(hostPending.value[h.name])return false;hostPending.value[h.name]=operation;return true}
+function endHostOperation(h){delete hostPending.value[h.name]}
+function closeAgentConfig(){if(agentBusy.value)return;agentLoadRequest++;agentLoading.value=false;showAgent.value=false}
+onBeforeUnmount(()=>{agentLoadRequest++})
 const KINDS={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 变更数据库',redis:'Redis 缓存维护',nacos:'Nacos 配置中心（2.4 / 2.5）',zentao:'禅道 16.0（需求来源）'}
 const ALL_RESOURCE_TABS={connections:['connections','devtools','连接'],environments:['environments','static','环境'],hosts:['hosts','resources','主机'],groups:['groups','apps','主机组'],variables:['variables','logs','变量组'],runners:['runners','build','构建 Runner'],audit:['audit','changes','审计日志']}
 const RESOURCE_SCOPES={dbms:['connections','environments','audit'],redis:['connections','environments','audit'],deploy:['connections','environments','hosts','groups','variables','runners','audit'],logs:['hosts','environments','audit'],monitor:['hosts','environments','audit'],devtools:['environments','audit']}
@@ -74,7 +81,7 @@ async function saveConnection(){
   if(f.kind==='git'&&gitAuthMode.value==='ssh'&&!f.secret_configured&&!(f.private_key||'').trim())return toast('请填写 SSH 私钥','warning')
   try{await post('api/connections',f);showConnection.value=false;toast('连接已保存','success');load()}catch(e){toast(e.message,'error')}
 }
-async function testConnection(v){testState.value[v.name]='testing';try{const r=await post(`api/connections/${v.name}/test`,{});testState.value[v.name]=r.ok?'ok':'fail';if(!r.ok)toast(r.error||r.status,'error')}catch(e){testState.value[v.name]='fail';toast(e.message,'error')}}
+async function testConnection(v){if(testState.value[v.name]==='testing')return;testState.value[v.name]='testing';try{const r=await post(`api/connections/${v.name}/test`,{});testState.value[v.name]=r.ok?'ok':'fail';toast(r.ok?'连接测试成功':r.error||r.status||'连接不可达',r.ok?'success':'error')}catch(e){testState.value[v.name]='fail';toast(e.message,'error')}}
 function editHost(v){editingHost.value=v||null;hostForm.value=v?{...v,password:''}:{name:'',environment:environments.value[0]?.name||'',addr:'',user:'root',key_path:'',password:'',host_key:''};hostKeyScanning.value=false;pendingHostKey.value=null;showHost.value=true}
 function updateHostAddress(value){const previous=(hostForm.value.addr||'').trim();hostForm.value.addr=value;pendingHostKey.value=null;if(previous&&previous!==value.trim()&&hostForm.value.host_key)hostForm.value.host_key=''}
 async function scanHostKey(){
@@ -99,21 +106,25 @@ async function saveHost(){
   if(!/^[\p{L}\p{N}][\p{L}\p{N}_.-]{0,63}$/u.test(f.name.trim()))return toast('主机名称支持中文、字母、数字、点、短横线和下划线，长度 1-64','warning')
   try{await post('api/hosts',f);showHost.value=false;toast('主机已保存','success');load()}catch(e){toast(e.message,'error')}
 }
-async function testHost(v){hostTestState.value[v.name]='testing';try{const r=await post(`api/hosts/${v.name}/test`,{});hostTestState.value[v.name]=r.ok?'ok':'fail';if(!r.ok)toast(r.error||'主机不可达','error')}catch(e){hostTestState.value[v.name]='fail';toast(e.message,'error')}}
+async function testHost(v){if(!startHostOperation(v,'ssh-test'))return;hostTestState.value[v.name]='testing';try{const r=await post(`api/hosts/${v.name}/test`,{});hostTestState.value[v.name]=r.ok?'ok':'fail';toast(r.ok?'SSH 连接成功':r.error||'主机不可达',r.ok?'success':'error')}catch(e){hostTestState.value[v.name]='fail';toast(e.message,'error')}finally{endHostOperation(v)}}
 function centralAgent(h){return agentStats.value.find(a=>a.id===`${h.environment}/${h.name}`)}
 function agentState(h){const live=centralAgent(h),remote=agentRemoteState.value[h.name];if(live?.online)return {cls:'st-ok',text:'● 在线'};if(remote?.installed&&remote?.active)return {cls:'st-run',text:'◐ 已启动，待上报'};if(remote?.installed)return {cls:'st-fail',text:'○ 服务已停止'};if(remote?.status==='not-installed')return {cls:'dim',text:'未安装'};if(live)return {cls:'dim',text:'○ 离线'};return {cls:'dim',text:'未检测'}}
-async function checkAgent(h){agentRemoteState.value[h.name]={status:'checking'};try{agentRemoteState.value[h.name]=await json(`api/hosts/${h.name}/agent/status`)}catch(e){agentRemoteState.value[h.name]={status:'error'};toast(e.message,'error')}}
+async function checkAgent(h){if(!startHostOperation(h,'agent-check'))return;try{agentRemoteState.value[h.name]=await json(`api/hosts/${h.name}/agent/status`);toast('Agent 检测完成：'+agentState(h).text,'success')}catch(e){toast(e.message,'error')}finally{endHostOperation(h)}}
 async function openAgentConfig(h){
+  if(agentBusy.value||!startHostOperation(h,'config-read'))return
+  const request=++agentLoadRequest
   const host=location.hostname||'127.0.0.1'
-  agentHost.value=h
+  agentHost.value=h;agentForm.value={};agentLoading.value=true;agentPhase.value='';showAgent.value=true
   try{
-    const [cfg,status]=await Promise.all([json(`api/hosts/${h.name}/agent/config`),json(`api/hosts/${h.name}/agent/status`).catch(()=>null)])
+    const [cfg,status]=await Promise.all([json(`api/hosts/${h.name}/agent/config`),json(`api/hosts/${h.name}/agent/status`).catch(e=>{if(request===agentLoadRequest)toast('Agent 状态检测失败：'+e.message,'warning');return null})])
+    if(request!==agentLoadRequest)return
     if(status)agentRemoteState.value[h.name]=status
     const safeCfg=cfg&&typeof cfg==='object'?cfg:{}
     const savedCollect=asArray(safeCfg.collect).filter(Boolean)
     agentForm.value={...safeCfg,server_url:safeCfg.server_url||`http://${host}:9801`,monitor_url:safeCfg.monitor_url||`http://${host}:9802`,run_user:safeCfg.run_user||'logagent',run_group:safeCfg.run_group||'logagent',spool_max_mb:safeCfg.spool_max_mb||1024,collect:(savedCollect.length?savedCollect:[{application_id:'',service:'',paths:['/var/log/app/*.log'],multiline:''}]).map(collectEditor)}
     showAgent.value=true
-  }catch(e){toast(e.message,'error')}
+  }catch(e){if(request===agentLoadRequest){showAgent.value=false;toast(e.message,'error')}}
+  finally{endHostOperation(h);if(request===agentLoadRequest)agentLoading.value=false}
 }
 function addCollect(){if(!Array.isArray(agentForm.value.collect))agentForm.value.collect=[];agentForm.value.collect.push(collectEditor({application_id:'',service:''}))}
 function editApplication(){applicationForm.value={name:''};showApplication.value=true}
@@ -139,22 +150,26 @@ function agentConfigBody(){
   return {body:{server_url:f.server_url,monitor_url:f.monitor_url,run_user:f.run_user,run_group:f.run_group,spool_max_mb:f.spool_max_mb,collect}}
 }
 async function saveAgentConfig(action='save'){
+  if(agentLoading.value||agentBusy.value||!agentHost.value)return
   const prepared=agentConfigBody();if(prepared.error)return toast(prepared.error,'warning')
+  const h=agentHost.value
+  if(!startHostOperation(h,'config-save'))return
   action==='save'?agentSaving.value=true:agentApplying.value=true
+  agentPhase.value='正在保存期望配置…'
   try{
-    const saved=await json(`api/hosts/${agentHost.value.name}/agent/config`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(prepared.body)})
+    const saved=await json(`api/hosts/${h.name}/agent/config`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(prepared.body)})
     agentForm.value={...(saved||{}),collect:asArray(saved?.collect).map(collectEditor)}
-    if(action==='apply'){const applied=await post(`api/hosts/${agentHost.value.name}/agent/config/apply`,{});agentForm.value={...agentForm.value,...applied};agentRemoteState.value[agentHost.value.name]={installed:true,active:true,status:'active'};toast('采集配置已保存并下发','success')}
-    else if(action==='install'){const result=await post(`api/hosts/${agentHost.value.name}/agent/install`,{});agentRemoteState.value[agentHost.value.name]={installed:true,active:true,status:'active',version:result.version};agentForm.value={...agentForm.value,synchronized:true,applied_at:Math.floor(Date.now()/1000)};toast('Agent 已安装并应用采集配置','success');loadAgentStats()}
+    if(action==='apply'){hostPending.value[h.name]='agent-apply';agentPhase.value='正在下发采集配置…';const applied=await post(`api/hosts/${h.name}/agent/config/apply`,{});agentForm.value={...agentForm.value,...applied,collect:asArray(applied?.collect||agentForm.value.collect).map(collectEditor)};agentRemoteState.value[h.name]={installed:true,active:true,status:'active'};toast('采集配置已保存并下发','success')}
+    else if(action==='install'){hostPending.value[h.name]='agent-install';agentPhase.value='正在安装 Agent 并应用配置…';const result=await post(`api/hosts/${h.name}/agent/install`,{});agentRemoteState.value[h.name]={installed:true,active:true,status:'active',version:result.version};agentForm.value={...agentForm.value,synchronized:true,applied_at:Math.floor(Date.now()/1000)};toast('Agent 已安装并应用采集配置','success');loadAgentStats()}
     else toast('期望配置已保存，尚未下发','success')
   }catch(e){toast(e.message,'error')}
-  finally{agentSaving.value=false;agentApplying.value=false}
+  finally{endHostOperation(h);agentSaving.value=false;agentApplying.value=false;agentPhase.value=''}
 }
 async function installAgentForHost(h){
-  agentInstallState.value[h.name]='installing'
+  if(!startHostOperation(h,'agent-install'))return
   try{const result=await post(`api/hosts/${h.name}/agent/install`,{});agentRemoteState.value[h.name]={installed:true,active:true,status:'active',version:result.version};toast('Agent 已安装并应用期望配置','success');loadAgentStats()}
-  catch(e){toast(e.message,'error');if(e.message.includes('采集配置'))openAgentConfig(h)}
-  finally{agentInstallState.value[h.name]=''}
+  catch(e){toast(e.message,'error');if(e.message.includes('采集配置')){endHostOperation(h);openAgentConfig(h)}}
+  finally{if(hostPending.value[h.name]==='agent-install')endHostOperation(h)}
 }
 function editGroup(v){groupForm.value=v?{...JSON.parse(JSON.stringify(v)),_existing:true}:{name:'',environment:environments.value[0]?.name||'',description:'',hosts:[],_existing:false};showGroup.value=true}
 function toggleHost(name){const a=groupForm.value.hosts??=[];const i=a.indexOf(name);i>=0?a.splice(i,1):a.push(name)}
@@ -177,13 +192,13 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
 
   <section v-if="tab==='connections'">
     <div class="section-head"><div><h3>资源连接</h3><p>账号密码加密保存；编辑时留空表示保留原凭据</p></div><ElButton type="primary" native-type="button" size="small" @click="editConnection()">＋ 新建连接</ElButton></div>
-    <div class="resource-grid"><article v-for="v in visibleConnections" :key="v.name" class="resource-card"><span class="icon">{{v.kind==='maven'?'Ⓜ':v.kind==='docker'?'🐳':v.kind==='aliyun-sae'?'☁':'⌘'}}</span><div class="grow"><b>{{v.name}}</b><small>{{KINDS[v.kind]}}{{v.kind==='git'?' · '+(v.config?.auth_mode==='ssh'?'SSH 私钥':'HTTPS / PAT'):''}}</small><code>{{v.kind==='aliyun-sae' ? `${v.config?.region} · ${v.config?.oss_bucket||'未配置 OSS'}` : v.endpoint}}</code></div><span :class="v.secret_configured?'st-ok':'st-run'">{{v.secret_configured?'凭据已配置':'无凭据'}}</span><div class="actions"><button class="op op-btn" @click="testConnection(v)">{{testState[v.name]==='testing'?'测试中…':testState[v.name]==='ok'?'✓ 可连接':testState[v.name]==='fail'?'✗ 重试':'测试'}}</button><button class="op op-btn" @click="editConnection(v)">编辑</button><button class="op op-btn del" @click="remove(`api/connections/${v.name}`,v.name)">删除</button></div></article></div>
+    <div class="resource-grid"><article v-for="v in visibleConnections" :key="v.name" class="resource-card"><span class="icon">{{v.kind==='maven'?'Ⓜ':v.kind==='docker'?'🐳':v.kind==='aliyun-sae'?'☁':'⌘'}}</span><div class="grow"><b>{{v.name}}</b><small>{{KINDS[v.kind]}}{{v.kind==='git'?' · '+(v.config?.auth_mode==='ssh'?'SSH 私钥':'HTTPS / PAT'):''}}</small><code>{{v.kind==='aliyun-sae' ? `${v.config?.region} · ${v.config?.oss_bucket||'未配置 OSS'}` : v.endpoint}}</code></div><span :class="v.secret_configured?'st-ok':'st-run'">{{v.secret_configured?'凭据已配置':'无凭据'}}</span><div class="actions"><ElButton text size="small" :loading="testState[v.name]==='testing'" :disabled="testState[v.name]==='testing'" @click="testConnection(v)">{{testState[v.name]==='testing'?'测试中…':testState[v.name]==='ok'?'✓ 可连接':testState[v.name]==='fail'?'✗ 重试':'测试'}}</ElButton><button class="op op-btn" :disabled="testState[v.name]==='testing'" @click="editConnection(v)">编辑</button><button class="op op-btn del" :disabled="testState[v.name]==='testing'" @click="remove(`api/connections/${v.name}`,v.name)">删除</button></div></article></div>
     <div v-if="!visibleConnections.length" class="onboarding"><span>🔌</span><h3>添加资源连接</h3><p>只配置当前功能需要的连接；凭据与其他插件共用，不必重复添加。</p><ElButton type="primary" size="small" @click="editConnection()">新建第一个连接</ElButton></div>
   </section>
 
   <section v-if="tab==='hosts'">
     <div class="section-head"><div><h3>主机</h3><p>{{hostPurpose}}</p></div><ElButton type="primary" native-type="button" size="small" @click="editHost()">＋ 新增主机</ElButton></div>
-    <div v-if="hosts.length" class="table-scroll"><table><thead><tr><th>名称</th><th>所属环境</th><th>地址</th><th>用户</th><th>凭据</th><th>连通性</th><th v-if="showAgentResources">采集 Agent</th><th>操作</th></tr></thead><tbody><tr v-for="h in hosts" :key="h.name"><td><b>{{h.name}}</b></td><td>{{envName(h.environment)}}</td><td><code>{{h.addr}}</code></td><td>{{h.user}}</td><td class="dim">{{h.key_path?'私钥':h.credential_configured?'密码（已保存）':'默认私钥'}}</td><td><span :class="hostTestState[h.name]==='ok'?'st-ok':hostTestState[h.name]==='fail'?'st-fail':hostTestState[h.name]==='testing'?'st-run':'dim'">{{hostTestState[h.name]==='ok'?'✓ 可达':hostTestState[h.name]==='fail'?'✗ 不通':hostTestState[h.name]==='testing'?'测试中…':'未测'}}</span></td><td v-if="showAgentResources"><span :class="agentState(h).cls">{{agentRemoteState[h.name]?.status==='checking'?'检测中…':agentState(h).text}}</span></td><td><button class="op op-btn" @click="testHost(h)">SSH 测试</button><template v-if="showAgentResources"><button class="op op-btn" @click="checkAgent(h)">检测 Agent</button><button class="op op-btn" @click="openAgentConfig(h)">采集配置</button><button class="op op-btn" :disabled="agentInstallState[h.name]==='installing'" @click="installAgentForHost(h)">{{agentInstallState[h.name]==='installing'?'处理中…':agentInstalled(h)?'升级 Agent':'安装 Agent'}}</button></template><button class="op op-btn" @click="editHost(h)">编辑</button><button class="op op-btn del" @click="remove(`api/hosts/${h.name}`,h.name)">删除</button></td></tr></tbody></table></div>
+    <div v-if="hosts.length" class="table-scroll"><table><thead><tr><th>名称</th><th>所属环境</th><th>地址</th><th>用户</th><th>凭据</th><th>连通性</th><th v-if="showAgentResources">采集 Agent</th><th>操作</th></tr></thead><tbody><tr v-for="h in hosts" :key="h.name" :aria-busy="!!hostPending[h.name]"><td><b>{{h.name}}</b></td><td>{{envName(h.environment)}}</td><td><code>{{h.addr}}</code></td><td>{{h.user}}</td><td class="dim">{{h.key_path?'私钥':h.credential_configured?'密码（已保存）':'默认私钥'}}</td><td><span :class="hostTestState[h.name]==='ok'?'st-ok':hostTestState[h.name]==='fail'?'st-fail':hostTestState[h.name]==='testing'?'st-run':'dim'">{{hostTestState[h.name]==='ok'?'✓ 可达':hostTestState[h.name]==='fail'?'✗ 不通':hostTestState[h.name]==='testing'?'测试中…':'未测'}}</span></td><td v-if="showAgentResources"><span :class="agentState(h).cls">{{agentRemoteState[h.name]?.status==='checking'?'检测中…':agentState(h).text}}</span></td><td><ElButton text size="small" :loading="hostPending[h.name]==='ssh-test'" :disabled="!!hostPending[h.name]" @click="testHost(h)">{{hostPending[h.name]==='ssh-test'?'SSH 测试中…':'SSH 测试'}}</ElButton><template v-if="showAgentResources"><ElButton text size="small" :loading="hostPending[h.name]==='agent-check'" :disabled="!!hostPending[h.name]" @click="checkAgent(h)">{{hostPending[h.name]==='agent-check'?'检测中…':'检测 Agent'}}</ElButton><ElButton text size="small" :loading="hostPending[h.name]==='config-read'" :disabled="!!hostPending[h.name]||agentBusy" @click="openAgentConfig(h)">{{hostPending[h.name]==='config-read'?'读取配置中…':'采集配置'}}</ElButton><ElButton text size="small" :loading="hostPending[h.name]==='agent-install'" :disabled="!!hostPending[h.name]" @click="installAgentForHost(h)">{{hostPending[h.name]==='agent-install'?'安装处理中…':agentInstalled(h)?'升级 Agent':'安装 Agent'}}</ElButton></template><button class="op op-btn" :disabled="!!hostPending[h.name]" @click="editHost(h)">编辑</button><button class="op op-btn del" :disabled="!!hostPending[h.name]" @click="remove(`api/hosts/${h.name}`,h.name)">删除</button></td></tr></tbody></table></div>
     <div v-else class="onboarding"><span>🖥</span><h3>{{plugin==='logs'?'添加日志采集主机':plugin==='monitor'?'添加监控主机':'添加发布主机'}}</h3><p>{{plugin==='deploy'?'先指定主机所属环境，再把同环境主机加入主机组。使用 SAE 时可以跳过此步骤。':'主机是 Agent 安装和采集配置的目标，先选择所属环境再建立 SSH 连接。'}}</p><ElButton type="primary" size="small" @click="editHost()">新增主机</ElButton></div>
   </section>
 
@@ -244,7 +259,9 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
     <div class="modal-actions"><ElButton type="primary" @click="saveConnection">加密保存</ElButton></div>
   </Modal>
   <Modal :show="showHost" :title="editingHost?'编辑主机':'新增主机'" @close="showHost=false"><div class="fld"><label>名称</label><ElInput v-model="hostForm.name" :disabled="!!editingHost" placeholder="例如 住房宝测试" /><small class="help">支持中文、字母、数字、点、短横线和下划线；保存后名称不可修改。</small></div><div class="fld"><label>所属环境</label><Sel v-model="hostForm.environment" :options="environments.map(e=>({value:e.name,label:(e.protected?'🔒 ':'')+e.display_name}))" width="100%" /><small class="help">加入主机组或应用环境后，所属环境将被锁定。</small></div><div class="fld"><label>地址（host[:port]）</label><ElInput :model-value="hostForm.addr" @update:model-value="updateHostAddress" /></div><div class="two"><div class="fld"><label>用户</label><ElInput v-model="hostForm.user" /></div><div class="fld"><label>私钥路径</label><ElInput v-model="hostForm.key_path" placeholder="留空使用默认私钥" /></div></div><div class="fld"><label>密码（可选）</label><ElInput v-model="hostForm.password" type="password" show-password placeholder="编辑时留空表示保留" /></div><div class="fld"><label>SSH 主机指纹</label><div class="fingerprint-row"><ElInput v-model="hostForm.host_key" placeholder="SHA256:…" /><ElButton :loading="hostKeyScanning" :disabled="hostKeyScanning||!hostForm.addr" @click="scanHostKey">{{hostKeyScanning?'获取中…':'获取指纹'}}</ElButton></div><small class="help">平台仅读取目标 SSH 公钥；请核对后确认。留空时仍会校验平台用户的 known_hosts。</small><div v-if="pendingHostKey" class="fingerprint-confirm"><b>确认目标主机身份</b><dl><div><dt>目标</dt><dd><code>{{pendingHostKey.addr}}</code></dd></div><div><dt>算法</dt><dd><code>{{pendingHostKey.algorithm}}</code></dd></div><div><dt>SHA256 指纹</dt><dd><code>{{pendingHostKey.fingerprint}}</code></dd></div></dl><p>请与服务器管理员或服务器控制台显示的指纹核对。确认后，平台才会保存并信任它。</p><div><ElButton size="small" @click="pendingHostKey=null">取消</ElButton><ElButton type="primary" size="small" @click="acceptHostKey">确认并使用</ElButton></div></div></div><div class="modal-actions"><ElButton type="primary" @click="saveHost">保存主机</ElButton></div></Modal>
-  <Modal :show="showAgent" :title="`日志采集配置 · ${agentHost?.name||''}`" wide @close="showAgent=false">
+  <Modal :show="showAgent" :title="`日志采集配置 · ${agentHost?.name||''}`" :busy="agentBusy" wide @close="closeAgentConfig">
+    <div v-if="agentLoading||agentBusy" class="agent-progress" role="status" aria-live="polite" aria-busy="true">{{agentLoading?'正在读取采集配置与 Agent 状态…':agentPhase}}<small v-if="agentBusy">远端安装或下发可能需要一些时间，请勿重复提交。</small></div>
+    <fieldset v-if="!agentLoading" class="agent-fields" :disabled="agentBusy">
     <div :class="['agent-config-state',agentForm.token_available?'ok':'error']">
       <b>{{agentForm.token_available?'✓ 上报凭据由平台统一管理':'平台未配置上报凭据'}}</b>
       <span>{{agentForm.token_available?'保存或下发时无需再次填写 Token。':'请先为平台进程配置 DEVOPSPLATFORM_DATA_TOKEN。'}}</span>
@@ -253,24 +270,25 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
       <span :class="agentForm.synchronized?'st-ok':'st-run'">{{agentForm.synchronized?'✓ 已与目标主机同步':'● 有尚未下发的配置'}}</span>
       <small v-if="agentForm.updated_at">更新于 {{fmt(agentForm.updated_at)}}</small>
     </div>
-    <div class="two"><div class="fld"><label>日志接收地址</label><ElInput v-model="agentForm.server_url" placeholder="http://平台地址:9801" /></div><div class="fld"><label>机器监控地址（可选）</label><ElInput v-model="agentForm.monitor_url" placeholder="http://平台地址:9802" /></div></div>
+    <div class="two"><div class="fld"><label>日志接收地址</label><ElInput :disabled="agentBusy" v-model="agentForm.server_url" placeholder="http://平台地址:9801" /></div><div class="fld"><label>机器监控地址（可选）</label><ElInput :disabled="agentBusy" v-model="agentForm.monitor_url" placeholder="http://平台地址:9802" /></div></div>
     <small class="help">远端主机必须能访问上述地址；不要填写 127.0.0.1，除非平台就在该主机。</small>
-    <div class="two"><div class="fld"><label>运行用户</label><ElInput v-model="agentForm.run_user" /></div><div class="fld"><label>运行用户组</label><ElInput v-model="agentForm.run_group" /></div></div>
-    <div class="fld"><label>本地断点缓冲（MB）</label><ElInputNumber v-model="agentForm.spool_max_mb" :min="64" :max="10240" /></div>
+    <div class="two"><div class="fld"><label>运行用户</label><ElInput :disabled="agentBusy" v-model="agentForm.run_user" /></div><div class="fld"><label>运行用户组</label><ElInput :disabled="agentBusy" v-model="agentForm.run_group" /></div></div>
+    <div class="fld"><label>本地断点缓冲（MB）</label><ElInputNumber :disabled="agentBusy" v-model="agentForm.spool_max_mb" :min="64" :max="10240" /></div>
     <div class="collect-head"><div><b>日志采集项</b><small>应用来源于统一应用目录，保存稳定 application_id</small></div><span><ElButton size="small" @click="editApplication">＋ 新建应用</ElButton><ElButton size="small" :disabled="!applications.length" @click="addCollect">＋ 添加采集项</ElButton></span></div>
     <div v-if="!applications.length" class="install-note">当前没有平台应用。可以直接新建日志应用，后续接入部署或 OTel 时继续沿用同一个应用身份。</div>
     <div v-for="(c,i) in agentForm.collect" :key="i" class="collect-card">
       <div class="collect-title"><b>采集项 {{i+1}}</b><button v-if="agentForm.collect.length>1" class="op del" @click="removeCollect(i)">删除</button></div>
-      <div class="fld"><label>平台应用</label><Sel :model-value="c.application_id" @update:model-value="id=>selectCollectApplication(c,applications.find(a=>a.application_id===id))" :options="applications.map(a=>({value:a.application_id,label:`${a.name} · ${(a.sources||[]).map(s=>s==='logs'?'日志':s==='otel'?'OTel':s==='deploy'?'部署':'手动').join(' + ')||'待接入'}`}))" placeholder="选择应用" filterable width="100%" /></div>
-      <div class="fld"><label>日志绝对路径（每行一个，支持 glob）</label><ElInput v-model="c.paths_text" type="textarea" :rows="2" placeholder="/opt/apps/order/logs/*.log" /></div>
-      <div class="fld"><label>日志合并方式</label><Sel v-model="c.multiline_mode" :options="MULTILINE_MODES" width="100%" />
+      <div class="fld"><label>平台应用</label><Sel :disabled="agentBusy" :model-value="c.application_id" @update:model-value="id=>selectCollectApplication(c,applications.find(a=>a.application_id===id))" :options="applications.map(a=>({value:a.application_id,label:`${a.name} · ${(a.sources||[]).map(s=>s==='logs'?'日志':s==='otel'?'OTel':s==='deploy'?'部署':'手动').join(' + ')||'待接入'}`}))" placeholder="选择应用" filterable width="100%" /></div>
+      <div class="fld"><label>日志绝对路径（每行一个，支持 glob）</label><ElInput :disabled="agentBusy" v-model="c.paths_text" type="textarea" :rows="2" placeholder="/opt/apps/order/logs/*.log" /></div>
+      <div class="fld"><label>日志合并方式</label><Sel :disabled="agentBusy" v-model="c.multiline_mode" :options="MULTILINE_MODES" width="100%" />
         <small v-if="c.multiline_mode==='single'" class="help">每行独立上报。Java 异常会被拆成多条，建议选择“Java 异常堆栈合并”。JSON 每行一条的日志可保留此模式。</small>
         <small v-else-if="c.multiline_mode==='java'" class="help">适用于日期或时间开头的日志，如 2026-09-16 10:24:37.025、2026-09-16T10:24:37 或 10:24:37。后续异常、at、Caused by 等行合并到上一条，同一条日志沿用首行级别；下一时间戳开始新日志。</small>
-        <template v-else><ElInput v-model="c.multiline" placeholder="例如 ^\d{4}-\d{2}-\d{2}" /><small class="help">匹配表示一条新日志开始，不匹配的后续行并入上一条。请按文件中真实的首行格式填写，不需要 /…/ 包裹。</small></template>
+        <template v-else><ElInput :disabled="agentBusy" v-model="c.multiline" placeholder="例如 ^\d{4}-\d{2}-\d{2}" /><small class="help">匹配表示一条新日志开始，不匹配的后续行并入上一条。请按文件中真实的首行格式填写，不需要 /…/ 包裹。</small></template>
       </div>
     </div>
     <small class="help">合并规则在“保存并下发”后生效，无需重装 Agent；仅影响后续采集，已入库的拆行日志不会自动重组。合并后的日志可在搜索结果中点击展开完整堆栈。</small>
-    <div class="modal-actions"><ElButton @click="showAgent=false">关闭</ElButton><ElButton :loading="agentSaving" :disabled="agentSaving||agentApplying||!applications.length" @click="saveAgentConfig('save')">仅保存期望配置</ElButton><ElButton v-if="agentHost" type="primary" :loading="agentApplying" :disabled="agentSaving||agentApplying||!applications.length||!agentForm.token_available" @click="saveAgentConfig(agentInstalled(agentHost)?'apply':'install')">{{agentInstalled(agentHost)?'保存并下发':'保存并安装 Agent'}}</ElButton></div>
+    </fieldset>
+    <div class="modal-actions agent-actions"><ElButton :disabled="agentBusy" @click="closeAgentConfig">关闭</ElButton><ElButton :loading="agentSaving" :disabled="agentLoading||agentBusy||!applications.length" @click="saveAgentConfig('save')">{{agentSaving?'保存中…':'仅保存期望配置'}}</ElButton><ElButton v-if="agentHost" type="primary" :loading="agentApplying" :disabled="agentLoading||agentBusy||!applications.length||!agentForm.token_available" @click="saveAgentConfig(agentInstalled(agentHost)?'apply':'install')">{{agentApplying?agentPhase:agentInstalled(agentHost)?'保存并下发':'保存并安装 Agent'}}</ElButton></div>
   </Modal>
   <Modal :show="showApplication" title="新建平台应用" @close="showApplication=false"><div class="fld"><label>应用名称</label><ElInput v-model="applicationForm.name" placeholder="例如 estate-ai-seek" @keydown.enter="saveApplication" /><small class="help">创建后可直接配置日志采集；以后接入构建部署或 OTel 时选择同一个应用。</small></div><div class="modal-actions"><ElButton @click="showApplication=false">取消</ElButton><ElButton type="primary" @click="saveApplication">创建</ElButton></div></Modal>
   <Modal :show="showGroup" title="环境主机组" @close="showGroup=false"><div class="fld"><label>主机组标识</label><ElInput v-model="groupForm.name" :disabled="groupForm._existing" /></div><div class="fld"><label>所属环境</label><Sel :model-value="groupForm.environment" :disabled="groupForm._existing" :options="environments.map(e=>({value:e.name,label:(e.protected?'🔒 ':'')+e.display_name}))" width="100%" @update:model-value="v=>{groupForm.environment=v;groupForm.hosts=[]}" /></div><div class="fld"><label>说明</label><ElInput v-model="groupForm.description" /></div><div class="fld"><label>选择同环境主机</label><div class="pick-list"><label v-for="h in hosts.filter(h=>h.environment===groupForm.environment)" :key="h.name" :class="{checked:groupForm.hosts?.includes(h.name)}"><input type="checkbox" :checked="groupForm.hosts?.includes(h.name)" @change="toggleHost(h.name)"/><b>{{h.name}}</b><small>{{h.addr}}</small></label></div><small v-if="!hosts.some(h=>h.environment===groupForm.environment)" class="help">该环境还没有主机，请先创建主机并指定环境。</small></div><div class="modal-actions"><ElButton type="primary" @click="saveGroup">保存</ElButton></div></Modal>
@@ -278,6 +296,8 @@ const envProtected=name=>!!environments.value.find(e=>e.name===name)?.protected
   <Modal :show="showRunner" title="构建 Runner" @close="showRunner=false"><div class="fld"><label>Runner 标识</label><ElInput v-model="runnerForm.name" /></div><div class="fld"><label>标签</label><ElInput v-model="runnerForm.labels" placeholder="jdk8,docker" /></div><div class="fld"><label>最大并发</label><ElInputNumber v-model="runnerForm.max_parallel" :min="1" :max="32" /></div><label><input v-model="runnerForm.enabled" type="checkbox"/> 可用</label><div class="modal-actions"><ElButton type="primary" @click="saveRunner">保存</ElButton></div></Modal>
 </div></template>
 <style scoped>
+.agent-fields{min-width:0;margin:0;padding:0;border:0}.agent-progress{padding:12px;margin-bottom:12px;border:1px solid var(--border);border-radius:8px;background:var(--brand-soft);color:var(--brand-ink)}.agent-progress small{display:block;color:var(--muted);margin-top:4px}.op-btn:disabled{opacity:.5;cursor:not-allowed}
+.agent-actions{position:sticky;bottom:0;z-index:2;flex-wrap:wrap;gap:8px;background:var(--panel);padding:12px 0;border-top:1px solid var(--border)}.agent-actions>.el-button+.el-button{margin-left:0}
 .page-head{display:flex;align-items:center;gap:7px;margin-bottom:12px}.page-head h2{font-size:20px}.resource-layout{display:grid;grid-template-columns:148px minmax(0,1fr);gap:18px}.resource-nav{display:flex;position:sticky;top:0;align-self:start;flex-direction:column;gap:3px;padding:5px;border:1px solid var(--border);border-radius:9px;background:var(--panel)}.resource-nav button{display:flex;align-items:center;gap:8px;width:100%;padding:9px 10px;border:0;border-radius:6px;background:transparent;color:var(--muted);text-align:left;cursor:pointer}.resource-nav button:hover{background:var(--panel2);color:var(--text)}.resource-nav button.active{background:color-mix(in srgb,var(--brand) 12%,var(--panel2));color:var(--brand)}.resource-nav button span{width:18px;text-align:center}.resource-nav button b{font-size:11px}.resource-content{min-width:0}.section-head p{color:var(--muted);font-size:11px}.section-head{display:flex;align-items:center;margin-bottom:12px}.section-head h3{font-size:15px}.section-head>button,.section-head>div:last-child:not(:first-child){margin-left:auto}.resource-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:10px}.resource-card{display:flex;align-items:flex-start;gap:10px;padding:14px;background:var(--panel);border:1px solid var(--border);border-radius:9px}.icon{display:grid;place-items:center;width:34px;height:34px;border-radius:7px;background:var(--panel2);font-size:18px}.grow{display:flex;flex-direction:column;min-width:0;flex:1}.grow small{color:var(--muted)}.grow code,.grow span{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.resource-card>.st-ok,.resource-card>.st-run{font-size:10px}.actions{width:100%;border-top:1px solid var(--border);padding-top:8px;margin-top:10px;margin-left:-44px;padding-left:44px;align-self:flex-end}.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.modal-actions{display:flex;justify-content:flex-end;margin-top:15px}.pick-list{display:grid;grid-template-columns:1fr 1fr;gap:7px}.pick-list label{display:grid;grid-template-columns:auto 1fr;align-items:center;column-gap:6px;border:1px solid var(--border);padding:8px;border-radius:7px}.pick-list label.checked{border-color:var(--brand)}.pick-list input{grid-row:1/3}.pick-list small{color:var(--muted);font-size:9px}.existing{background:var(--panel2);padding:8px;border-radius:6px;margin-bottom:10px;font-size:10px;color:var(--muted)}
 .onboarding{display:flex;min-height:240px;flex-direction:column;align-items:center;justify-content:center;padding:32px;border:1px dashed var(--border);border-radius:10px;color:var(--muted);text-align:center}.onboarding>span{font-size:30px}.onboarding h3{margin:8px 0 3px;color:var(--text);font-size:15px}.onboarding p{max-width:480px;margin-bottom:15px;font-size:12px}.dim{color:var(--dim)}
 .install-note{padding:9px 11px;margin-bottom:12px;border-radius:7px;background:var(--panel2);color:var(--muted);font-size:11px}.collect-head,.collect-title{display:flex;align-items:center;justify-content:space-between}.collect-head{margin:14px 0 7px}.collect-card{padding:10px 11px;margin-bottom:9px;border:1px solid var(--border);border-radius:8px;background:var(--panel2)}.collect-card .fld:last-child{margin-bottom:0}.install-success{display:flex;flex-direction:column;gap:2px;padding:10px;margin-top:10px;border:1px solid color-mix(in srgb,var(--ok) 45%,var(--border));border-radius:8px;color:var(--ok)}.install-success span,.install-success code{font-size:10px;color:var(--muted)}
