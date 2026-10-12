@@ -162,3 +162,34 @@ esac
 		}
 	}
 }
+
+func TestGitCheckoutPinnedCommit(t *testing.T) {
+	bin := t.TempDir()
+	commands := filepath.Join(t.TempDir(), "commands")
+	commit := strings.Repeat("a", 40)
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$TEST_COMMANDS"
+case "$*" in
+  *'rev-parse HEAD') printf '%s\n' "$TEST_COMMIT" ;;
+  *'rev-parse --short HEAD') echo aaaaaaa ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	outputs := filepath.Join(t.TempDir(), "outputs")
+	cmd := exec.Command("bash", gitCheckoutStepPath(t))
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "TEST_COMMANDS="+commands, "TEST_COMMIT="+commit, "LP_BRANCH="+commit, "LP_GIT_URL=https://example.invalid/a.git", "LP_WORKSPACE="+workspace, "LP_OUTPUTS_FILE="+outputs)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	log, _ := os.ReadFile(commands)
+	out, _ := os.ReadFile(outputs)
+	if !strings.Contains(string(log), "fetch origin "+commit) || !strings.Contains(string(log), "reset --hard "+commit) || strings.Contains(string(log), "origin/"+commit) || !strings.Contains(string(out), "FULL_COMMIT="+commit) {
+		t.Fatalf("pinned checkout=%s outputs=%s", log, out)
+	}
+}

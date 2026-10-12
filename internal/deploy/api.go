@@ -60,6 +60,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		return "local"
 	}
 	registerDeliveryRecordListRoutes(mux, st, wj, writeError)
+	registerBuildWorkbenchRoutes(mux, st, wj, writeError)
 	errorStatus := func(err error, fallback int) int {
 		if errors.Is(err, ErrRunConflict) {
 			return http.StatusConflict
@@ -228,6 +229,18 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 	})
 
 	// 触发构建
+	mux.HandleFunc("GET /api/artifacts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		v := st.GetArtifact(id)
+		if v == nil {
+			writeError(w, 404, "制品不存在")
+			return
+		}
+		if v.Metadata != nil {
+			delete(v.Metadata, "build_command")
+		}
+		wj(w, v)
+	})
 	mux.HandleFunc("POST /api/builds", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Service string `json:"service"`
@@ -1358,6 +1371,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 
 	// ---------- 流水线 ----------
 	pr := NewPipelineRunner(st, b, hub, deployer, stepLib)
+	registerBuildControlRoutes(mux, st, pr, wj, writeError, actorOf)
 	startRun := func(sv *Service, opts PipelineRunOptions, actor string) (int64, error) {
 		delivery := st.GetServiceDelivery(sv.Name)
 		deployEnvironment := strings.TrimSpace(opts.DeployEnvironment)
@@ -1377,7 +1391,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				deadline := time.Now().Add(30 * time.Minute)
 				for time.Now().Before(deadline) {
 					run := st.GetRun(id)
-					if run == nil || run.Status == "failed" || run.Status == "interrupted" {
+					if run == nil || run.Status == "failed" || run.Status == "interrupted" || run.Status == "canceled" {
 						return
 					}
 					if (run.Status == "success" || run.Status == "waiting_deploy") && run.ArtifactID > 0 {

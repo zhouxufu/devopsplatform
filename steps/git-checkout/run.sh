@@ -134,7 +134,13 @@ fi
 
 prepare_ssh_auth
 
-if [ ! -d "$LP_WORKSPACE/.git" ]; then
+if [[ "$BR" =~ ^[a-f0-9]{40}$ || "$BR" =~ ^[a-f0-9]{64}$ ]]; then
+  if [ ! -d "$LP_WORKSPACE/.git" ]; then git_auth clone "$URL" "$LP_WORKSPACE"; fi
+  git --git-dir="$LP_WORKSPACE/.git" --work-tree="$LP_WORKSPACE" remote set-url origin "$URL"
+  git_auth --git-dir="$LP_WORKSPACE/.git" --work-tree="$LP_WORKSPACE" fetch origin "$BR"
+  git_auth --git-dir="$LP_WORKSPACE/.git" --work-tree="$LP_WORKSPACE" reset --hard "$BR"
+  git_auth --git-dir="$LP_WORKSPACE/.git" --work-tree="$LP_WORKSPACE" clean -fd
+elif [ ! -d "$LP_WORKSPACE/.git" ]; then
   echo "⬇ clone $URL"
   if [ -n "$BR" ]; then git_auth clone "$URL" "$LP_WORKSPACE" -b "$BR"
   else git_auth clone "$URL" "$LP_WORKSPACE"; fi
@@ -152,3 +158,4 @@ else
 fi
 git --git-dir="$LP_WORKSPACE/.git" --work-tree="$LP_WORKSPACE" rev-parse --short HEAD > "$LP_OUTPUTS_FILE.new" 2>/dev/null || true
 echo "COMMIT=$(git --git-dir="$LP_WORKSPACE/.git" --work-tree="$LP_WORKSPACE" rev-parse --short HEAD 2>/dev/null)" >> "$LP_OUTPUTS_FILE"
+echo "FULL_COMMIT=$(git --git-dir="$LP_WORKSPACE/.git" --work-tree="$LP_WORKSPACE" rev-parse HEAD 2>/dev/null)" >> "$LP_OUTPUTS_FILE"

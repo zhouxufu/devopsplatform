@@ -109,6 +109,13 @@ GET  /api/connections             # Git/Maven/镜像仓库连接（不返回密�
 GET  /api/host-groups             # 可复用主机组
 GET  /api/variable-groups         # 加密变量组（只返回变量名）
 GET  /api/runners                 # 构建 Runner
+GET  /api/services/summary        # 各应用最新构建、制品与环境摘要
+GET  /api/pipeline/runs/page      # 构建记录分页：service/q/status/branch/actor/start/end/page/page_size
+GET  /api/artifacts/page          # 制品分页与来源、曾成功发布环境
+GET  /api/release-orders/page     # 发布记录分页：额外支持 environment
+GET  /api/pipeline/runs/{id}/capabilities # 当前用户可用的重试/取消能力
+POST /api/pipeline/runs/{id}/retry # 原 Commit/配置重试，confirm + reason，绝不自动发布
+POST /api/pipeline/runs/{id}/stop  # 取消当前构建，reason 必填，执行器退出后释放锁
 GET  /api/audit                   # 配置、构建、审批和发布审计
 GET  /api/me                      # 当前登录用户和内置角色
 GET  /api/users                   # 平台成员列表（写操作仅管理员）

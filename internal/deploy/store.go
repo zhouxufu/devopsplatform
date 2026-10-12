@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -257,6 +258,14 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db, secretKey: secretKey, dataDir: dir}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS build_run_snapshots(run_id BIGINT PRIMARY KEY,config_cipher LONGTEXT NOT NULL,commit_ref VARCHAR(64) NOT NULL DEFAULT '',created_at BIGINT NOT NULL)`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.ensureBuildWorkbenchIndexes(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := s.migrateWorkContent(); err != nil {
 		db.Close()
 		return nil, err
@@ -1100,6 +1109,12 @@ func (s *Store) UpdateStage(runID int64, idx int, st Stage) {
 	if idx < 0 || idx >= len(stages) {
 		return
 	}
+	if st.StartedAt == 0 {
+		st.StartedAt = stages[idx].StartedAt
+	}
+	if st.StartedAt > 0 && st.DurMs == 0 && st.Status != "running" && st.Status != "pending" {
+		st.DurMs = max(0, time.Now().Unix()-st.StartedAt) * 1000
+	}
 	stages[idx] = st
 	b, _ := json.Marshal(stages)
 	s.db.Exec(`UPDATE pipeline_runs SET stages=? WHERE id=?`, string(b), runID)
@@ -1181,9 +1196,15 @@ func (s *Store) RunLog(runID int64) string {
 }
 
 func (s *Store) Runs(service string, limit int) []PipelineRun {
+	return s.runsWhere(service, limit, 0)
+}
+func (s *Store) runsWhere(service string, limit int, id int64) []PipelineRun {
 	q := `SELECT id,service,trigger,branch,version,build_command,status,auto_deploy,deploy_host,deploy_environment,artifact,artifact_id,artifact_kind,artifact_digest,artifact_size,actor,stages,started_at,ended_at FROM pipeline_runs`
 	args := []any{}
-	if service != "" {
+	if id > 0 {
+		q += ` WHERE id=?`
+		args = append(args, id)
+	} else if service != "" {
 		q += ` WHERE service=?`
 		args = append(args, service)
 	}
@@ -1220,7 +1241,7 @@ func (s *Store) ActiveRun(service string) *PipelineRun {
 }
 
 func (s *Store) GetRun(id int64) *PipelineRun {
-	for _, r := range s.Runs("", 1000) {
+	for _, r := range s.runsWhere("", 1, id) {
 		if r.ID == id {
 			return &r
 		}

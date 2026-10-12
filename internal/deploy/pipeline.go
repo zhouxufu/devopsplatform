@@ -1,8 +1,10 @@
 package deploy
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -23,10 +25,11 @@ type PipelineRunner struct {
 	// activeByRunner 在单节点部署进程内落实 Runner 的并发上限。
 	activeByRunner    map[string]int
 	secretValuesByRun map[int64][]string
+	cancellations     map[int64]context.CancelFunc
 }
 
 func NewPipelineRunner(st *Store, b *Builder, hub *logHub, dp *Deployer, lib *StepLib) *PipelineRunner {
-	return &PipelineRunner{st: st, b: b, hub: hub, dp: dp, lib: lib, activeByRunner: map[string]int{}, secretValuesByRun: map[int64][]string{}}
+	return &PipelineRunner{st: st, b: b, hub: hub, dp: dp, lib: lib, activeByRunner: map[string]int{}, secretValuesByRun: map[int64][]string{}, cancellations: map[int64]context.CancelFunc{}}
 }
 
 func (pr *PipelineRunner) claimRunner(name string, maxParallel int) (func(), bool) {
@@ -57,11 +60,15 @@ func (pr *PipelineRunner) Start(sv *Service, autoDeploy bool, branch, actor stri
 
 func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts PipelineRunOptions, actor string) (int64, error) {
 	var err error
-	sv, err = pr.st.PrepareServiceResources(sv)
+	raw, err := serviceForPipelineRun(sv, opts)
 	if err != nil {
 		return 0, err
 	}
-	sv, err = serviceForPipelineRun(sv, opts)
+	delivery := pr.st.GetServiceDelivery(sv.Name)
+	if opts.ReplayDelivery != nil {
+		delivery = opts.ReplayDelivery
+	}
+	sv, err = pr.st.prepareServiceResources(raw, delivery)
 	if err != nil {
 		return 0, err
 	}
@@ -82,7 +89,6 @@ func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts Pi
 			return 0, err
 		}
 	}
-	delivery := pr.st.GetServiceDelivery(sv.Name)
 	runnerName := delivery.Runner
 	if runnerName == "" {
 		runnerName = "local"
@@ -105,11 +111,22 @@ func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts Pi
 		releaseRunner()
 		return 0, err
 	}
+	if err := pr.st.saveBuildSnapshot(r.ID, raw, delivery); err != nil {
+		pr.st.FinishRun(r.ID, "failed")
+		releaseRunner()
+		return 0, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	pr.mu.Lock()
+	pr.cancellations[r.ID] = cancel
+	pr.mu.Unlock()
 	pr.registerRunSecrets(r.ID, sv.RuntimeSecrets)
 	go func() {
+		defer cancel()
+		defer func() { pr.mu.Lock(); delete(pr.cancellations, r.ID); pr.mu.Unlock() }()
 		defer releaseRunner()
 		defer pr.registerRunSecrets(r.ID, nil)
-		pr.run(r.ID, sv, autoDeploy)
+		pr.runContext(ctx, r.ID, sv, autoDeploy)
 	}()
 	return r.ID, nil
 }
@@ -152,6 +169,23 @@ func (pr *PipelineRunner) emit(runID int64, line string) {
 
 // run 阶段推进；任一阶段失败即终止（deploy pending 留给手动/自动）
 func (pr *PipelineRunner) run(runID int64, sv *Service, autoDeploy bool) {
+	pr.runContext(context.Background(), runID, sv, autoDeploy)
+}
+func (pr *PipelineRunner) cancelBuild(id int64) error {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	if run := pr.st.GetRun(id); run == nil || run.Status != "running" {
+		return fmt.Errorf("该构建不处于运行状态")
+	}
+	cancel := pr.cancellations[id]
+	if cancel == nil {
+		return fmt.Errorf("执行器不在当前进程，或已经进入发布阶段；不能直接取消")
+	}
+	cancel()
+	delete(pr.cancellations, id)
+	return nil
+}
+func (pr *PipelineRunner) runContext(ctx context.Context, runID int64, sv *Service, autoDeploy bool) {
 	pr.emit(runID, fmt.Sprintf("▶ 流水线 #%d %s\n", runID, sv.Name))
 
 	steps := sv.Steps
@@ -175,6 +209,9 @@ func (pr *PipelineRunner) run(runID int64, sv *Service, autoDeploy bool) {
 	waitingDeploy := false
 
 	for i, inst := range steps {
+		if ctx.Err() != nil {
+			break
+		}
 		def := pr.lib.Get(inst.Step)
 		if def == nil {
 			pr.emit(runID, "✗ 未知步骤: "+inst.Step+"\n")
@@ -188,6 +225,9 @@ func (pr *PipelineRunner) run(runID int64, sv *Service, autoDeploy bool) {
 
 		// 部署类步骤：手动流水线必须显式确认；自动部署还要求步骤配置了主机。
 		if def.Kind == "deploy" {
+			pr.mu.Lock()
+			delete(pr.cancellations, runID)
+			pr.mu.Unlock()
 			host := def.RenderParams(inst)["HOST"]
 			if artifactRecord == nil {
 				pr.emit(runID, "✗ 部署步骤缺少可用制品\n")
@@ -225,7 +265,11 @@ func (pr *PipelineRunner) run(runID int64, sv *Service, autoDeploy bool) {
 		for key, value := range sv.RuntimeEnv {
 			env = append(env, key+"="+value)
 		}
-		code := pr.b.execBuildStep(sv, def, env, func(l string) { pr.emit(runID, l) })
+		code := pr.b.execBuildStepContext(ctx, sv, def, env, func(l string) { pr.emit(runID, l) })
+		if ctx.Err() != nil {
+			pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "canceled"})
+			break
+		}
 		if code != 0 {
 			pr.emit(runID, fmt.Sprintf("✗ %s 失败（退出码 %d）\n", stageName, code))
 			pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
@@ -234,6 +278,14 @@ func (pr *PipelineRunner) run(runID int64, sv *Service, autoDeploy bool) {
 		}
 		// 读取步骤输出（COMMIT/ARTIFACT）
 		if outs := readOutputs(outputDir); outs != nil {
+			if def.ID == "git-checkout" {
+				// Trust actual checked-out HEAD, not arbitrary later step output.
+				resolve := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+				resolve.Dir = workspace
+				if commit, err := resolve.Output(); err == nil && fullBuildCommit.MatchString(strings.TrimSpace(string(commit))) {
+					pr.st.db.Exec(`UPDATE build_run_snapshots SET commit_ref=? WHERE run_id=?`, strings.TrimSpace(string(commit)), runID)
+				}
+			}
 			if v := outs["COMMIT"]; v != "" {
 				version = v
 			}
@@ -264,13 +316,19 @@ func (pr *PipelineRunner) run(runID int64, sv *Service, autoDeploy bool) {
 				}
 			}
 		}
-		if failed {
+		if ctx.Err() != nil {
+			pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "canceled"})
+			break
+		} else if failed {
 			break
 		}
 		pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "success"})
 	}
 	pr.st.SetRunVersion(runID, version, artifact)
-	if failed {
+	if ctx.Err() != nil {
+		pr.emit(runID, "⏹ 构建已取消；不会自动发布\n")
+		pr.st.FinishRun(runID, "canceled")
+	} else if failed {
 		pr.st.FinishRun(runID, "failed")
 	} else if waitingDeploy {
 		pr.st.SetRunStatus(runID, "waiting_deploy")

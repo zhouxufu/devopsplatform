@@ -16,6 +16,7 @@ var (
 )
 
 type PipelineRunOptions struct {
+	ReplayDelivery          *ServiceDelivery
 	Branch                  string
 	DeployEnvironment       string
 	DeployReason            string

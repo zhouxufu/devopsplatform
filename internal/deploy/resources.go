@@ -690,9 +690,11 @@ func (s *Store) MarkScheduled(service string, at int64) {
 }
 
 func (s *Store) PrepareServiceResources(base *Service) (*Service, error) {
+	return s.prepareServiceResources(base, s.GetServiceDelivery(base.Name))
+}
+func (s *Store) prepareServiceResources(base *Service, d *ServiceDelivery) (*Service, error) {
 	copyService := *base
 	copyService.RuntimeEnv = map[string]string{}
-	d := s.GetServiceDelivery(base.Name)
 	if d == nil {
 		return &copyService, nil
 	}

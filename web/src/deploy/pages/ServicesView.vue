@@ -1,4 +1,6 @@
 <script setup>
+import BuildRunDialog from '../components/BuildRunDialog.vue'
+import {buildState,buildScroll} from '../buildNavigation.js'
 import PageHeader from "../../shared/components/PageHeader.vue"
 import BuildEnvironmentEditor from '../components/BuildEnvironmentEditor.vue'
 import GitBranchSelect from '../components/GitBranchSelect.vue'
@@ -20,7 +22,10 @@ const showNew = ref(false), editing = ref(null), wizardStep = ref(1)
 const form = ref({}), showAdvancedBuild = ref(false)
 const buildEnvironment = ref({mode:'local'})
 const gitConnections = ref([])
-const searchText = ref(''), category = ref('all'), activeTags = ref([])
+const ui=buildState('applications',{search:'',category:'all',tags:[],layout:'table',status:'',page:1})
+const searchText=computed({get:()=>ui.value.search,set:v=>{ui.value.search=v;ui.value.page=1}}),category=computed({get:()=>ui.value.category,set:v=>{ui.value.category=v;ui.value.page=1}}),activeTags=computed({get:()=>ui.value.tags,set:v=>ui.value.tags=v})
+const scroll=buildScroll('applications'),loading=ref(false),loadError=ref(''),savingNew=ref(false),me=ref({})
+fetch('api/me').then(r=>r.json()).then(v=>me.value=v).catch(()=>{})
 const TYPES = {
   jar: { label: 'Java JAR', icon: '☕', hint: 'Maven / Gradle 构建，发布到 Linux 主机' },
   static: { label: '前端静态站点', icon: '🌐', hint: 'Node.js 构建，发布到 Nginx 目录' },
@@ -28,20 +33,18 @@ const TYPES = {
 }
 const isSSHGitURL=value=>/^(?:ssh:\/\/|[^/@\s]+@[^:/\s]+:)/i.test((value||'').trim())
 
-async function load() {
-  const [svcs, runs, artifacts, deploys, catalog] = await Promise.all([api('api/services'), api('api/pipeline/runs?limit=200'), api('api/artifacts?limit=300'), api('api/deploys?limit=500'), api('/api/registry/applications').catch(() => [])])
-  services.value = svcs
-  gitConnections.value = (await api('api/connections')).filter(c=>c.kind==='git')
-  catalogApps.value = Array.isArray(catalog) ? catalog : []
-  const lb = {}, la = {}, lr = {}
-  for (const b of runs) if (!lb[b.service]) lb[b.service] = b
-  for (const a of artifacts) if (!la[a.service]) la[a.service] = a
-  for (const d of deploys) if (!lr[d.service]) lr[d.service] = d
-  lastBuild.value = lb
-  lastArtifact.value = la
-  lastRelease.value = lr
-  const pairs = await Promise.all(svcs.map(async s => [s.name, await api(`api/services/${encodeURIComponent(s.name)}/environments`), await api(`api/services/${encodeURIComponent(s.name)}/delivery`)]))
-  serviceTargets.value = Object.fromEntries(pairs.map(x=>[x[0],x[1]])); serviceDelivery.value = Object.fromEntries(pairs.map(x=>[x[0],x[2]]))
+async function load(){
+ loading.value=true;loadError.value=''
+ try{
+ const [svcs,summaries,catalog]=await Promise.all([api('api/services'),api('api/services/summary'),api('/api/registry/applications')])
+ if(!Array.isArray(svcs)||!Array.isArray(summaries))throw Error('应用状态响应无效，请重试')
+ services.value=svcs;catalogApps.value=Array.isArray(catalog)?catalog:[]
+ const lb={},la={},targets={},deliveries={}
+ for(const item of summaries){if(item.latest_run)lb[item.name]=item.latest_run;if(item.latest_artifact)la[item.name]=item.latest_artifact;targets[item.name]=item.environments||[];deliveries[item.name]=item.delivery||{}}
+ lastBuild.value=lb;lastArtifact.value=la;serviceTargets.value=targets;serviceDelivery.value=deliveries
+ gitConnections.value=(await api('api/connections')).filter(c=>c.kind==='git')
+ await scroll.restore()
+ }catch(e){loadError.value=e.message}finally{loading.value=false}
 }
 onMounted(load)
 
@@ -83,7 +86,7 @@ function selectCatalogApplication(applicationID) {
   if (app) form.value.name = app.name
 }
 function openEdit(s) {
-  router.push(`/svc/${encodeURIComponent(s.name)}/build`)
+  router.push({path:`/svc/${encodeURIComponent(s.name)}/settings`,query:{settings_return:'/'}})
 }
 function validateStep() {
   if (wizardStep.value === 1 && (!form.value.name?.trim() || (!form.value.git_url?.trim() && !form.value.workdir?.trim()))) return toast('填写应用名称和代码仓库', 'warning')
@@ -96,7 +99,8 @@ function validateStep() {
   }
   wizardStep.value++
 }
-async function save() {
+async function save(){if(savingNew.value)return;savingNew.value=true;try{await saveApplication()}catch(e){toast(e.message,'error')}finally{savingNew.value=false}}
+async function saveApplication() {
 	const body = { ...form.value }
 	body.tags = [...new Set((body.tags_text || '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean))].slice(0, 12)
 	delete body.tags_text
@@ -114,7 +118,7 @@ async function save() {
     showNew.value = false
     toast(editing.value ? '应用配置已保存' : '应用已接入，可以开始构建', 'success')
     await load()
-    if (!editing.value) router.push(`/svc/${encodeURIComponent(body.name)}/overview`)
+    if (!editing.value) router.push(`/svc/${encodeURIComponent(body.name)}/build`)
   } else toast((await r.json().catch(() => ({}))).error || '保存失败', 'error')
 }
 async function del(s) {
@@ -131,12 +135,7 @@ async function del(s) {
 
 const bcSvc = ref(null), bcBranch = ref(''), bcMavenProfiles = ref(''), bcMavenProperties = ref(''), bcGradleTasks = ref(''), bcGradleExcludedTasks = ref(''), bcGradleProjectProperties = ref(''), bcGradleSystemProperties = ref(''), showBC = ref(false)
 const bcSubmitting = ref(false)
-function build(s) {
-  bcSvc.value = s; bcBranch.value = s.branch || ''
-  bcMavenProfiles.value = s.maven_profiles || ''; bcMavenProperties.value = s.maven_properties || ''
-  bcGradleTasks.value = s.gradle_tasks || 'clean build'; bcGradleExcludedTasks.value = s.gradle_excluded_tasks || ''
-  bcGradleProjectProperties.value = s.gradle_project_properties || ''; bcGradleSystemProperties.value = s.gradle_system_properties || ''; showBC.value = true
-}
+function build(s){bcSvc.value=s;showBC.value=true}
 async function confirmBuild() {
   if (bcSubmitting.value) return
   const s = bcSvc.value; bcSubmitting.value = true
@@ -148,7 +147,7 @@ async function confirmBuild() {
   } catch(e) { toast(e.message, 'error') } finally { bcSubmitting.value = false }
 }
 const stCls = s => s === 'success' ? 'st-ok' : s === 'running' ? 'st-run' : s ? 'st-fail' : ''
-const buildText = s => s === 'success' ? '构建成功' : s === 'running' ? '构建中' : s ? '构建失败' : '尚未构建'
+const buildText=s=>({success:'构建成功',running:'构建中',failed:'构建失败',canceled:'已取消',interrupted:'已中断',waiting_deploy:'待部署'})[s]||(s||'尚未构建')
 const configuredCount = name => serviceTargets.value[name]?.length || 0
 const targetReady = t => t?.target_type === 'aliyun-sae' ? !!(t.deploy_config?.connection && t.deploy_config?.app_id && t.deploy_config?.namespace_id && t.deploy_config?.region) : !!(t?.host_group && t?.hosts?.length)
 const readyEnvironmentCount = name => (serviceTargets.value[name] || []).filter(targetReady).length
@@ -170,13 +169,14 @@ const filteredServices = computed(() => {
   return services.value.filter(s => {
     if (category.value !== 'all' && roleOf(s) !== category.value) return false
     if (activeTags.value.length && !activeTags.value.every(tag => (s.tags || []).includes(tag))) return false
+    if(ui.value.status&&lastBuild.value[s.name]?.status!==ui.value.status)return false
     if (!keyword) return true
     return [s.name, s.git_url, s.workdir, s.branch, ...(s.tags || [])].some(v => String(v || '').toLowerCase().includes(keyword))
   })
 })
 const buildSummary = s => s.artifact_type === 'jar' ? (s.build_tool === 'gradle' ? `${s.gradle_executable} ${s.gradle_tasks}` : `${s.maven_executable} ${s.maven_goals}`) : s.artifact_type === 'static' ? s.build_cmd : `Docker buildx → ${s.image_name}`
-function toggleTag(tag) { const i = activeTags.value.indexOf(tag); i >= 0 ? activeTags.value.splice(i, 1) : activeTags.value.push(tag) }
-function clearFilters() { searchText.value = ''; category.value = 'all'; activeTags.value = [] }
+function toggleTag(tag) { ui.value.page=1;const i = activeTags.value.indexOf(tag); i >= 0 ? activeTags.value.splice(i, 1) : activeTags.value.push(tag) }
+function clearFilters() { searchText.value = ''; category.value = 'all'; activeTags.value = [];ui.value.status='';ui.value.page=1 }
 </script>
 
 <template>
@@ -188,7 +188,11 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
       <div v-if="availableTags.length" class="tag-filters"><span>标签</span><button v-for="[tag,count] in availableTags" :key="tag" :class="{active:activeTags.includes(tag)}" @click="toggleTag(tag)">{{tag}} <small>{{count}}</small></button><button v-if="activeTags.length" class="clear-filter" @click="activeTags=[]">清除标签</button></div>
     </section>
 
-    <div class="app-grid">
+    <p v-if="loadError" role="alert" class="load-error">{{loadError}} <ElButton size="small" @click="load">重试</ElButton></p>
+ <div v-if="services.length" class="application-view-tools"><Sel v-model="ui.status" :options="[{value:'running',label:'构建中'},{value:'success',label:'成功'},{value:'failed',label:'失败'},{value:'canceled',label:'已取消'}]" all-label="全部构建状态" @change="ui.page=1"/><span v-if="loading" role="status">读取状态中…</span><span class="spacer"></span><ElButton size="small" :type="ui.layout==='table'?'primary':'default'" @click="ui.layout='table'">表格</ElButton><ElButton size="small" :type="ui.layout==='cards'?'primary':'default'" @click="ui.layout='cards'">卡片</ElButton></div>
+ <div v-if="ui.layout==='table'&&services.length" class="application-table-scroll"><table class="application-table"><thead><tr><th>应用 / 类型</th><th>最新构建</th><th>分支 / 代码版本</th><th>最新制品</th><th>环境就绪</th><th>更新时间</th><th>操作</th></tr></thead><tbody><tr v-for="s in filteredServices.slice((ui.page-1)*20,ui.page*20)" :key="s.name"><td><button class="op-btn" @click="router.push('/svc/'+encodeURIComponent(s.name)+'/overview')">{{s.name}}</button><small>{{TYPES[s.artifact_type]?.label}} · {{(s.tags||[]).join('、')}}</small></td><td :class="stCls(lastBuild[s.name]?.status)">{{buildText(lastBuild[s.name]?.status)}}<small v-if="lastBuild[s.name]">#{{lastBuild[s.name].id}}</small></td><td>{{lastBuild[s.name]?.branch||s.branch||'默认分支'}}<small>{{lastBuild[s.name]?.version||'—'}}</small></td><td>{{lastArtifact[s.name]?.version||'尚无制品'}}</td><td>{{readyEnvironmentCount(s.name)}} / {{configuredCount(s.name)}}</td><td>{{lastBuild[s.name]?.started_at?new Date(lastBuild[s.name].started_at*1000).toLocaleString('zh-CN',{hour12:false}):'—'}}</td><td class="application-table-actions"><ElButton size="small" type="primary" :disabled="loading" @click="build(s)">构建</ElButton><ElButton size="small" @click="openDelivery(s)">{{resourceReady(s.name)?'发布':'配置环境'}}</ElButton><details class="row-more"><summary>更多</summary><div><button @click="openEdit(s)">构建配置</button><button v-if="me.role==='admin'" @click="del(s)">删除应用</button></div></details></td></tr></tbody></table></div>
+ <footer v-if="ui.layout==='table'&&services.length" class="application-pages"><span>共 {{filteredServices.length}} 个应用</span><ElButton size="small" :disabled="ui.page<=1" @click="ui.page--">上一页</ElButton><span>{{ui.page}} / {{Math.max(1,Math.ceil(filteredServices.length/20))}}</span><ElButton size="small" :disabled="ui.page*20>=filteredServices.length" @click="ui.page++">下一页</ElButton></footer>
+    <div v-if="ui.layout==='cards'" class="app-grid">
 	  <article v-for="s in filteredServices" :key="s.name" class="app-card" role="link" tabindex="0" :aria-label="`查看应用 ${s.name}`" @click="router.push(`/svc/${encodeURIComponent(s.name)}/overview`)" @keydown.enter.self="router.push(`/svc/${encodeURIComponent(s.name)}/overview`)">
         <div class="app-top">
           <span class="app-icon"><UiIcon :name="s.artifact_type === 'jar' ? 'java' : s.artifact_type" :size="22"/></span>
@@ -214,26 +218,10 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
       <div class="onboarding-templates"><button v-for="(type, key) in TYPES" :key="key" type="button" @click="openTemplate(key)"><UiIcon :name="key === 'jar' ? 'java' : key" :size="24"/><strong>{{type.label}}</strong><small>{{type.hint}}</small><span>接入应用 →</span></button></div>
     </div>
 
-    <Modal :show="showBC" :title="`构建 ${bcSvc?.name}`" @close="!bcSubmitting && (showBC = false)">
-      <div class="summary-line"><span>{{ TYPES[bcSvc?.artifact_type]?.icon }}</span><div><b>{{ repoName(bcSvc?.git_url) }}</b><small>{{ TYPES[bcSvc?.artifact_type]?.label }}</small></div></div>
-      <div class="fld"><label>本次构建分支</label><GitBranchSelect v-model="bcBranch" :repositories="bcSvc?.git_url?[{service:bcSvc.name}]:[]" :disabled="bcSubmitting" /></div>
-      <details v-if="bcSvc?.build_tool === 'maven'" class="advanced-box">
-        <summary>本次覆盖 Maven 参数（可选）</summary>
-        <div class="fld"><label>Profiles</label><ElInput v-model="bcMavenProfiles" placeholder="ci,release" /></div>
-        <div class="fld"><label>-D 属性（每行 key=value）</label><ElInput v-model="bcMavenProperties" type="textarea" :rows="3" /></div>
-      </details>
-      <details v-if="bcSvc?.build_tool === 'gradle'" class="advanced-box" open>
-        <summary>本次覆盖 Gradle 参数（可选）</summary>
-        <div class="fld"><label>任务</label><ElInput v-model="bcGradleTasks" placeholder="clean build" /></div>
-        <div class="fld"><label>排除任务（空格或逗号分隔）</label><ElInput v-model="bcGradleExcludedTasks" placeholder="test integrationTest" /></div>
-        <div class="fld"><label>-P 项目属性（每行 key=value）</label><ElInput v-model="bcGradleProjectProperties" type="textarea" :rows="3" /></div>
-        <div class="fld"><label>-D 系统属性（每行 key=value）</label><ElInput v-model="bcGradleSystemProperties" type="textarea" :rows="3" /></div>
-      </details>
-      <div class="modal-actions"><ElButton :disabled="bcSubmitting" @click="showBC = false">取消</ElButton><ElButton type="primary" :loading="bcSubmitting" @click="confirmBuild">开始构建</ElButton></div>
-    </Modal>
+    <BuildRunDialog :show="showBC" :service="bcSvc" :delivery="serviceDelivery[bcSvc?.name]" @close="showBC=false" @started="id=>{showBC=false;router.push({path:'/run/'+id,query:{return:'/'}})}"/>
 
-    <Modal :show="showNew" :title="editing ? '编辑应用' : '接入应用'" wide @close="showNew = false">
-      <div class="wizard-steps">
+    <Modal :show="showNew" :busy="savingNew" :title="editing ? '编辑应用' : '接入应用'" wide @close="showNew = false">
+      <fieldset :disabled="savingNew" class="application-wizard"><div class="wizard-steps">
         <span v-for="(x, i) in ['代码', '构建方式', '确认']" :key="x" :class="{ active: wizardStep === i + 1, done: wizardStep > i + 1 }"><i>{{ wizardStep > i + 1 ? '✓' : i + 1 }}</i>{{ x }}</span>
       </div>
 
@@ -300,9 +288,9 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
         <ElButton v-if="wizardStep > 1" @click="wizardStep--">上一步</ElButton><span class="spacer"></span>
         <ElButton @click="showNew = false">取消</ElButton>
         <ElButton v-if="wizardStep < 3" type="primary" @click="validateStep">下一步</ElButton>
-        <ElButton v-else type="primary" @click="save">{{ editing ? '保存修改' : '完成接入' }}</ElButton>
+        <ElButton v-else type="primary" :loading="savingNew" @click="save">{{ editing ? '保存修改' : '完成接入' }}</ElButton>
       </div>
-    </Modal>
+    </fieldset></Modal>
   </div>
 </template>
 
@@ -325,4 +313,7 @@ function clearFilters() { searchText.value = ''; category.value = 'all'; activeT
 
 <style scoped>
 .services-page{max-width:1500px;margin:0 auto}.page-head{margin-bottom:24px;gap:12px}.page-head h2{font-size:22px}.filter-panel{padding:16px;margin-bottom:20px;box-shadow:var(--shadow-sm)}.result-count{font-size:12px}.app-grid{gap:20px;grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr))}.app-card{padding:22px;border-radius:14px;box-shadow:var(--shadow-sm)}.app-card:hover{transform:none;border-color:var(--brand);box-shadow:0 6px 20px rgb(29 41 61 / 8%)}.app-top>div{min-width:0}.app-top h3{font-size:17px;overflow-wrap:anywhere}.app-top div span{font-size:12px}.app-icon{width:44px;height:44px;border-radius:12px;background:var(--brand-soft);color:var(--brand-ink);flex-shrink:0}.app-tags{margin:14px 0 0}.app-tags span{font-size:11px;padding:2px 8px}.repo{margin:16px 0;padding:10px;font-size:12px}.app-state b{font-size:14px;margin:4px 0}.app-state small,.app-state code,.app-state span{font-size:12px}.next-action{padding:8px 10px;margin-top:18px;font-size:12px}.app-actions{margin-top:18px;padding-top:16px}.empty-state{padding:48px 24px;background:var(--panel);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-sm)}.empty-state .empty-symbol{display:grid;place-items:center;margin:0 auto 16px;width:60px;height:60px;border-radius:18px;background:var(--brand-soft);color:var(--brand-ink)}.empty-state h3{font-size:20px;margin:0 0 8px}.empty-state p{font-size:13px;margin-bottom:28px}.onboarding-templates{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;max-width:860px;margin:auto;text-align:left}.onboarding-templates button{display:grid;justify-items:start;gap:10px;padding:24px;background:var(--panel);border:1px solid var(--border);border-radius:12px;color:var(--text);transition:border-color .15s,background .15s}.onboarding-templates button:hover{border-color:var(--brand);background:var(--brand-soft)}.onboarding-templates .ui-icon{color:var(--brand-ink)}.onboarding-templates strong{font-size:15px}.onboarding-templates small{font-size:12px;line-height:1.7;color:var(--muted)}.onboarding-templates span{font-size:12px;font-weight:600;color:var(--brand-ink);margin-top:8px}.empty-state.compact{padding:36px 20px}@media(max-width:760px){.page-head{margin-bottom:18px}.onboarding-templates{grid-template-columns:1fr}.onboarding-templates button{grid-template-columns:32px 1fr;gap:6px 12px;padding:16px}.onboarding-templates .ui-icon{grid-row:1/4}.onboarding-templates small,.onboarding-templates span{grid-column:2}.onboarding-templates span{margin:0}.empty-state{padding:32px 20px}.filter-main{flex-wrap:wrap}.filter-main>:first-child{max-width:100%;flex:1 0 100%}.app-card{padding:18px}}
+</style>
+<style scoped>
+.application-view-tools,.application-pages{display:flex;align-items:center;gap:8px;margin:10px 0;font-size:12px}.application-pages>span:first-child{margin-right:auto}.application-table-scroll{border:1px solid var(--border);border-radius:8px;overflow:auto;background:var(--panel)}.application-table{width:100%;min-width:850px;border-collapse:collapse;font-size:12px}.application-table th,.application-table td{padding:12px;border-bottom:1px solid var(--border);text-align:left}.application-table th{background:var(--panel2);color:var(--muted)}.application-table small{display:block;color:var(--muted);font-size:11px;margin-top:5px}.application-table-actions{white-space:nowrap}.row-more{display:inline-block;position:relative;margin-left:8px}.row-more summary{cursor:pointer}.row-more>div{position:fixed;z-index:50;background:var(--panel);border:1px solid var(--border);padding:8px;box-shadow:var(--shadow-float)}.row-more button{display:block;border:0;background:none;color:var(--text);padding:8px;cursor:pointer}.application-wizard{border:0;padding:0;margin:0;min-width:0}.load-error{color:var(--error);font-size:13px}.application-view-tools .spacer{flex:1}
 </style>

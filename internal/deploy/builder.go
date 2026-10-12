@@ -455,7 +455,10 @@ func runGitSteps(dir string, sv *Service, emit func(string)) (string, error) {
 
 // ExecStep 执行步骤包（bash run.sh + 注入环境变量），输出流式回调
 func (b *Builder) ExecStep(def *StepDef, env []string, emit func(string)) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	return b.execStepContext(context.Background(), def, env, emit)
+}
+func (b *Builder) execStepContext(parent context.Context, def *StepDef, env []string, emit func(string)) int {
+	ctx, cancel := context.WithTimeout(parent, 40*time.Minute)
 	defer cancel()
 	script, err := filepath.Abs(filepath.Join(def.Dir, "run.sh"))
 	if err != nil {
@@ -469,34 +472,23 @@ func (b *Builder) ExecStep(def *StepDef, env []string, emit func(string)) int {
 }
 
 func runBuildCommand(cmd *exec.Cmd, emit func(string)) int {
-	stdout, err := cmd.StdoutPipe()
+	configureBuildCancellation(cmd)
+	// Let os/exec own the pipes: WaitDelay can then close descriptors held by
+	// descendants after cancellation. External scanners before Wait deadlock.
+	var mu sync.Mutex
+	output := func(line string) {
+		mu.Lock()
+		defer mu.Unlock()
+		emit(line)
+	}
+	stdout, stderr := &buildLineWriter{emit: output}, &buildLineWriter{emit: output}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
 	if err != nil {
-		emit("✗ 创建 stdout 管道失败: " + err.Error() + "\n")
-		return -1
+		finishBuildCancellation(cmd)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		emit("✗ 创建 stderr 管道失败: " + err.Error() + "\n")
-		return -1
-	}
-	if err := cmd.Start(); err != nil {
-		emit("✗ 启动步骤失败: " + err.Error() + "\n")
-		return -1
-	}
-	var wg sync.WaitGroup
-	scan := func(r interface{ Read([]byte) (int, error) }) {
-		defer wg.Done()
-		sc := bufio.NewScanner(r)
-		sc.Buffer(make([]byte, 64<<10), 256<<10)
-		for sc.Scan() {
-			emit(sc.Text() + "\n")
-		}
-	}
-	wg.Add(2)
-	go scan(stdout)
-	go scan(stderr)
-	wg.Wait()
-	err = cmd.Wait()
+	stdout.flush()
+	stderr.flush()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			return ee.ExitCode()
@@ -504,4 +496,39 @@ func runBuildCommand(cmd *exec.Cmd, emit func(string)) int {
 		return -1
 	}
 	return 0
+}
+
+// Drop oversized lines whole, never split secrets across redaction boundaries.
+type buildLineWriter struct {
+	emit     func(string)
+	buf      []byte
+	dropping bool
+}
+
+func (w *buildLineWriter) Write(p []byte) (int, error) {
+	for _, c := range p {
+		if c == '\n' {
+			w.flush()
+			continue
+		}
+		if w.dropping {
+			continue
+		}
+		if len(w.buf) >= 256<<10 {
+			w.buf = nil
+			w.dropping = true
+			continue
+		}
+		w.buf = append(w.buf, c)
+	}
+	return len(p), nil
+}
+func (w *buildLineWriter) flush() {
+	if w.dropping {
+		w.emit("⚠ 已省略超过 256 KiB 的单行构建输出\n")
+	} else if len(w.buf) > 0 {
+		w.emit(string(w.buf) + "\n")
+	}
+	w.buf = nil
+	w.dropping = false
 }

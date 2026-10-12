@@ -44,6 +44,7 @@ var deployMigrationTables = func() []deployMigrationTable {
 		migrationTable("service_environment_hosts", "service,environment,host,sort_order", "service,environment,host"),
 		migrationTable("deploy_meta", "key,value", "key"),
 		migrationTable("pipeline_runs", "id,service,trigger,branch,version,build_command,status,auto_deploy,deploy_host,deploy_environment,artifact,artifact_id,artifact_kind,artifact_digest,artifact_size,stages,log,actor,started_at,ended_at", "id"),
+		migrationTable("build_run_snapshots", "run_id,config_cipher,commit_ref,created_at", "run_id"),
 		migrationTable("deploys", "id,service,version,host,environment,artifact_id,artifact_kind,artifact_uri,artifact_digest,external_id,reason,status,log,actor,started_at,ended_at", "id"),
 		migrationTable("resource_connections", "name,kind,endpoint,config,secret,secret_configured,created_at,updated_at", "name"),
 		migrationTable("host_groups", "name,environment,description,created_at,updated_at", "name"),

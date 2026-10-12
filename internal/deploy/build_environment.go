@@ -178,14 +178,17 @@ bash /opt/devops-step/run.sh`)
 }
 
 func (b *Builder) execBuildStep(sv *Service, def *StepDef, env []string, emit func(string)) int {
+	return b.execBuildStepContext(context.Background(), sv, def, env, emit)
+}
+func (b *Builder) execBuildStepContext(parent context.Context, sv *Service, def *StepDef, env []string, emit func(string)) int {
 	if !sv.BuildEnvironment.isolated() || def.Kind != "build" {
-		return b.ExecStep(def, env, emit)
+		return b.execStepContext(parent, def, env, emit)
 	}
 	if err := checkGradleWrapperCompatibility(sv, b.buildDir(sv)); err != nil {
 		emit("✗ " + err.Error() + "\n")
 		return -1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 40*time.Minute)
 	defer cancel()
 	image := sv.BuildEnvironment.image()
 	// Resolve a tag once per step and run the exact local image ID we inspected.

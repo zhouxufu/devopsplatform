@@ -57,6 +57,7 @@ async function chooseApp(dialog,name){
 try{
  if(embedded)await page.goto(base)
  else await page.goto(base+(process.env.SHELL_UI_TEST_PATH||'/api/plugins/deploy/ui')+'#/')
+ await ui.getByRole('button',{name:'卡片',exact:true}).click()
  const card=ui.locator('article.app-card').filter({has:ui.getByRole('heading',{name:app.name,exact:true})})
  await card.getByRole('button',{name:'构建',exact:true}).click()
  const build=visibleDialog('构建 '+app.name)
