@@ -3,6 +3,7 @@ import { provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toast } from '../shared/composables/toast.js'
 import PlatformNav from '../shared/components/PlatformNav.vue'
+import WorkspaceSidebar from '../shared/components/WorkspaceSidebar.vue'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
 import UiIcon from '../shared/components/UiIcon.vue'
 const embedded = window.parent !== window.window
@@ -63,7 +64,7 @@ try { if (embedded) window.parent.postMessage({ type: 'context.request' }, locat
 </script>
 <template>
   <div class="layout" :class="{ embedded }">
-    <header class="workspace-sidebar">
+    <WorkspaceSidebar>
       <span class="logo"><UiIcon name="deploy"/> 部署平台</span>
       <nav aria-label="部署平台导航">
         <RouterLink to="/" title="基础构建"><UiIcon name="build"/><i>构建</i></RouterLink>
@@ -72,7 +73,7 @@ try { if (embedded) window.parent.postMessage({ type: 'context.request' }, locat
         <RouterLink to="/plugins" title="插件扩展"><UiIcon name="plugins"/><i>扩展</i></RouterLink>
       </nav>
       <PlatformNav @open="platformPanel=$event" />
-    </header>
+    </WorkspaceSidebar>
     <main><RouterView /></main>
     <PlatformPanel :view="platformPanel" plugin="deploy" :directAPI="directAPI" @switch="platformPanel=$event" @close="platformPanel=''" />
   </div>

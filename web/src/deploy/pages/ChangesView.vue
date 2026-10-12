@@ -1,9 +1,11 @@
 <script setup>
+import DateFilter from '../../shared/components/DateFilter.vue'
 import PageHeader from '../../shared/components/PageHeader.vue'
 import { computed, inject, onMounted, onBeforeUnmount, nextTick, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import WorkDeliveryEditor from '../components/WorkDeliveryEditor.vue';
 import WorkItemsTable from '../components/WorkItemsTable.vue';
+import WorkItemPicker from '../components/WorkItemPicker.vue';
 import DeliveryRecordsTable from '../components/DeliveryRecordsTable.vue';
 import GitBranchSelect from '../components/GitBranchSelect.vue';
 import DataSyncTasks from '../components/DataSyncTasks.vue';
@@ -80,6 +82,22 @@ async function runSQLPreview(){
 const dialog = ref(""),
   form = ref({}),
   saving = ref(false);
+const showWorkPicker=ref(false),pickedWork=ref([]),scopePreview=ref([]),scopeLoading=ref(false),scopeError=ref('');
+let scopeSequence=0,scopeTimer;
+function confirmWorkSelection(items){pickedWork.value=items;form.value.work_item_ids=items.map(w=>w.id);showWorkPicker.value=false}
+async function previewVersionScope(){
+ const sequence=++scopeSequence;scopeError.value='';scopeLoading.value=true;scopePreview.value=[]
+ const scope={work_item_ids:[...(form.value.work_item_ids||[])],manual_change_ids:[...(form.value.manual_change_ids||[])]}
+ try{
+  const data=scope.work_item_ids.length||scope.manual_change_ids.length?await api('api/release-versions/scope-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scope)}):[]
+  if(sequence===scopeSequence&&dialog.value==='versions'){if(!Array.isArray(data))throw Error('范围预览响应无效');scopePreview.value=data}
+ }catch(e){if(sequence===scopeSequence)scopeError.value=e.message}finally{if(sequence===scopeSequence)scopeLoading.value=false}
+}
+watch(()=>[dialog.value,form.value.id,JSON.stringify(form.value.work_item_ids||[]),JSON.stringify(form.value.manual_change_ids||[])],()=>{
+ scopeSequence++;clearTimeout(scopeTimer);scopePreview.value=[];scopeError.value=''
+ if(dialog.value==='versions'){scopeLoading.value=true;scopeTimer=setTimeout(previewVersionScope,150)}else{scopeLoading.value=false;showWorkPicker.value=false}
+})
+onBeforeUnmount(()=>{scopeSequence++;clearTimeout(scopeTimer)})
 const showBatchEditor=ref(false),batchEditor=ref(null),imageUploading=ref(false);
 const newWorkDraft=ref(null);
 const showDeliveryEditor=ref(false),deliveryItem=ref(null),deliveryEditor=ref(null),addedVersion=ref(null);
@@ -129,7 +147,7 @@ watch(()=>[tab.value,route.query.item],loadRecordDetail);
 const detailChanges = computed(()=> tab.value==='work' ? changes.value.filter(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id)) : tab.value==='changes'&&detail.value?[detail.value]:detail.value?.changes||[]);
 const detailVersions = computed(()=>versions.value.filter(v=>(v.work_items||[]).some(w=>w.id===detail.value?.id)||(v.changes||[]).some(c=>(c.work_items||[]).some(w=>w.id===detail.value?.id))));
 const detailRuns = computed(()=>deliveries.value.filter(r=>tab.value==='versions' ? r.plan.version?.id===detail.value?.id : detailVersions.value.some(v=>v.id===r.plan.version?.id)));
-const selectedChanges = computed(()=>scopeChanges(changes.value,form.value.work_item_ids,form.value.manual_change_ids));
+const selectedChanges = computed(()=>dialog.value==='versions'?scopePreview.value:scopeChanges(changes.value,form.value.work_item_ids,form.value.manual_change_ids));
 const frozenIDs=computed(()=>frozenChangeIDs(versions.value));
 const isFrozenChange=c=>c.frozen||frozenIDs.value.has(c.id);
 const showAddVersion=ref(false),addVersionID=ref(''),addItems=ref([]),addType=ref('work');
@@ -260,6 +278,7 @@ function open(type, item) {
 }
 async function save() {
   if(saving.value||imageUploading.value)return;
+  if(dialog.value==='versions'&&(scopeLoading.value||scopeError.value))return toast('请先完成范围预览或处理错误','warning');
   if (!form.value.title?.trim()) return toast("请填写标题", "warning");
   if (
     dialog.value === "versions" &&
@@ -406,13 +425,13 @@ onMounted(async () => {
     <Modal :show="showResources" title="资源中心" extra-wide @close="showResources=false;load()"><ResourcesView directAPI /></Modal>
     <ApplicationResourcesEditor :show="showBindings" :services="services" :initial-service="form.service" @close="showBindings=false;loadSQLResources()" />
     <Modal :show="showSync" title="同步工作项" wide @close="showSync=false">
-      <div class="form-grid"><label class="span">来源连接<Sel v-model="syncForm.connection" :options="syncConnections.map(c=>c.name)" width="100%" /></label><label class="span">本次状态<Sel v-model="syncStatusModel" :options="syncStatusOptions" width="100%" :disabled="saving" /></label><label class="span">更新或关闭日期基线（留空沿用连接设置）<ElInput v-model="syncForm.baseline" placeholder="YYYY-MM-DD；包含当天" /></label><p class="notice span">可同步类型：{{(syncCapability?.kinds||[]).map(k=>k==='bug'?'BUG':'需求').join('、')||'请选择来源连接'}}。状态默认沿用连接设置，可按本次需要调整；筛选不删除此前已同步的记录。按更新、关闭时间倒序读取，日期基线前的数据不纳入本次范围。已关闭不等于未上线；历史上线范围仍需核对。</p><p v-for="state in syncStates.filter(s=>s.connection===syncForm.connection)" :key="state.connection" class="span">上次同步：{{state.status==='success'?'成功':'失败'}} · {{state.detail}}</p><div class="actions span"><ElButton @click="openResources">配置来源连接</ElButton><ElButton type="primary" :disabled="!syncForm.connection" :loading="saving" @click="syncIssues">立即同步</ElButton></div></div>
+      <div class="form-grid"><label class="span">来源连接<Sel v-model="syncForm.connection" :options="syncConnections.map(c=>c.name)" width="100%" /></label><label class="span">本次状态<Sel v-model="syncStatusModel" :options="syncStatusOptions" width="100%" :disabled="saving" /></label><label class="span">更新或关闭日期基线（留空沿用连接设置）<DateFilter v-model="syncForm.baseline" :disabled="saving" placeholder="沿用连接设置；包含当天" /></label><p class="notice span">可同步类型：{{(syncCapability?.kinds||[]).map(k=>k==='bug'?'BUG':'需求').join('、')||'请选择来源连接'}}。状态默认沿用连接设置，可按本次需要调整；筛选不删除此前已同步的记录。按更新、关闭时间倒序读取，日期基线前的数据不纳入本次范围。已关闭不等于未上线；历史上线范围仍需核对。</p><p v-for="state in syncStates.filter(s=>s.connection===syncForm.connection)" :key="state.connection" class="span">上次同步：{{state.status==='success'?'成功':'失败'}} · {{state.detail}}</p><div class="actions span"><ElButton @click="openResources">配置来源连接</ElButton><ElButton type="primary" :disabled="!syncForm.connection" :loading="saving" @click="syncIssues">立即同步</ElButton></div></div>
     </Modal>
     <Modal :show="showSQLPreview" title="SQL 结构与影响范围预检（不执行）" extra-wide @close="showSQLPreview=false">
       <div class="form-grid"><label>目标环境<Sel v-model="previewEnvironment" :options="environments.map(e=>({value:e.name,label:e.display_name}))" width="100%" /></label><ElButton :loading="saving" @click="runSQLPreview">读取目标库并预检</ElButton><template v-if="sqlPreview"><p class="span">{{sqlPreview.connection}} / {{sqlPreview.database}} · {{sqlPreview.mode.toUpperCase()}}</p><p v-for="warning in sqlPreview.warnings" :key="warning" class="notice span">{{warning}}</p><article v-for="(op,index) in sqlPreview.statements" :key="index" class="span"><b>{{op.skip?'跳过（结构一致）':'计划执行'}} · {{op.reason||op.action}} · {{op.expected_rows||0}} 行</b><pre>{{op.sql}}</pre></article><p class="notice span">预检不执行 SQL。标记就绪后，在部署编排中选择 SQL 节点，提交冻结计划并按环境审批。</p></template></div>
     </Modal>
     <Modal
-      :show="!!dialog"
+      :show="!!dialog&&!showWorkPicker"
       :title="
         dialog === 'work'
           ? '需求 / BUG'
@@ -527,14 +546,11 @@ onMounted(async () => {
             >版本号<ElInput
               v-model="form.version"
               placeholder="例如 2026.10.1" /></label
-          ><label
-            >选择需求 / BUG<Sel
-              v-model="form.work_item_ids"
-              multiple
-              :options="work.map((w) => ({ value: w.id, label: w.title }))"
-              filterable
-              width="100%"
-              /></label
+          ><div class="version-work-choice">
+            <span>需求与 BUG · 已选 {{form.work_item_ids?.length||0}} 项</span>
+            <ElButton :disabled="saving" @click="showWorkPicker=true">选择需求与 BUG</ElButton>
+            <small>弹窗搜索、跨页勾选；确认后自动汇总关联变更。</small>
+          </div>
           ><label class="span"
             >手工补入变更（可含草稿）<Sel
               v-model="form.manual_change_ids"
@@ -548,11 +564,13 @@ onMounted(async () => {
               filterable
               width="100%"
           /></label>
-          <div class="selection span">
-            <p v-for="c in selectedChanges" :key="c.id">
+          <details class="selection span" :open="selectedChanges.length<=8">
+            <summary>实施范围 · {{scopeLoading?'正在汇总…':selectedChanges.length+' 项变更（已去重）'}}</summary>
+            <p v-if="scopeError" role="alert">{{scopeError}} <ElButton size="small" @click="previewVersionScope">重试</ElButton></p>
+            <div class="scope-preview-scroll"><p v-for="c in selectedChanges" :key="c.id">
               {{c.title}} · {{labels[c.status]}} · {{(form.manual_change_ids||[]).includes(c.id)?'手工选择':'由需求关联'}}
-            </p>
-          </div>
+            </p></div>
+          </details>
           <label class="span"
             >版本说明<ElInput
               v-model="form.description"
@@ -566,12 +584,13 @@ onMounted(async () => {
         <div class="footer span">
           <ElButton v-if="dialog==='work'&&!form.id&&(form.title||form.description)" native-type="button" :disabled="imageUploading||saving" @click="discardWorkDraft">放弃草稿</ElButton>
           <ElButton native-type="button" @click="closeDialog">{{dialog==='work'&&!form.id&&(form.title||form.description)?'关闭并保留':'取消'}}</ElButton
-          ><ElButton type="primary" native-type="submit" :loading="saving" :disabled="imageUploading"
+          ><ElButton type="primary" native-type="submit" :loading="saving" :disabled="imageUploading||(dialog==='versions'&&(scopeLoading||!!scopeError))"
             >保存</ElButton
           >
         </div>
       </form>
     </Modal>
+    <WorkItemPicker :show="showWorkPicker" :ids="form.work_item_ids||[]" :seed="[...work,...(form.work_items||[]),...pickedWork]" :me="me" :environments="environments" :version-i-d="Number(form.id||0)" @close="showWorkPicker=false" @confirm="confirmWorkSelection" />
   </div>
 </template>
 <style scoped>
@@ -744,4 +763,5 @@ p {
     flex-wrap: wrap;
   }
 }
+.version-work-choice{display:grid;gap:8px;font-size:13px}.version-work-choice .el-button{justify-self:start}.version-work-choice small{color:var(--muted)}.scope-preview-scroll{max-height:180px;overflow:auto}.selection summary{cursor:pointer;font-size:13px}
 </style>

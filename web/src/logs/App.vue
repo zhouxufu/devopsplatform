@@ -3,6 +3,7 @@ import { ref, provide, onMounted, onBeforeUnmount } from 'vue'
 import { isDark, toggleTheme } from '../shared/composables/theme.js'
 import { serviceNames } from './services.js'
 import PlatformNav from '../shared/components/PlatformNav.vue'
+import WorkspaceSidebar from '../shared/components/WorkspaceSidebar.vue'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
 import UiIcon from '../shared/components/UiIcon.vue'
 
@@ -42,7 +43,7 @@ onBeforeUnmount(() => window.removeEventListener('message', onContext))
 </script>
 <template>
   <div class="layout" :class="{ embedded }">
-    <header class="workspace-sidebar">
+    <WorkspaceSidebar>
       <span class="logo"><UiIcon name="logs"/></span>
       <nav aria-label="日志平台导航">
         <RouterLink to="/search"><UiIcon name="search"/><i>搜索</i></RouterLink>
@@ -51,7 +52,7 @@ onBeforeUnmount(() => window.removeEventListener('message', onContext))
         <RouterLink to="/status"><UiIcon name="status"/><i>状态</i></RouterLink>
       </nav>
       <PlatformNav @open="platformPanel=$event" />
-    </header>
+    </WorkspaceSidebar>
     <main><RouterView /></main>
     <PlatformPanel :view="platformPanel" plugin="logs" @switch="platformPanel=$event" @close="platformPanel=''" />
   </div>

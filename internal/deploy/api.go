@@ -37,6 +37,7 @@ func sameOrigin(r *http.Request) bool {
 func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib) *http.ServeMux {
 	mux := http.NewServeMux()
 	registerWorkItemAttachmentRoutes(mux, st)
+	registerWorkCandidateRoutes(mux, st)
 	registerGitBranchRoutes(mux, st)
 	registerWorkbenchRoutes(mux, st, busURL)
 	applicationObserver := appcatalog.NewObserver(busURL)

@@ -2,6 +2,7 @@
 import { ref, provide, watch, onMounted, onBeforeUnmount } from 'vue'
 import Sel from '../shared/components/Sel.vue'
 import PlatformNav from '../shared/components/PlatformNav.vue'
+import WorkspaceSidebar from '../shared/components/WorkspaceSidebar.vue'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
 import UiIcon from '../shared/components/UiIcon.vue'
 
@@ -60,13 +61,13 @@ const NAV = [
 </script>
 <template>
   <div class="layout" :class="{ embedded }">
-    <header class="workspace-sidebar">
+    <WorkspaceSidebar>
       <span class="logo"><UiIcon name="monitor"/></span>
       <nav aria-label="监控平台导航">
         <RouterLink v-for="n in NAV" :key="n[0]" :to="n[0]"><UiIcon :name="n[1]"/><i>{{ n[2] }}</i></RouterLink>
       </nav>
       <PlatformNav @open="platformPanel=$event" />
-    </header>
+    </WorkspaceSidebar>
     <main><div v-if="!embedded" class="standalone-context"><label>应用<Sel v-model="curSvc" :options="services" placeholder="选择服务" width="180px"/></label><label>环境<Sel v-model="curEnvironment" :options="environments" all-label="全部环境（聚合）" width="180px" /></label></div><RouterView /></main>
     <PlatformPanel :view="platformPanel" plugin="monitor" @switch="platformPanel=$event" @close="platformPanel=''" />
   </div>

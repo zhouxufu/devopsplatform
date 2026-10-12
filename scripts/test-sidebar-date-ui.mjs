@@ -1,0 +1,98 @@
+// Navigation/layout and date filtering only. External traffic and business writes
+// are blocked; the synchronization payload below is intercepted, never executed.
+import assert from 'node:assert/strict'
+import {readFile,mkdir} from 'node:fs/promises'
+import path from 'node:path'
+const base=process.env.CONSOLE_UI_TEST_URL||'http://127.0.0.1:9800',dist=process.env.CONSOLE_UI_DIST
+assert.equal(new URL(base).hostname,'127.0.0.1')
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright')
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH})
+const context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Shanghai'})
+const page=await context.newPage(),other=await context.newPage(),errors=[],writes=[],bodies=[],dates=[]
+for(const p of [page,other])p.on('pageerror',e=>errors.push(e.message))
+await context.route('**/*',async route=>{
+ const r=route.request(),u=new URL(r.url()),p=u.pathname
+ if(u.origin!==new URL(base).origin)return route.abort()
+ const reply=json=>route.fulfill({json})
+ if(dist){let file
+  if(p==='/')file='shell.html'
+  else if(/\/assets\/[^/]+\.(js|css)$/.test(p))file='assets/'+path.basename(p)
+  else if(/^\/api\/plugins\/(deploy|logs|monitor|dbms|redis)\/ui\/?$/.test(p))file=(['dbms','redis'].includes(p.split('/')[3])?'workbench':p.split('/')[3])+'.html'
+  if(file)return route.fulfill({body:await readFile(path.join(dist,file)),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html'})
+ }
+ if(p.endsWith('/api/connections'))return reply([{name:'QA source',kind:'zentao',endpoint:'https://example.invalid',config:{product_ids:'1'}}])
+ if(p.includes('/api/work-item-sync/')&&r.method()==='POST'){bodies.push(r.postDataJSON());return reply({status:'success',detail:'Mock only'})}
+ if(!['GET','HEAD','OPTIONS'].includes(r.method())){writes.push(p);return route.abort()}
+ if(p.endsWith('/api/delivery/runs/page'))dates.push(Object.fromEntries(u.searchParams))
+ return route.continue()
+})
+const sidebar=p=>p.locator('header.workspace-sidebar')
+const layout=p=>p.locator('.layout').first()
+const margin=p=>layout(p).locator(':scope>main').evaluate(e=>parseFloat(getComputedStyle(e).marginLeft))
+async function waitMode(p,mode){await p.waitForFunction(value=>document.querySelector('.workspace-sidebar')?.dataset.mode===value,mode);await p.waitForTimeout(180)}
+async function typeDate(input,value){await input.fill(value);await input.press('Enter');await input.blur();await page.waitForTimeout(400)}
+try{
+ await page.goto(base+'/api/plugins/dbms/ui#/query')
+ await page.evaluate(()=>{localStorage.removeItem('lp-sidebar-mode');dispatchEvent(new Event('sidebar-mode-change'))})
+ const editor=page.getByRole('textbox',{name:'查询 SQL',exact:true});await editor.fill('SELECT id FROM qa_table')
+ const original=await editor.elementHandle()
+ await page.mouse.move(1000,700);await sidebar(page).hover()
+ await sidebar(page).getByRole('button',{name:'固定导航',exact:true}).waitFor()
+ assert.equal(await margin(page),64,'drawer reflows the editor')
+ await sidebar(page).getByRole('button',{name:'固定导航',exact:true}).click();await waitMode(page,'pinned')
+ assert.equal(await margin(page),176)
+ await page.mouse.move(1000,700);assert.equal(await sidebar(page).evaluate(e=>Math.round(e.getBoundingClientRect().width)),176)
+ assert.equal(await editor.inputValue(),'SELECT id FROM qa_table');assert(await original.evaluate(e=>e.isConnected),'query session remounted')
+ await other.goto(base+'/api/plugins/logs/ui#/search');await waitMode(other,'pinned')
+ await sidebar(page).getByRole('button',{name:'切换抽屉导航',exact:true}).click();await waitMode(other,'drawer')
+ await layout(page).locator(':scope>main').click({position:{x:500,y:100}});await page.mouse.move(1000,700)
+ assert.equal(await margin(page),64)
+ await sidebar(page).hover();await sidebar(page).locator('nav button').first().click();await page.mouse.move(1000,700);await page.waitForTimeout(180)
+ assert.equal(await sidebar(page).evaluate(e=>Math.round(e.getBoundingClientRect().width)),64,'mouse navigation stays open after leaving')
+ await sidebar(page).getByRole('button',{name:'展开导航抽屉',exact:true}).focus()
+ await page.keyboard.press('Enter')
+ assert.equal(await sidebar(page).getByRole('button',{name:'固定导航',exact:true}).isVisible(),true)
+ await page.keyboard.press('Escape');assert.equal(await sidebar(page).getAttribute('class'),'workspace-sidebar')
+ await sidebar(page).hover();await sidebar(page).getByRole('button',{name:'固定导航',exact:true}).click()
+ await page.setViewportSize({width:390,height:1000});await waitMode(page,'drawer')
+ assert.equal(await margin(page),64);assert.equal(await editor.inputValue(),'SELECT id FROM qa_table')
+ await page.getByRole('button',{name:'展开导航抽屉',exact:true}).click();await page.waitForTimeout(180);assert.equal(await sidebar(page).evaluate(e=>Math.round(e.getBoundingClientRect().width)),176)
+ await layout(page).locator(':scope>main').click({position:{x:240,y:100}});await page.mouse.move(380,700)
+ await page.setViewportSize({width:1440,height:1000});await waitMode(page,'pinned')
+ for(const plugin of ['deploy','dbms','redis','logs','monitor']){
+  await page.goto(base+'/api/plugins/'+plugin+'/ui#/'+(plugin==='logs'?'search':''))
+  await waitMode(page,'pinned');assert.equal(await margin(page),176,plugin)
+  await sidebar(page).getByRole('button',{name:'切换抽屉导航',exact:true}).click()
+  await layout(page).locator(':scope>main').click({position:{x:300,y:200}});await page.mouse.move(1000,700)
+  await sidebar(page).hover();assert.equal(await margin(page),64,plugin)
+  await sidebar(page).getByRole('button',{name:'固定导航',exact:true}).click()
+  await page.setViewportSize({width:700,height:1000});await waitMode(page,'drawer')
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,plugin+' overflow')
+  await page.setViewportSize({width:1440,height:1000})
+ }
+ await page.goto(base+'/api/plugins/deploy/ui#/orchestration')
+ await page.locator('.date-filter summary').click()
+ const dateFields=page.locator('.date-filter .el-date-editor input')
+ await dateFields.first().click();const popup=page.locator('.el-picker-panel:visible');await popup.waitFor()
+ assert(await popup.getByText(/月/).count(),'calendar is not Chinese')
+ await popup.getByText('确定',{exact:true}).waitFor()
+ await page.keyboard.press('Escape')
+ await typeDate(dateFields.first(),'2026-10-06 08:12:34')
+ assert.equal(dates.at(-1).start,String(new Date('2026-10-06T08:12:34+08:00').getTime()/1000),'local timestamp or seconds changed')
+ assert(!dates.at(-1).end,'optional end became required')
+ await typeDate(dateFields.first(),'')
+ assert(!dates.at(-1).start,'empty date no longer means unrestricted')
+ await page.goto(base+'/api/plugins/deploy/ui#/changes?tab=work')
+ await page.getByRole('button',{name:'同步工作项',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'同步工作项',exact:true})
+ const baseline=dialog.locator('label').filter({hasText:/^更新或关闭日期基线/}).locator('.el-date-editor input')
+ await baseline.click();await page.locator('.el-picker-panel:visible').getByText(/月/).first().waitFor()
+ await page.keyboard.press('Escape');await typeDate(baseline,'2026-10-06')
+ await dialog.getByRole('button',{name:'立即同步',exact:true}).click();await page.getByText('工作项同步完成',{exact:true}).waitFor()
+ assert.equal(bodies[0].baseline,'2026-10-06')
+ await typeDate(baseline,'');await dialog.getByRole('button',{name:'立即同步',exact:true}).click()
+ await page.waitForTimeout(300);assert.equal(bodies[1].baseline,'','empty baseline must inherit connector settings')
+ await mkdir('/tmp/devops-sidebar-date-ui',{recursive:true});await page.screenshot({path:'/tmp/devops-sidebar-date-ui/sync-calendar.png'})
+ assert.deepEqual(errors,[]);assert.deepEqual(writes,[])
+ console.log(JSON.stringify({ok:true,checks:['drawer / pin in five plugins','no editor remount or input loss','shared browser preference','hover / click / keyboard / Escape','narrow viewport overrides desktop pin','Chinese date and time picker','optional bounds and clear','local seconds preserved','day baseline and empty inheritance'],noBusinessWrites:true}))
+}finally{await browser.close()}

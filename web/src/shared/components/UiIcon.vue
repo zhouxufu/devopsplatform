@@ -2,6 +2,8 @@
 // Original, local outline icons: no remote font or image dependency.
 defineProps({ name: { type: String, default: 'apps' }, size: { type: [Number, String], default: 18 } })
 const paths = {
+  sidebar: ['M3 4h18v16H3z', 'M9 4v16M5.5 8h1M5.5 12h1'],
+  pin: ['M9 3h6l-1 6 4 4v2H6v-2l4-4z', 'M12 15v7'],
   deploy: ['M14 4c3-2 6-2 7-1 1 1 1 4-1 7l-6 6-6-6z', 'M8 10 3 11l-1 5 6-1M14 16l-1 6 5-1 1-5', 'M17 6h.01M6 18l-3 3'],
   sync: ['M3 10a9 9 0 0 1 15-6l3 3M21 3v4h-4', 'M21 14A9 9 0 0 1 6 20l-3-3M3 21v-4h4'],
   history: ['M3 11a9 9 0 1 1 2 7', 'M3 4v7h7M12 7v5l3 2'],

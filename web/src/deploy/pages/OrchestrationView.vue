@@ -1,4 +1,5 @@
 <script setup>
+import DateFilter from '../../shared/components/DateFilter.vue'
 import { computed, inject, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import PageHeader from '../../shared/components/PageHeader.vue'
@@ -241,7 +242,7 @@ onBeforeUnmount(()=>{mounted=false;++detailSeq;++candidateSeq;++listSeq;clearInt
       <Sel v-model="filters.version_id" :options="versions.map(v=>({value:String(v.id),label:v.version}))" all-label="全部版本" filterable @change="resetPage" />
       <Sel v-model="filters.owner" :options="owners" all-label="全部发起人" filterable @change="resetPage" />
       <ElButton size="small" @click="filters.owner=me.username;resetPage()">只看我的</ElButton>
-      <details class="date-filter"><summary>日期范围</summary><label>开始<input v-model="filters.start" type="datetime-local" @change="resetPage" /></label><label>结束<input v-model="filters.end" type="datetime-local" @change="resetPage" /></label></details>
+      <details class="date-filter"><summary>日期范围</summary><label>开始<DateFilter v-model="filters.start" type="datetime" placeholder="不限开始时间" @change="resetPage" /></label><label>结束<DateFilter v-model="filters.end" type="datetime" placeholder="不限结束时间" @change="resetPage" /></label></details>
     </div>
     <div class="table-scroll" :aria-busy="reading"><table class="run-table"><thead><tr><th>执行单 / 编排</th><th>环境 / 版本</th><th>进度</th><th>状态</th><th>发起人 / 审核人</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
       <tr v-for="r in page.items" :key="r.id"><td>#{{r.id}} · {{r.name}}</td><td>{{r.environment_name||r.environment}}<small>{{r.version||'固定服务'}} · {{r.applications}} 个应用</small></td><td>{{r.completed}} / {{r.total_steps}}<small>{{r.current_node||'全部完成'}}</small></td><td><span class="status" :class="r.status">{{states[r.status]||r.status}}</span></td><td>{{r.owner}}<small>{{r.approver||'—'}}</small></td><td>{{formatTime(r.created_at)}}</td><td><ElButton size="small" @click="openDetail(r)">查看 / 处理</ElButton></td></tr>
