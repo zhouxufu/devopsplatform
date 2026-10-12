@@ -1,0 +1,14 @@
+apiVersion: deploy.logplatform.io/v1
+id: shell-script
+name: 自定义 Shell 脚本
+description: 在当前源码工作区执行 Bash 脚本；跟随应用 Runner 和构建环境，失败终止后续步骤。保存不执行。
+category: 构建
+kind: build
+params:
+  - name: SCRIPT
+    type: shell
+    label: 脚本（Bash）
+    default: |
+      # 当前目录为源码工作区，可读取已配置的构建变量。
+      # 任一命令失败将停止流水线；不要在此发布生产服务。
+      pwd

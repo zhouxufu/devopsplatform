@@ -34,6 +34,7 @@ const showBuildConfiguration = ref(false), buildConfigurationBackup = ref(null)
 const svc = ref(null), stepDefs = ref([]), steps = ref([])
 const buildTagsText = ref('')
 const newStep = ref('')
+const savingSteps=ref(false),advancedNoticeShown=ref(false)
 const artifactID = ref(''), deployEnv = ref(''), reason = ref('')
 const showDeployConfirm = ref(false), deploying = ref(false)
 const showDeployLog = ref(false), deployLog = ref('')
@@ -61,6 +62,17 @@ const saeConnections = computed(() => connections.value.filter(c => c.kind === '
 const activeDeploy = computed(() => deploys.value.find(d => d.status === 'running' && d.environment === deployEnv.value))
 const activeOrder = computed(() => releaseOrders.value.find(d => ['pending_approval','queued','running','waiting_next_batch','rolling_back'].includes(d.status) && d.environment === deployEnv.value))
 const globalEnvironmentMissing = computed(() => !!globalEnvironment.value && !targets.value.some(t => t.environment === globalEnvironment.value))
+const environmentTargetsLoaded=ref(false),notifiedEnvironmentContexts=new Set()
+let environmentNotice
+function environmentTargetsReady(){environmentTargetsLoaded.value=true}
+watch(()=>environmentTargetsLoaded.value&&globalEnvironmentMissing.value?`${name.value}:${globalEnvironment.value}`:'',key=>{
+  environmentNotice?.close();environmentNotice=null
+  if(key&&!notifiedEnvironmentContexts.has(key)){
+    notifiedEnvironmentContexts.add(key)
+    environmentNotice=toast(`当前环境 ${globalEnvironment.value} 尚未配置该应用的发布目标，可在“环境”中配置。`,'warning',{duration:6000})
+  }
+})
+onUnmounted(()=>environmentNotice?.close())
 const typeMeta = computed(() => ({
   jar: { icon: '☕', label: 'Java JAR' },
   static: { icon: '🌐', label: '前端静态站点' },
@@ -128,6 +140,7 @@ async function loadDeployData() {
   svc.value = (services ?? []).find(x => x.name === name.value)
   environments.value = environmentData ?? []
   targets.value = targetData ?? []
+  environmentTargetsReady()
   hostGroups.value = groupData ?? []
   connections.value = connectionData ?? []
 
@@ -155,6 +168,7 @@ async function loadDelivery() {
   delivery.value = { runner:'local', variable_groups:[], ...d }
   deliveryLoaded.value = true
   connections.value = c ?? []; variableGroups.value = v ?? []; runners.value = r ?? []; environments.value = es ?? []; targets.value = serviceTargets ?? []
+  environmentTargetsReady()
   rememberBuildConfiguration()
 }
 async function loadCfg() {
@@ -169,7 +183,8 @@ async function loadCfg() {
   rememberBuildConfiguration()
 }
 function setTab(t){
- if(savingBuildConfiguration.value||savingTarget.value)return toast('正在保存，请稍候','warning')
+ if(savingBuildConfiguration.value||savingTarget.value||savingSteps.value)return toast('正在保存，请稍候','warning')
+ if(tab.value==='advanced'&&advancedStepsDirty.value&&t!=='advanced'){if(!confirm('流水线有未保存修改，放弃修改并离开？'))return;steps.value=JSON.parse(JSON.stringify(svc.value?.steps||[]))}
  if(showTarget.value){if(!confirm('环境配置尚未保存，放弃修改并离开？'))return;showTarget.value=false}
  if(tab.value==='settings'&&buildConfigurationDirty.value&&t!=='settings'){
   if(!confirm('有未保存配置，放弃修改并离开？'))return
@@ -178,9 +193,9 @@ function setTab(t){
  }
  detailScroll.remember();router.replace({path:'/svc/'+encodeURIComponent(name.value)+'/'+t,query:route.query})
 }
-onBeforeRouteLeave(()=>{if(tab.value==='settings'&&buildConfigurationDirty.value&&!confirm('有未保存配置，放弃修改并离开？'))return false})
-onBeforeRouteUpdate(to=>{if(savingBuildConfiguration.value||savingTarget.value)return false;if((to.params.name!==name.value||to.params.tab!=='settings')&&tab.value==='settings'&&buildConfigurationDirty.value&&!confirm('有未保存配置，放弃修改并离开？'))return false})
-function unloadBuild(event){if(tab.value==='settings'&&buildConfigurationDirty.value){event.preventDefault();event.returnValue=''}}
+onBeforeRouteLeave(()=>{if(savingSteps.value||savingBuildConfiguration.value||savingTarget.value)return false;if(((tab.value==='settings'&&buildConfigurationDirty.value)||(tab.value==='advanced'&&advancedStepsDirty.value))&&!confirm('有未保存配置，放弃修改并离开？'))return false})
+onBeforeRouteUpdate(to=>{if(savingSteps.value||savingBuildConfiguration.value||savingTarget.value)return false;if((to.params.name!==name.value||to.params.tab!=='settings')&&tab.value==='settings'&&buildConfigurationDirty.value&&!confirm('有未保存配置，放弃修改并离开？'))return false;if((to.params.name!==name.value||to.params.tab!=='advanced')&&tab.value==='advanced'&&advancedStepsDirty.value&&!confirm('流水线有未保存修改，放弃修改并离开？'))return false})
+function unloadBuild(event){if((tab.value==='settings'&&buildConfigurationDirty.value)||(tab.value==='advanced'&&advancedStepsDirty.value)){event.preventDefault();event.returnValue=''}}
 window.addEventListener('beforeunload',unloadBuild)
 onUnmounted(()=>window.removeEventListener('beforeunload',unloadBuild))
 function loadTab(t) {
@@ -191,10 +206,11 @@ function loadTab(t) {
   if (t === 'artifact') {loadDeployData();loadDelivery()}
   if (t === 'environment') { loadDeployData(); loadDeployHist(); loadReleaseOrders();loadDelivery() }
   if (t === 'release') { loadDeployData(); loadDeployHist(); loadReleaseOrders(); loadDelivery() }
-  if (t === 'advanced') loadCfg()
+  if (t === 'advanced') {loadCfg();if(!advancedNoticeShown.value){advancedNoticeShown.value=true;toast('高级流水线仅编排构建步骤；部署使用发布单。保存配置不会执行步骤。','info',{duration:4500})}}
 }
 watch(tab, loadTab, { immediate: true })
 watch(name, value => {
+  environmentTargetsLoaded.value=false
   buildConfigurationBackup.value=null;savedBuildConfiguration.value='';deliveryLoaded.value=false;svc.value=null
   delivery.value={runner:'local',variable_groups:[]};targets.value=[];artifacts.value=[];runs.value=[];latest.value=null;showPublishForm.value=false
   artifactID.value = ''; deployEnv.value = ''
@@ -238,6 +254,7 @@ function rememberBuildConfiguration() {
   }
 }
 const buildConfigurationDirty = computed(() => !!savedBuildConfiguration.value && currentBuildConfiguration() !== savedBuildConfiguration.value)
+const advancedStepsDirty=computed(()=>!!svc.value&&JSON.stringify(steps.value)!==JSON.stringify(svc.value.steps||[]))
 const repositoryLabel = computed(() => {
   const url = String(svc.value?.git_url || '').replace(/\/$/, '')
   return url ? url.split(/[/:]/).pop()?.replace(/\.git$/, '') || url : (svc.value?.workdir || '未配置代码来源')
@@ -565,12 +582,21 @@ async function openDeployLog(d) {
   showDeployLog.value = true
 }
 const defOf = id => stepDefs.value.find(d => d.id === id)
-function setParam(i, k, v) { (steps.value[i].params ??= {})[k] = v }
-function move(i, d) { const j = i + d; if (j < 0 || j >= steps.value.length) return; [steps.value[i], steps.value[j]] = [steps.value[j], steps.value[i]] }
+function setParam(i, k, v) {if(savingSteps.value)return; (steps.value[i].params ??= {})[k] = v }
+function move(i, d) {if(savingSteps.value)return; const j = i + d; if (j < 0 || j >= steps.value.length) return; [steps.value[i], steps.value[j]] = [steps.value[j], steps.value[i]] }
+function removeBuildStep(i){if(!savingSteps.value)steps.value.splice(i,1)}
+function addBuildStep(){if(savingSteps.value)return;const id=newStep.value||buildStepDefs.value[0]?.id,def=defOf(id);if(!def)return toast('请选择构建步骤','warning');steps.value.push({step:id,params:Object.fromEntries((def.params||[]).map(p=>[p.name,p.default??'']))});newStep.value=''}
 async function saveSteps() {
-  const body = { ...svc.value, steps: steps.value }
-  const r = await fetch('api/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  toast(r.ok ? '流水线已保存' : '保存失败')
+  if(savingSteps.value||!svc.value)return
+  if(steps.value.some(s=>s.step==='shell-script'&&!String(s.params?.SCRIPT??defOf(s.step)?.params.find(p=>p.name==='SCRIPT')?.default??'').trim()))return toast('脚本内容不能为空','warning')
+  savingSteps.value=true
+  try{
+    const body = { ...svc.value, steps: JSON.parse(JSON.stringify(steps.value)) }
+    const r = await fetch('api/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const data=await r.json().catch(()=>({}))
+    if(!r.ok)return toast(data.error||'流水线保存失败','error')
+    svc.value.steps=body.steps;toast('流水线已保存；未执行任何步骤','success')
+  }catch{toast('保存失败，请重试；当前脚本仍保留','error')}finally{savingSteps.value=false}
 }
 const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(--warn)', 部署: 'var(--error)' }
 </script>
@@ -590,7 +616,6 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
  <details class="app-more"><summary>更多</summary><div><button @click="openOneClickDeploy()">构建并发布</button><button @click="openBuildConfiguration">应用设置</button><button @click="settingsSection='bindings';setTab('settings')">资源绑定</button></div></details>
  </template>
     </PageHeader>
-    <div v-if="globalEnvironmentMissing" class="context-warning">当前全局环境 <b>{{globalEnvironment}}</b> 尚未为此应用配置。<button class="op op-btn" @click="editTarget()">立即配置发布目标 →</button></div>
 
     <section v-if="tab==='resources'" class="section"><h3>应用资源配置</h3><p>声明应用使用的逻辑资源，并按环境绑定实际连接。日常构建和发布无需重复配置。</p><ElButton @click="showAppResources=true">配置应用资源</ElButton></section>
     <ApplicationResourcesEditor :show="showAppResources" :services="[{name:String(name)}]" :initial-service="String(name)" @close="showAppResources=false" />
@@ -601,7 +626,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
         <div><small>最新可发布制品</small><b>{{ latestArtifact?.version || '尚无制品' }}</b><span>{{ latestArtifact ? `制品 #${latestArtifact.id} · ${(latestArtifact.digest || '').slice(0, 18)}…` : '成功构建后生成' }}</span></div>
         <div><small>已配置环境</small><b>{{ targets.length }}</b><span>{{ targets.filter(t => t.protected).length }} 个受保护环境</span></div>
       </div>
-      <div class="overview-next"><span>{{!latestArtifact?'完成首次构建生成制品':!targets.length?'配置部署环境后可发布已有制品':'选择环境发布已有制品；实际运行状态需检测确认'}}</span><ElButton v-if="!targets.length&&latestArtifact" size="small" @click="editTarget()">配置部署环境</ElButton><ElButton v-else-if="latestArtifact" size="small" @click="publishArtifact(latestArtifact)">发布已有制品</ElButton><ElButton v-if="deployEnv" size="small" @click="openWorkspace('logs','#/search')">查看日志</ElButton><ElButton v-if="deployEnv" size="small" @click="openWorkspace('monitor','#/')">查看监控</ElButton></div>
+      <div v-if="latestArtifact&&targets.length" class="overview-next"><span>选择环境发布已有制品；实际运行状态需检测确认</span><ElButton size="small" @click="publishArtifact(latestArtifact)">发布已有制品</ElButton><ElButton v-if="deployEnv" size="small" @click="openWorkspace('logs','#/search')">查看日志</ElButton><ElButton v-if="deployEnv" size="small" @click="openWorkspace('monitor','#/')">查看监控</ElButton></div>
       <div class="section-head"><div><h3>环境</h3><p>同一份不可变制品逐级发布到测试、预发和生产</p></div><ElButton size="small" @click="editTarget()">＋ 配置环境</ElButton></div>
       <div class="env-grid">
         <article v-for="t in targets" :key="t.environment" :class="['env-card',{focused:deployEnv===t.environment}]" @click="deployEnv=t.environment">
@@ -609,7 +634,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
           <div class="current-version"><small>最近成功发布版本 · 运行状态未检测</small><code>{{ envState[t.environment]?.current?.version || '未发布' }}</code><span>{{ fmtTime(envState[t.environment]?.current?.ended_at) }}</span></div>
           <div class="env-actions" @click.stop><ElButton type="primary" size="small" :disabled="!targetReady(t) || envState[t.environment]?.latest?.status === 'running'" @click="releaseTo(t)">{{ !targetReady(t) ? '先配置资源' : envState[t.environment]?.latest?.status === 'running' ? '发布中' : '发布新版本' }}</ElButton><ElButton size="small" @click="editTarget(t)">配置</ElButton></div>
         </article>
-        <button v-if="!targets.length" class="add-env" @click="editTarget()"><b>＋</b><span>配置第一个应用环境</span><small>选择环境并绑定该环境的主机组</small></button>
+        <div v-if="!targets.length" class="add-env"><span>尚未配置部署环境</span><small>使用右上角“配置环境”绑定发布资源</small></div>
       </div>
       <div v-if="releaseOrders.length" class="section-head compact"><div><h3>最近发布单</h3></div><button class="text-link op-btn" @click="setTab('release')">查看全部 →</button></div>
       <div v-if="releaseOrders.length" class="table-scroll"><table>
@@ -691,7 +716,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
           <dl class="env-meta"><div><dt>当前版本</dt><dd>{{ envState[t.environment]?.current?.version || '未发布' }}</dd></div><div><dt>环境资源</dt><dd>{{ targetResource(t) }}</dd></div><div><dt>运行变量</dt><dd>{{t.runtime_env_keys?.length ? `${t.runtime_env_keys.length} 项（已加密）` : '未配置'}}</dd></div><div><dt>发布策略</dt><dd>{{isManagedTarget(t)?'SAE 变更单轮询':`每批 ${t.batch_size} 台 / 并发 ${t.max_parallel}${t.pause_between_batches?' / 批次暂停':''}`}}</dd></div><div v-if="isManagedJavaTarget(t)"><dt>检查失败</dt><dd>{{({rollback:'自动恢复旧版本',stop:'停止新版本',keep:'保留新版本运行'})[t.deploy_config?.health_failure_action||'rollback']}}</dd></div><div><dt>{{isManagedTarget(t)?'命名空间':'部署目录'}}</dt><dd><code>{{ isManagedTarget(t)?t.deploy_config?.namespace_id:t.remote_dir }}</code></dd></div></dl>
           <div class="env-actions"><ElButton size="small" type="primary" :disabled="!targetReady(t)" @click="releaseTo(t)">{{targetReady(t) ? '发布' : '先配置资源'}}</ElButton><ElButton v-if="isManagedJavaTarget(t)" size="small" @click="openInstances(t)">实例管理</ElButton><ElButton size="small" @click="editTarget(t)">编辑配置</ElButton><button class="remove op-btn" @click="deleteTarget(t)">移除</button></div>
         </article>
-        <button v-if="!targets.length" class="add-env" @click="editTarget()"><b>＋</b><span>配置部署环境</span><small>先在主机资源中添加可发布的目标</small></button>
+        <div v-if="!targets.length" class="add-env"><span>尚未配置部署环境</span><small>使用右上角“配置环境”绑定发布资源</small></div>
       </div>
     </div>
 
@@ -710,24 +735,24 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
 
     <!-- 高级配置（步骤编排） -->
     <div v-if="tab === 'advanced'">
-      <div class="advanced-notice"><b>高级构建流水线</b><span>这里只编排源码、检查、构建和制品步骤；部署由发布单处理，因此不会再出现 HOST 参数。</span><ElButton size="small" @click="setTab('build')">← 返回构建配置</ElButton></div>
+      <div class="advanced-heading"><h3>高级构建流水线</h3><HelpTip text="编排源码、检查、构建、脚本和制品步骤；部署由发布单处理。脚本在所选 Runner / 隔离容器中执行，不是远程主机脚本。保存不执行。"/><ElButton size="small" @click="setTab('build')">← 返回构建</ElButton></div>
       <div v-if="svc" class="dim" style="font-size:11px;margin-bottom:8px">代码：{{ svc.git_url || '（未配 git）' }} · 分支 {{ svc.branch || '默认' }}</div>
-      <div v-for="(inst, i) in steps" :key="i" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--panel2)">
+      <fieldset :disabled="savingSteps" class="settings-editor-body"><div v-for="(inst, i) in steps" :key="i" style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--panel2)">
         <div style="display:flex;align-items:center;gap:8px">
           <span style="width:20px;text-align:center;color:var(--dim)">{{ i + 1 }}</span>
           <span :style="{ width:'6px', height:'16px', borderRadius:'2px', background: CAT_COLOR[defOf(inst.step)?.category] || 'var(--dim)' }"></span>
           <b>{{ defOf(inst.step)?.name || inst.step }}</b>
           <span style="color:var(--dim);font-size:11px">{{ inst.step }}</span>
           <span style="margin-left:auto;display:flex;gap:8px">
-            <span class="op" @click="move(i, -1)">↑</span><span class="op" @click="move(i, 1)">↓</span>
-            <span class="op del" @click="steps.splice(i, 1)">✕</span>
+            <button type="button" class="op op-btn" :disabled="savingSteps||i===0" :aria-label="'上移第'+(i+1)+'步'" @click="move(i, -1)">↑</button><button type="button" class="op op-btn" :disabled="savingSteps||i===steps.length-1" :aria-label="'下移第'+(i+1)+'步'" @click="move(i, 1)">↓</button>
+            <button type="button" class="op del op-btn" :disabled="savingSteps" :aria-label="'删除第'+(i+1)+'步'" @click="removeBuildStep(i)">✕</button>
           </span>
         </div>
         <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
           <div v-for="p in defOf(inst.step)?.params || []" :key="p.name" class="fld" style="margin:6px 0">
             <label>{{ p.label }}</label>
             <Sel v-if="p.type === 'select'" :model-value="(inst.params || {})[p.name] ?? p.default ?? ''" :options="(p.options || []).map(o => ({ value: o.value, label: o.label || o.value }))" width="100%" @update:model-value="v => setParam(i, p.name, v)" />
-            <ElInput v-else-if="p.type === 'shell'" type="textarea" :rows="2" style="width:100%;font-family:var(--mono);font-size:11px"
+            <ElInput v-else-if="p.type === 'shell'" type="textarea" :rows="inst.step==='shell-script'?6:2" style="width:100%;font-family:var(--mono);font-size:11px"
               :model-value="(inst.params || {})[p.name] ?? p.default ?? ''" @update:model-value="v => setParam(i, p.name, v)" />
             <ElInput v-else :model-value="(inst.params || {})[p.name] ?? p.default ?? ''" @update:model-value="v => setParam(i, p.name, v)" />
           </div>
@@ -735,9 +760,9 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
       </div>
       <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
         <Sel v-model="newStep" :options="buildStepDefs.map(d => ({ value: d.id, label: d.name + '（' + d.category + '）' }))" :placeholder="buildStepDefs[0]?.id || '选择步骤'" width="220px" />
-        <ElButton size="small" @click="steps.push({ step: newStep || buildStepDefs[0]?.id, params: {} }); newStep = ''">＋ 添加构建步骤</ElButton>
-        <ElButton type="primary" size="small" style="margin-left:auto" @click="saveSteps">保存流水线</ElButton>
-      </div>
+        <ElButton size="small" @click="addBuildStep">＋ 添加构建步骤</ElButton>
+        <ElButton type="primary" size="small" :loading="savingSteps" style="margin-left:auto" @click="saveSteps">保存流水线</ElButton>
+      </div></fieldset>
     </div>
 
     <Modal :show="showDeployConfirm" title="确认发布" @close="showDeployConfirm = false">
@@ -850,6 +875,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
   </div>
 </template>
 <style scoped>
+.advanced-heading{display:flex;align-items:center;gap:8px;margin-bottom:12px}.advanced-heading h3{font-size:15px;margin:0}.advanced-heading>.el-button{margin-left:auto}
 .settings-editor-body{border:0;padding:0;margin:0;min-width:0}
 .app-name{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.back{color:var(--brand);cursor:pointer;padding:6px;min-width:36px;min-height:36px}.header-environment{display:flex;align-items:center;gap:7px;padding:5px 9px;border:1px solid var(--border);border-radius:6px;background:var(--panel2)}.header-environment>small{display:none}.header-environment>b{font-size:11px;white-space:nowrap}.header-environment.missing{border-color:color-mix(in srgb,var(--warn) 45%,var(--border));color:var(--warn)}
 .app-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:14px 0 18px}.app-tabs button{padding:8px 14px;color:var(--muted);cursor:pointer;border:0;border-radius:0;background:transparent;border-bottom:2px solid transparent;margin-bottom:-1px}.app-tabs button.active{color:var(--brand);border-bottom-color:var(--brand);font-weight:600}
@@ -858,12 +884,10 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
 .delivery-flow{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:20px}.flow-head{display:flex;align-items:center;gap:12px;margin-bottom:13px}.flow-head h3{font-size:14px}.flow-head p{font-size:10px;color:var(--muted);margin-top:2px}.flow-head p b{color:var(--text)}.observe-actions{display:flex;gap:7px;margin-left:auto}.flow-steps{display:flex;align-items:stretch;gap:7px}.flow-steps>em{display:flex;align-items:center;color:var(--dim);font-style:normal}.flow-step{display:flex;align-items:center;gap:9px;min-width:0;flex:1;padding:10px;text-align:left;background:var(--panel2);border:1px solid transparent;cursor:pointer}.flow-step:hover{border-color:var(--brand)}.flow-step>i{display:grid;place-items:center;flex:0 0 23px;height:23px;border-radius:50%;background:var(--border);color:var(--muted);font-style:normal;font-size:10px}.flow-step>span{display:flex;flex-direction:column;min-width:0}.flow-step small{color:var(--dim)}.flow-step b{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.flow-step.done>i{background:var(--ok);color:#fff}.flow-step.active>i{background:var(--brand);color:#fff}.flow-step.error>i{background:var(--error);color:#fff}.flow-step.ready>i{background:var(--info);color:#fff}
 .section-head{display:flex;align-items:center;margin:8px 0 12px}.section-head h3{font-size:15px}.section-head p{font-size:11px;color:var(--muted);margin-top:2px}.section-head button,.section-head>.text-link{margin-left:auto}.section-head.compact{margin-top:22px}.text-link{color:var(--brand);cursor:pointer;font-size:11px}
 .env-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:12px}.env-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer}.env-card.focused{border-color:var(--brand);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brand) 55%,transparent)}.env-title{display:flex;align-items:center;gap:8px}.env-title>div{min-width:0}.env-title h4{font-size:13px}.env-title small{color:var(--muted);font-size:10px}.env-title>span:last-child{margin-left:auto;font-size:11px}.env-dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}.env-dot.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 15%,transparent)}.current-version{display:flex;flex-direction:column;background:var(--panel2);border-radius:6px;padding:9px 10px;margin:12px 0}.current-version small{color:var(--dim)}.current-version code{margin:2px 0}.current-version span{font-size:9px;color:var(--muted)}.env-actions{display:flex;align-items:center;gap:6px}.env-actions .remove{margin-left:auto;color:var(--dim);font-size:11px;cursor:pointer}.env-actions .remove:hover{color:var(--error)}
-.add-env{min-height:164px;border:1px dashed var(--border);background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--muted)}.add-env:hover{border-color:var(--brand);color:var(--brand)}.add-env b{font-size:24px}.add-env span{font-weight:600}.add-env small{font-size:10px}.env-meta{margin:12px 0}.env-meta>div{display:grid;grid-template-columns:72px 1fr;padding:4px 0}.env-meta dt{color:var(--dim);font-size:10px}.env-meta dd{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.release-snapshot{background:var(--panel2);padding:10px;border-radius:8px;margin-bottom:12px}
+.add-env{min-height:164px;border:1px dashed var(--border);background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--muted)}.add-env span{font-weight:600}.add-env small{font-size:10px}.env-meta{margin:12px 0}.env-meta>div{display:grid;grid-template-columns:72px 1fr;padding:4px 0}.env-meta dt{color:var(--dim);font-size:10px}.env-meta dd{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.release-snapshot{background:var(--panel2);padding:10px;border-radius:8px;margin-bottom:12px}
 .release-bar{display:flex;align-items:flex-end;gap:12px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px}.release-bar>div{display:flex;flex-direction:column;gap:4px}.release-bar label{font-size:10px;color:var(--muted)}.release-bar .arrow{padding-bottom:6px;color:var(--dim)}.dim{color:var(--dim)}
 .snapshot{font-size:10px;color:var(--muted)}.artifact-id{display:block;color:var(--dim);font-family:var(--mono)}.artifact-warning{color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--panel));border:1px solid color-mix(in srgb,var(--warn) 30%,var(--border));padding:9px 11px;border-radius:7px;margin-bottom:10px;font-size:11px}.progress{width:100px;height:3px;background:var(--panel2);border-radius:2px;margin-top:4px}.progress i{display:block;height:100%;background:var(--ok);border-radius:2px}.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.settings-card{background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:14px}.settings-card h4{font-size:13px;margin-bottom:12px}.check-list{display:flex;flex-direction:column;gap:6px}.check-list label{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:6px;padding:7px}.check-list small{margin-left:auto;color:var(--dim);font-size:9px}.help{font-size:10px;color:var(--muted);margin:-5px 0 12px}.save-row{display:flex;justify-content:flex-end;margin-top:12px}.strategy-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.pause-check{display:block;margin:-2px 0 12px}.version-diff{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;background:var(--panel2);padding:9px;border-radius:7px;margin-bottom:10px}.version-diff>div{display:flex;flex-direction:column}.version-diff small{color:var(--dim)}.approval-note{color:var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--panel));padding:8px;border-radius:6px;font-size:11px}.one-click-flow{display:flex;align-items:center;justify-content:center;gap:8px;padding:11px;margin-bottom:14px;border:1px solid color-mix(in srgb,var(--brand) 25%,var(--border));border-radius:8px;background:color-mix(in srgb,var(--brand) 6%,var(--panel))}.one-click-flow span{padding:4px 7px;border-radius:5px;background:var(--panel2);font-size:11px;font-weight:600}.one-click-flow i{color:var(--dim);font-style:normal}.one-click-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}.one-click-summary>div{display:flex;flex-direction:column;min-width:0;padding:9px;background:var(--panel2);border-radius:7px}.one-click-summary small{color:var(--dim)}.one-click-summary b{margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.one-click-note{padding:8px 10px;border-radius:7px;background:var(--panel2);color:var(--muted);font-size:11px}.one-click-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .build-config-head{display:flex;align-items:center;gap:8px;padding:14px 16px;margin-bottom:10px;border:1px solid var(--border);border-radius:10px;background:var(--panel)}.build-config-head>div{min-width:0;margin-right:auto}.build-config-head h3{font-size:16px}.build-config-head p{margin-top:3px;color:var(--muted);font-size:11px}.build-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));overflow:hidden;background:var(--panel);border:1px solid var(--border);border-radius:10px}.build-summary-item{display:flex;flex-direction:column;min-width:0;padding:12px 14px;border-right:1px solid var(--border)}.build-summary-item:last-child{border-right:0}.build-summary-item>span{color:var(--dim);font-size:10px}.build-summary-item>b{margin:4px 0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.build-summary-item>small{color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.unsaved-dot{margin-right:auto;color:var(--warn);font-size:10px;white-space:nowrap}.build-config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-height:64vh;overflow:auto;padding-right:4px}.build-config-grid .settings-card{min-width:0}.build-config-actions{display:flex;align-items:center;gap:8px;padding-top:14px;margin-top:12px;border-top:1px solid var(--border)}.card-title{display:flex;align-items:center;gap:9px;margin-bottom:13px}.card-title>span{display:grid;place-items:center;flex:0 0 25px;height:25px;border-radius:50%;background:color-mix(in srgb,var(--brand) 12%,var(--panel));color:var(--brand);font-size:11px;font-weight:700}.card-title>div{display:flex;flex-direction:column;min-width:0}.card-title h4{margin:0;font-size:13px}.card-title small{color:var(--muted);font-size:10px}.card-title .resource-link{margin-left:auto;border:0;background:transparent;padding:4px;color:var(--brand);cursor:pointer;font-size:10px}.config-help{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.55}.build-tool-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px}.build-tool-tabs button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:9px 11px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--text);cursor:pointer}.build-tool-tabs button.active{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 8%,var(--panel));box-shadow:inset 0 0 0 1px var(--brand)}.build-tool-tabs small{color:var(--muted);font-size:9px}.inline-advanced{margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)}.inline-advanced summary{color:var(--brand);font-size:10px;cursor:pointer;margin-bottom:10px}.empty-inline{padding:9px;color:var(--dim);font-size:10px;text-align:center;border:1px dashed var(--border);border-radius:6px}.build-advanced-card{display:flex;flex-direction:column}.build-advanced-card p{color:var(--muted);font-size:11px;line-height:1.6;margin-bottom:12px}.build-advanced-card>button{align-self:flex-start}.build-history-head{margin-top:24px;padding-top:18px;border-top:1px solid var(--border)}
-.advanced-notice{display:flex;flex-direction:column;align-items:flex-start;gap:4px;background:color-mix(in srgb,var(--warn) 9%,var(--panel));border:1px solid color-mix(in srgb,var(--warn) 30%,var(--border));border-radius:8px;padding:10px 12px;margin-bottom:14px}.advanced-notice span{font-size:11px;color:var(--muted)}.advanced-notice button{margin-top:5px}
-.context-warning{color:var(--warn);background:color-mix(in srgb,var(--warn) 9%,var(--panel));border:1px solid color-mix(in srgb,var(--warn) 30%,var(--border));border-radius:7px;padding:8px 10px;margin-bottom:12px;font-size:11px}
 .runtime-env-editor{padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel2)}.runtime-env-editor .help{display:block;margin:5px 0 0}.clear-runtime-env{display:flex;align-items:center;gap:6px;margin-top:8px;color:var(--error);font-size:10px}
 .release-summary,.runtime-hint{display:flex;align-items:center;gap:10px;background:var(--panel2);padding:10px;border-radius:8px;margin-bottom:14px}.release-summary>span,.runtime-hint>span{font-size:22px}.release-summary>div,.runtime-hint>div{display:flex;flex-direction:column}.release-summary small,.runtime-hint small{color:var(--muted)}.host-picker{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.host-picker label{display:grid;grid-template-columns:auto 1fr;align-items:center;column-gap:6px;border:1px solid var(--border);border-radius:7px;padding:8px;cursor:pointer}.host-picker label.checked{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 7%,var(--panel))}.host-picker input{grid-row:1 / 3}.host-picker small{font-size:9px;color:var(--muted)}.advanced-box{margin:10px 0 14px}.advanced-box summary{color:var(--brand);cursor:pointer;margin-bottom:10px}
 .target-config-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:10px 16px;max-height:min(68vh,680px);overflow-y:auto;padding:2px 8px 4px 2px}.target-config-form>.fld{min-width:0;margin-bottom:0}.target-config-form>.runtime-hint,.target-config-form>.runtime-env-editor,.target-config-form>.strategy-row,.target-config-form>.pause-check,.target-config-form>.advanced-box,.target-config-form>p.help,.target-config-form>small.help,.target-config-form>.two{grid-column:1/-1}.target-config-form>.runtime-hint{margin-bottom:0}.target-config-form>.runtime-env-editor{margin-top:2px}.target-config-form>.advanced-box{margin:0}.target-config-form>.pause-check{margin:0}.target-config-form>p.help{margin:0;padding:8px 10px;border-radius:7px;background:var(--panel2);line-height:1.55}.target-config-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:12px;margin-top:12px;border-top:1px solid var(--border)}

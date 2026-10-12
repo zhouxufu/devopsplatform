@@ -98,8 +98,15 @@ func (l *StepLib) ValidateBuildPipeline(steps []StepInst) error {
 		return err
 	}
 	for index, inst := range steps {
-		if def := l.Get(inst.Step); def != nil && def.Kind == "deploy" {
+		def := l.Get(inst.Step)
+		if def != nil && def.Kind == "deploy" {
 			return fmt.Errorf("第 %d 步 %s 是部署步骤；请通过发布单选择环境，主机由环境主机组自动解析", index+1, inst.Step)
+		}
+		if def != nil && def.ID == "shell-script" {
+			script := def.RenderParams(inst)["SCRIPT"]
+			if strings.TrimSpace(script) == "" || len(script) > 64<<10 || strings.ContainsRune(script, '\x00') {
+				return fmt.Errorf("第 %d 步脚本内容应为非空 Bash 文本，且不超过 64 KiB", index+1)
+			}
 		}
 	}
 	return nil
