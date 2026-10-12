@@ -3,6 +3,7 @@ import { reactive, ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import RangePicker from '../shared/components/RangePicker.vue'
 import Sel from '../shared/components/Sel.vue'
 import { ElButton, ElInput } from '../shared/components/ui.js'
+import { ElDialog, ElDropdown, ElDropdownMenu, ElDropdownItem } from 'element-plus'
 import { themeDark, toggleTheme } from '../shared/composables/theme.js'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
 import UserManagement from '../shared/components/UserManagement.vue'
@@ -28,7 +29,7 @@ function savedContext() {
 }
 const saved = savedContext()
 
-// 平台壳：工作区 tab（iframe 保活）+ 全局上下文广播
+// 工作区保活，每个窗口独立上下文；只有主题仍全局广播。
 const st = reactive({
   plugins: [], services: [], deployServices: [], environments: [], workspaces: [], active: 0, gSvc: saved.service, gEnv: saved.environment, range: saved.range, rangeMinutes: saved.rangeMinutes,
 	showLogin: false, username: 'admin', pwd: '', me: {}, users: [], showUsers: false, plusOpen: false, _seq: 0,
@@ -36,15 +37,22 @@ const st = reactive({
   showSetup: false, setupStep: 1, setupTemplate: 'simple', setupRows: [], setupError: '', setupSaving: false,
 })
 const activeWorkspace = computed(() => st.workspaces.find(w => w.id === st.active))
+const renameWorkspace=ref(null),workspaceName=ref('')
+const controlsContext=()=>({service:st.gSvc,environment:st.gEnv,range:[...(st.range||[])],rangeMinutes:st.rangeMinutes})
+function workspaceTitle(w){return w.title||w.plugin.display+(w.context?.service?' · '+w.context.service:'')}
+function renameWs(w){renameWorkspace.value=w;workspaceName.value=workspaceTitle(w)}
+function saveWorkspaceName(){const value=workspaceName.value.trim();if(!value||value.length>60)return;renameWorkspace.value.title=value;renameWorkspace.value=null}
 const showTimeContext = computed(() => ['logs', 'monitor'].includes(activeWorkspace.value?.plugin?.name))
 const contextFields=computed(()=>activeWorkspace.value?.contextFields||{service:showTimeContext.value,environment:showTimeContext.value})
 const showContext=computed(()=>showTimeContext.value||contextFields.value.service||contextFields.value.environment)
 const defaultPlugin = () => st.plugins.find(p => p.name === 'deploy') || st.plugins.find(p => p.name !== 'devtools')
 function openDefault() { const plugin=defaultPlugin(); if(plugin) openPlugin(plugin); else if(st.plugins.some(p=>p.name==='devtools')) st.platformPanel='mcp' }
 
-function openPlugin(p, hash = '') {
-  const ws = { id: ++st._seq, plugin: p }
+function openPlugin(p, hash = '', source=activeWorkspace.value) {
+  if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
+  const ws = { id: ++st._seq, plugin: p, context:JSON.parse(JSON.stringify(source?.context||controlsContext())) }
   const el = document.createElement('iframe')
+  el.name='lp-workspace-'+crypto.randomUUID()
   // 内联样式：scoped CSS 对 JS 动态创建的元素不生效
   el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;display:none'
   el.addEventListener('load', () => {
@@ -58,7 +66,10 @@ function openPlugin(p, hash = '') {
   switchWs(ws.id)
 }
 function switchWs(id) {
+  if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
   st.active = id
+  const c=activeWorkspace.value?.context
+  if(c){st.gSvc=c.service;st.gEnv=c.environment;st.range=[...(c.range||[])];st.rangeMinutes=c.rangeMinutes;if(c.rangeMinutes>0)st.range=recentRange(c.rangeMinutes)}
   st.workspaces.forEach(w => w.el.style.display = w.id === id ? 'block' : 'none')
 }
 function closeWs(id) {
@@ -67,13 +78,13 @@ function closeWs(id) {
   st.workspaces[i].el.remove()
   st.workspaces.splice(i, 1)
   if (!st.workspaces.length) return
-  if (!st.workspaces.some(w => w.id === st.active)) switchWs(st.workspaces[Math.max(0, i - 1)].id)
+  if (!st.workspaces.some(w => w.id === st.active)) switchWs(st.workspaces[Math.min(i,st.workspaces.length-1)].id)
 }
 function ctxSync(list) {
   if (st.rangeMinutes > 0) st.range = recentRange(st.rangeMinutes)
+  if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
   localStorage.setItem(CTX_KEY, JSON.stringify({ service: st.gSvc, environment: st.gEnv, range: st.range, rangeMinutes: st.rangeMinutes }))
-  const msg = { type: 'context.sync', service: st.gSvc, environment: st.gEnv, rangeStart: st.range?.[0] || 0, rangeEnd: st.range?.[1] || 0, rangeMinutes: st.rangeMinutes }
-  ;(list || st.workspaces).forEach(w => { try { w.el.contentWindow.postMessage(msg, location.origin) } catch {} })
+  ;(list || (activeWorkspace.value?[activeWorkspace.value]:[])).forEach(w => {const c=w.context||controlsContext();if(c.rangeMinutes>0)c.range=recentRange(c.rangeMinutes);const msg={type:'context.sync',service:c.service,environment:c.environment,rangeStart:c.range?.[0]||0,rangeEnd:c.range?.[1]||0,rangeMinutes:c.rangeMinutes};try { w.el.contentWindow.postMessage(msg, location.origin) } catch {} })
 }
 
 async function getJSON(url) {
@@ -216,26 +227,26 @@ window.addEventListener('message', e => {
   if (ws && e.data?.type === 'workspace.open') {
     const p = st.plugins.find(x => x.name === e.data.plugin)
     const hash = typeof e.data.hash === 'string' && e.data.hash.startsWith('#/') ? e.data.hash : ''
-    if (p) openPlugin(p, hash)
+    if (p) openPlugin(p, hash,ws)
   }
   if (ws && e.data?.type === 'platform.open' && ['apps', 'resources', 'mcp'].includes(e.data.view) && (e.data.view !== 'mcp' || st.plugins.some(p=>p.name==='devtools'))) {
     st.platformPanel = e.data.view
     st.plusOpen = false
   }
-  // 工作区内切换应用或环境时回写平台上下文。这样从发布页打开日志、
-  // 监控时仍然落在同一个应用和环境，不需要用户再次筛选。
+  // 回写消息来源窗口；从该窗口打开日志/监控时继承条件，不影响其他窗口。
   if (ws && e.data?.type === 'context.update') {
     let changed = false
-    if (Object.prototype.hasOwnProperty.call(e.data, 'service') && typeof e.data.service === 'string' && e.data.service !== st.gSvc) {
-      st.gSvc = e.data.service
+    if (Object.prototype.hasOwnProperty.call(e.data, 'service') && typeof e.data.service === 'string' && e.data.service !== ws.context.service) {
+      ws.context.service = e.data.service
       changed = true
     }
-    if (Object.prototype.hasOwnProperty.call(e.data, 'environment') && typeof e.data.environment === 'string' && e.data.environment !== st.gEnv) {
-      st.gEnv = e.data.environment
+    if (Object.prototype.hasOwnProperty.call(e.data, 'environment') && typeof e.data.environment === 'string' && e.data.environment !== ws.context.environment) {
+      ws.context.environment = e.data.environment
       changed = true
     }
     if (changed) {
-      ctxSync()
+      if(ws.id===st.active){st.gSvc=ws.context.service;st.gEnv=ws.context.environment}
+      ctxSync([ws])
       loadServices()
     }
   }
@@ -278,8 +289,9 @@ onBeforeUnmount(() => clearInterval(recentClock))
       <div class="wstabs">
         <div class="wstab-list">
           <div v-for="w in st.workspaces" :key="w.id" class="wstab" :class="{ on: w.id === st.active }" role="button" tabindex="0" :aria-current="w.id === st.active ? 'page' : undefined" @click="switchWs(w.id)" @keydown.enter.self="switchWs(w.id)" @keydown.space.self.prevent="switchWs(w.id)">
-            <UiIcon :name="w.plugin.name" :size="16"/> {{ w.plugin.display }}
-            <button class="x" type="button" :aria-label="`关闭${w.plugin.display}工作区`" @click.stop="closeWs(w.id)">×</button>
+            <UiIcon :name="w.plugin.name" :size="16"/> <span @dblclick.stop="renameWs(w)">{{ workspaceTitle(w) }}</span>
+            <ElDropdown trigger="click" @command="command=>command==='rename'?renameWs(w):openPlugin(w.plugin,'',w)"><button class="x" type="button" :aria-label="`管理${workspaceTitle(w)}工作区`" @click.stop>⋯</button><template #dropdown><ElDropdownMenu><ElDropdownItem command="rename">重命名</ElDropdownItem><ElDropdownItem command="duplicate">新开同类工作区</ElDropdownItem></ElDropdownMenu></template></ElDropdown>
+            <button class="x" type="button" :aria-label="`关闭${workspaceTitle(w)}工作区`" @click.stop="closeWs(w.id)">×</button>
           </div>
         </div>
         <div class="wslauncher">
@@ -295,7 +307,6 @@ onBeforeUnmount(() => clearInterval(recentClock))
 		<button class="topr" type="button" :aria-label="dark ? '切换浅色主题' : '切换深色主题'" :title="dark ? '切换浅色主题' : '切换深色主题'" @click="switchTheme"><UiIcon :name="dark ? 'sun' : 'moon'"/></button>
     </header>
     <div v-if="showContext" class="contextbar">
-      <span class="context-title">当前上下文</span>
       <div v-if="contextFields.service" class="context-field"><label>应用</label>
         <Sel v-model="st.gSvc" :options="st.services.map(s => ({ value: s.name, label: s.managed ? s.name : s.name + ' · 未接入部署' }))"
           all-label="全部应用" filterable width="190px" @change="ctxSync()" />
@@ -308,17 +319,17 @@ onBeforeUnmount(() => clearInterval(recentClock))
         <span class="context-divider"></span>
         <div class="context-field"><label>时间范围</label>
         <div class="seg">
-          <button type="button" :class="{on:st.rangeMinutes===15}" :aria-pressed="st.rangeMinutes===15" title="将所有工作区切回当前时间；动态窗口会在每次查询时推进到现在" @click="useRecentRange">最近15分钟{{st.rangeMinutes===15?'（动态）':''}}</button>
+          <button type="button" :class="{on:st.rangeMinutes===15}" :aria-pressed="st.rangeMinutes===15" title="当前工作区使用动态时间范围" @click="useRecentRange">最近15分钟{{st.rangeMinutes===15?'（动态）':''}}</button>
           <RangePicker v-model="st.range" @change="timeRangeChanged" width="200px" />
         </div>
       </div>
       </template>
-      <span class="context-tip">切换后同步到所有已打开工作区</span>
     </div>
     <div class="wsarea" id="wsarea">
       <div class="emptyws" v-if="!st.workspaces.length"><div>点击 ＋ 打开一个插件工作区</div><ElButton v-if="st.plugins.some(p=>p.name==='devtools')" @click="st.platformPanel='mcp'">打开 MCP</ElButton></div>
     </div>
 		<PlatformPanel :view="st.platformPanel" :plugin="activeWorkspace?.plugin?.name || 'deploy'" @switch="st.platformPanel=$event" @close="closePlatformPanel" />
+		<ElDialog :model-value="!!renameWorkspace" title="重命名工作区" width="360px" @close="renameWorkspace=null"><ElInput v-model="workspaceName" maxlength="60" aria-label="工作区名称" @keyup.enter="saveWorkspaceName"/><template #footer><ElButton @click="renameWorkspace=null">取消</ElButton><ElButton type="primary" :disabled="!workspaceName.trim()" @click="saveWorkspaceName">保存名称</ElButton></template></ElDialog>
 		<UserManagement :show="st.showUsers" :current="st.me" @close="st.showUsers=false;loadIdentity()" />
 		<div class="mask" v-if="st.showLogin"><div class="box"><h3>DevOps 控制台登录</h3>
 			<ElInput v-model="st.username" placeholder="用户名" style="width:220px" />

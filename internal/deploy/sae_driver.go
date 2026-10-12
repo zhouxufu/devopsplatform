@@ -24,8 +24,10 @@ type saeDeployInput struct {
 }
 
 type saeChangeState struct {
-	Status  int32
-	Message string
+	Status     int32
+	Message    string
+	PipelineID string
+	SubStatus  int32
 }
 
 type saeEnvironmentVariable struct {
@@ -175,7 +177,26 @@ func (p *aliyunSAEProvider) Deploy(ctx context.Context, in saeDeployInput) (stri
 	} else if envs != "" {
 		req.SetEnvs(envs)
 	}
-	if v := strings.TrimSpace(in.Config["update_strategy"]); v != "" {
+	policy, err := saeUpdatePolicy(ServiceEnvironment{DeployConfig: in.Config})
+	if err != nil {
+		return "", err
+	}
+	if in.Config["release_mode"] != "" {
+		resp, e := p.client.DescribeApplicationConfig((&sae.DescribeApplicationConfigRequest{}).SetAppId(in.AppID))
+		if e != nil {
+			return "", e
+		}
+		if resp == nil || resp.Body == nil || resp.Body.Success == nil || !*resp.Body.Success || resp.Body.Data == nil || resp.Body.Data.Replicas == nil {
+			return "", fmt.Errorf("无法读取 SAE 实例数")
+		}
+		if in.Config["release_mode"] == "canary" && *resp.Body.Data.Replicas < 2 {
+			return "", fmt.Errorf("SAE 金丝雀需要至少两个实例")
+		}
+		if err := validateReleasePolicy(ServiceEnvironment{TargetType: TargetAliyunSAE, DeployConfig: in.Config}, int(*resp.Body.Data.Replicas)); err != nil {
+			return "", err
+		}
+	}
+	if v := strings.TrimSpace(policy); v != "" {
 		req.SetUpdateStrategy(v)
 	}
 	if v, err := optionalInt32(in.Config["min_ready_ratio"]); err != nil {
@@ -186,7 +207,9 @@ func (p *aliyunSAEProvider) Deploy(ctx context.Context, in saeDeployInput) (stri
 	if v, err := optionalInt32(in.Config["batch_wait_seconds"]); err != nil {
 		return "", fmt.Errorf("批次间隔: %w", err)
 	} else if v != nil {
-		req.SetBatchWaitTime(*v)
+		if in.Config["release_mode"] == "" {
+			req.SetBatchWaitTime(*v)
+		}
 	}
 	resp, err := p.client.DeployApplication(req)
 	if err != nil {
@@ -267,7 +290,11 @@ func (p *aliyunSAEProvider) Change(ctx context.Context, changeID string) (saeCha
 	if resp == nil || resp.Body == nil || resp.Body.Success == nil || !*resp.Body.Success || resp.Body.Data == nil || resp.Body.Data.Status == nil {
 		return saeChangeState{}, fmt.Errorf("读取 SAE 变更单失败")
 	}
-	return saeChangeState{Status: *resp.Body.Data.Status, Message: stringValue(resp.Body.Data.ErrorMessage)}, nil
+	state := saeChangeState{Status: *resp.Body.Data.Status, Message: stringValue(resp.Body.Data.ErrorMessage), PipelineID: stringValue(resp.Body.Data.CurrentPipelineId)}
+	if resp.Body.Data.SubStatus != nil {
+		state.SubStatus = *resp.Body.Data.SubStatus
+	}
+	return state, nil
 }
 
 func optionalInt32(raw string) (*int32, error) {
@@ -364,6 +391,13 @@ func (aliyunSAEDriver) Deploy(runtime *Deployer, deployID int64, sv *Service, _ 
 	}
 	runtime.st.SetDeployExternalID(deployID, changeID)
 	runtime.emit(deployID, "✓ SAE 变更单 "+changeID+" 已创建，开始轮询\n")
+	return pollSAEChange(runtime, deployID, provider, ctx, changeID)
+}
+
+func pollSAEChange(runtime *Deployer, deployID int64, provider saeProvider, ctx context.Context, changeID string) string {
+	return pollSAEChangeAfter(runtime, deployID, provider, ctx, changeID, "")
+}
+func pollSAEChangeAfter(runtime *Deployer, deployID int64, provider saeProvider, ctx context.Context, changeID, ignorePipeline string) string {
 	poll := runtime.saePollInterval
 	if poll <= 0 {
 		poll = 5 * time.Second
@@ -375,18 +409,33 @@ func (aliyunSAEDriver) Deploy(runtime *Deployer, deployID int64, sv *Service, _ 
 			runtime.emit(deployID, "✗ 查询 SAE 变更单失败: "+err.Error()+"\n")
 			return "failed"
 		}
+		if state.SubStatus == 1 {
+			runtime.emit(deployID, "✗ SAE 发布异常，停止平台推进；请核对云端变更并回退\n")
+			return "failed"
+		}
+		if state.Status != 8 || state.PipelineID != ignorePipeline {
+			ignorePipeline = ""
+		}
 		switch state.Status {
 		case 2:
 			runtime.emit(deployID, "✓ SAE 变更单执行成功\n")
 			return "success"
-		case 3, 6, 10:
+		case 6:
+			return "canceled"
+		case 3, 10:
 			message := strings.TrimSpace(state.Message)
 			if message == "" {
 				message = fmt.Sprintf("状态码 %d", state.Status)
 			}
 			runtime.emit(deployID, "✗ SAE 发布失败: "+message+"\n")
 			return "failed"
-		case 8, 11:
+		case 8:
+			if ignorePipeline != "" {
+				break
+			}
+			runtime.emit(deployID, "⏸ SAE 首批/当前批次完成，等待平台观察确认\n")
+			return "waiting_next_batch"
+		case 11:
 			if state.Status != lastStatus {
 				runtime.emit(deployID, "⏸ SAE 变更单等待云端确认或审批\n")
 			}

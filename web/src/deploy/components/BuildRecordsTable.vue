@@ -13,6 +13,8 @@ const route=useRoute(),router=useRouter()
 const filters=buildState(props.service+':'+props.kind,{q:'',status:'',branch:'',actor:'',environment:'',start:'',end:'',page:1,page_size:20})
 const page=ref({items:[],total:0,page:1,page_size:20}),loading=ref(false),error=ref(''),peek=ref(null)
 const scroll=buildScroll(props.service+':'+props.kind)
+const now=ref(Date.now()),clock=setInterval(()=>now.value=Date.now(),1000)
+const canManage=r=>r.actor===props.me.username||props.me.role==='admin'||props.me.username==='local'
 let seq=0,timer,debounce,initial=true
 const endpoint=computed(()=>({runs:'pipeline/runs',artifacts:'artifacts',releases:'release-orders'}[props.kind]))
 const statuses=[{value:'success',label:'成功'},{value:'failed',label:'失败'},{value:'running',label:'运行中'},{value:'canceled',label:'已取消'},{value:'interrupted',label:'已中断'},{value:'pending_approval',label:'待审批'},{value:'waiting_next_batch',label:'批次暂停'},{value:'waiting_deploy',label:'待部署'}]
@@ -32,7 +34,7 @@ async function load(quiet=false){const request=++seq;clearTimeout(timer);if(!qui
 function reset(){filters.value.page=1}
 watch(filters,()=>{seq++;loading.value=true;clearTimeout(timer);clearTimeout(debounce);debounce=setTimeout(load,200)},{deep:true})
 watch(()=>props.service,()=>load(),{immediate:true})
-onBeforeUnmount(()=>{seq++;clearTimeout(timer);clearTimeout(debounce)})
+onBeforeUnmount(()=>{seq++;clearTimeout(timer);clearTimeout(debounce);clearInterval(clock)})
 function open(r){if(loading.value)return;scroll.remember();if(props.kind==='runs')router.push({path:'/run/'+r.id,query:{return:route.fullPath}});else if(props.kind==='artifacts')peek.value=r;else emit('open',r)}
 function publish(a){if(loading.value)return;scroll.remember();emit('publish',a)}
 function source(r){if(loading.value)return;scroll.remember();router.push({path:'/run/'+r.source_id,query:{return:route.fullPath}})}
@@ -51,20 +53,20 @@ function action(r,a){if(loading.value)return;emit('action',r,a)}
   </div>
   <p v-if="error" role="alert" class="record-error">{{error}} <ElButton size="small" @click="load()">重试</ElButton></p>
   <div class="record-scroll" :aria-busy="loading"><table>
-   <thead><tr><th>编号 / 代码版本</th><th v-if="kind==='runs'">分支 / 阶段</th><th v-if="kind==='artifacts'">来源构建 / 分支</th><th v-if="kind==='releases'">环境 / 批次</th><th>{{kind==='artifacts'?'类型':'状态'}}</th><th v-if="kind!=='artifacts'">发起人{{kind==='releases'?' / 审批人':''}}</th><th v-if="kind==='runs'">耗时</th><th>时间</th><th>操作</th></tr></thead>
+   <thead><tr><th>编号 / 代码版本</th><th v-if="kind==='runs'">分支 / 阶段</th><template v-if="kind==='artifacts'"><th>来源构建</th><th>分支</th><th>曾发布环境</th></template><th v-if="kind==='releases'">环境 / 批次</th><th>{{kind==='artifacts'?'类型':'状态'}}</th><th v-if="kind!=='artifacts'">发起人{{kind==='releases'?' / 审批人':''}}</th><th v-if="kind==='runs'">耗时</th><th>时间</th><th>操作</th></tr></thead>
    <tbody><tr v-for="r in page.items" :key="r.id">
     <td><button class="op-btn" @click="open(r)">#{{r.id}} · {{r.version||'待解析 Commit'}}</button><small v-if="kind==='runs'&&r.artifact_id">制品 #{{r.artifact_id}}</small></td>
     <td v-if="kind==='runs'"><span>{{r.branch||'仓库默认分支'}}</span><small><ElPopover trigger="click" placement="bottom" :width="400"><template #reference><button class="op-btn" :aria-label="'查看运行 '+r.id+' 阶段'">{{stage(r)}}</button></template><Stages :stages="r.stages||[]"/></ElPopover></small></td>
-    <td v-if="kind==='artifacts'"><button v-if="r.source==='pipeline-run'" class="op-btn" :disabled="loading" @click="source(r)">构建 #{{r.source_id}}</button><span v-else>{{r.source||'历史制品'}} #{{r.source_id}}</span><small>{{r.metadata?.branch||'默认分支'}}</small><small>{{r.published_environments?.length?'曾成功发布：'+r.published_environments.join(' / '):'尚无成功发布记录'}}</small></td>
+    <td v-if="kind==='artifacts'"><button v-if="r.source==='pipeline-run'" class="op-btn" :disabled="loading" @click="source(r)">构建 #{{r.source_id}}</button><span v-else>{{r.source||'历史制品'}} #{{r.source_id}}</span></td><template v-if="kind==='artifacts'"><td>{{r.metadata?.branch||'未记录'}}</td><td>{{r.published_environments?.length?r.published_environments.join(' / '):'尚无成功发布记录'}}</td></template>
     <td v-if="kind==='releases'">{{r.environment}}<small>{{r.succeeded}} 成功 / {{r.failed}} 失败 / {{r.total}} 台</small></td>
     <td :class="'record-status '+r.status">{{kind==='artifacts'?r.kind:status(r.status)}}</td>
     <td v-if="kind!=='artifacts'">{{r.actor||'local'}}<small v-if="r.approver">{{r.approver}}</small></td>
     <td v-if="kind==='runs'">{{duration(r)}}</td><td>{{date(r.created_at||r.started_at)}}</td>
-    <td class="record-actions"><button class="op-btn" @click="open(r)">详情</button><button v-if="kind==='artifacts'" class="op-btn" @click="publish(r)">发布此制品</button><template v-if="kind==='releases'"><button v-if="r.status==='pending_approval'&&canApprove(r)" class="op-btn" @click="action(r,'approve')">批准</button><button v-if="r.status==='pending_approval'&&canApprove(r)" class="op-btn" @click="action(r,'reject')">拒绝</button><button v-if="['pending_approval','queued','waiting_next_batch'].includes(r.status)" class="op-btn" @click="action(r,'cancel')">取消</button><button v-if="r.status==='waiting_next_batch'" class="op-btn" @click="action(r,'continue')">继续下一批</button><button v-if="r.status==='success'" class="op-btn" @click="action(r,'rollback')">回退</button></template></td>
-   </tr><tr v-if="!page.items.length"><td :colspan="kind==='runs'?7:kind==='artifacts'?6:7" class="record-empty">{{loading?'正在读取…':error?'暂时无法读取记录':'没有匹配记录，可调整筛选条件'}}</td></tr></tbody>
+    <td class="record-actions"><button class="op-btn" @click="open(r)">详情</button><button v-if="kind==='artifacts'" class="op-btn" @click="publish(r)">发布此制品</button><template v-if="kind==='releases'"><button v-if="r.status==='pending_approval'&&canApprove(r)" class="op-btn" @click="action(r,'approve')">批准</button><button v-if="r.status==='pending_approval'&&canApprove(r)" class="op-btn" @click="action(r,'reject')">拒绝</button><button v-if="['pending_approval','queued','waiting_next_batch'].includes(r.status)&&canManage(r)&&!r.recovery" class="op-btn" @click="action(r,'cancel')">取消</button><button v-if="r.status==='waiting_next_batch'&&canManage(r)" class="op-btn" :disabled="r.continue_after*1000>now" @click="action(r,'continue')">{{r.continue_after*1000>now?'观察中（'+Math.ceil((r.continue_after*1000-now)/1000)+'s）':r.recovery?'继续回退批次':'继续下一批'}}</button><button v-if="['success','waiting_next_batch','failed','canceled'].includes(r.status)&&canManage(r)&&!r.recovery" class="op-btn" @click="action(r,'rollback')">回退</button></template></td>
+   </tr><tr v-if="!page.items.length"><td :colspan="kind==='runs'?7:kind==='artifacts'?7:6" class="record-empty">{{loading?'正在读取…':error?'暂时无法读取记录':'没有匹配记录，可调整筛选条件'}}</td></tr></tbody>
   </table></div>
   <footer><span>共 {{page.total}} 条</span><Sel v-model="filters.page_size" :options="[20,50,100].map(value=>({value,label:value+' 条 / 页'}))" @change="reset"/><ElButton size="small" :disabled="loading||filters.page<=1" @click="filters.page--">上一页</ElButton><span>{{filters.page}} / {{pages}}</span><ElButton size="small" :disabled="loading||filters.page>=pages" @click="filters.page++">下一页</ElButton></footer>
-  <aside v-if="peek" class="artifact-peek" aria-label="制品详情"><div><h3>制品 #{{peek.id}} · {{peek.version}}</h3><ElButton size="small" @click="peek=null">关闭</ElButton></div><p>代码版本 / 分支：{{peek.version}} / {{peek.metadata?.branch||'默认'}}</p><p>类型：{{peek.kind}} · 大小：{{peek.size||0}} 字节</p><p>摘要</p><code>{{peek.digest}}</code><p>存储位置</p><code>{{peek.uri}}</code><ElButton type="primary" @click="publish(peek)">发布此制品</ElButton></aside>
+  <aside v-if="peek" class="artifact-peek" aria-label="制品详情"><div><h3>制品 #{{peek.id}} · {{peek.version}}</h3><ElButton size="small" @click="peek=null">关闭</ElButton></div><p>代码版本 / 分支：{{peek.version}} / {{peek.metadata?.branch||'未记录'}}</p><p>类型：{{peek.kind}} · 大小：{{peek.size||0}} 字节</p><p>摘要</p><code>{{peek.digest}}</code><p>存储位置</p><code>{{peek.uri}}</code><ElButton type="primary" @click="publish(peek)">发布此制品</ElButton></aside>
  </section>
 </template>
 <style scoped>

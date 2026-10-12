@@ -159,3 +159,11 @@ node scripts/test-platform-utilities-ui.mjs
 - `TestWorkCandidates*` 在临时数据库中验证超过 600 条历史、快照证据、人员、排期、跨来源编号、安全参数、已选查询和范围预览无写入。`test-version-work-picker-ui.mjs` 使用全 API 拦截覆盖单弹窗、621 条分页、跨页选择、人员快捷筛选、编号清单、取消恢复、输入连续性、旧缓存之外已选项、过期响应、失效项以及明暗主题/四种宽度；没有真实发布、来源同步或用户数据库写入。
 - 数据同步任务对比后冻结为 MySQL 变更，通过 SQL 节点交付；移除新建步骤中“待接通”的通用数据同步选项，历史节点明确提示并阻断。
 - `test-orchestration-flow-ui.mjs` 拦截所有业务 API，覆盖三段流程、草稿连续性、映射、预检锁定、显式启动、批次观察、日志侧栏、621 条摘要分页、人员筛选、恢复范围以及明暗模式和四种宽度。后端 `TestDelivery*` 使用临时库覆盖过期/篡改/漂移、凭证幂等、映射锁定、历史分页、协调器租约与人工/批间暂停、只读恢复候选及日志脱敏；`go test ./...` 和部署相关 race 测试通过。未对用户的主机或数据库进行实际发布验证，MySQL 实例专项集成仍需提供一次性测试库。
+
+## 独立窗口与渐进交付验收
+
+- 同时打开两个日志工作区，分别选应用 A/测试、应用 B/生产，填写不同查询；切换、改名、关闭一侧不改另一侧条件，也不重载保活页面。当前上下文/全局同步提示已移除。主题仍同时变化。
+- 制品表“来源构建”“分支”“曾发布环境”各自独立；未知分支不显示默认分支。
+- 编排添加三个审核节点，在开发审核后才进入测试，会签第二个人通过前不解锁项目管理；拒绝、重复签、提前签、自审、摘要不一致均阻止。或签通过一人即可。所有通过后仍是待执行，没有部署/SQL/Redis 写动作。模板审核节点不能在本次交付中被删改。
+- 金丝雀首批超过 50% 或只有一个实例时阻止配置/执行；首批失败即停止。观察计时由后端强制；暂停后可继续、终止或回退已更新部分。SAE 暂停不算失败，确认批次不新增部署变更单；云端响应不确定不自动重试。
+- 自动回归：test-workspace-isolation-ui.mjs、test-staged-approval-ui.mjs、test-basic-build-workbench-ui.mjs、test-orchestration-flow-ui.mjs 使用浏览器 fixture；Go TestThreeStageApprovalAnyAll、TestApprovalRejectAndSnapshotGuard、TestCanaryBatchBoundsAndSAEPolicy、TestSAECanaryPauseContinueUsesSameChange 使用临时库和模拟 SAE，不触碰真实资源。

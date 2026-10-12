@@ -14,7 +14,7 @@ import NacosPlanPreview from '../components/NacosPlanPreview.vue'
 
 const api=inject('api'), globalEnvironment=inject('globalEnvironment'), route=useRoute(), router=useRouter()
 const screen=ref('list'), area=ref('runs'), phase=ref(1), busy=ref(false), reading=ref(false), me=ref({})
-const templates=ref([]), services=ref([]), versions=ref([]), environments=ref([]), changes=ref([]), owners=ref([])
+const templates=ref([]), services=ref([]), versions=ref([]), environments=ref([]), changes=ref([]), owners=ref([]),reviewUsers=ref([]),reviewComment=ref('')
 const page=ref({items:[],total:0,page:1,page_size:20})
 const filters=ref({q:'',status:'',environment:'',version_id:'',owner:'',start:'',end:'',page:1,page_size:20})
 const request=ref({template_id:'',version_id:'',environment:'',reason:'',artifacts:{},nodes:[]})
@@ -32,8 +32,8 @@ function closeLogs(){logRelease.value=0;logOrigin?.focus?.()}
 function keyboard(event){if(event.key==='Escape'&&logRelease.value){closeLogs();event.preventDefault()}}
 const clone=v=>JSON.parse(JSON.stringify(v))
 const post=(path,body={})=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-const states={pending_approval:'待审核',approved:'待执行',running:'执行中',success:'成功',failed:'失败',rejected:'已驳回',canceled:'已取消',pending:'待执行',waiting:'发布中',waiting_next_batch:'等待下一批',queued:'排队中',executing:'执行中 / 中断待核对',rolled_back:'已回退','rollback-failed':'回退失败'}
-const kinds={deploy:'应用发布',manual:'人工确认',mysql:'SQL / 数据同步',nacos:'Nacos 配置',redis:'Redis 命令','data-sync':'不可执行的数据同步旧节点'}
+const states={pending_approval:'待审核',approved:'待执行',running:'执行中',success:'成功',failed:'失败',rejected:'已驳回',canceled:'已取消',pending:'待执行',waiting:'发布中',waiting_next_batch:'等待下一批',queued:'排队中',reviewing:'等待会签',executing:'执行中 / 中断待核对',rolled_back:'已回退','rollback-failed':'回退失败'}
+const kinds={approval:'人工审核',deploy:'应用发布',manual:'人工确认',mysql:'SQL / 数据同步',nacos:'Nacos 配置',redis:'Redis 命令','data-sync':'不可执行的数据同步旧节点'}
 const selectedTemplate=computed(()=>templates.value.find(t=>t.id===request.value.template_id))
 const version=computed(()=>versions.value.find(v=>v.id===request.value.version_id))
 const appNames=computed(()=>selectedTemplate.value?.mode==='fixed' ? selectedTemplate.value.services||[] : [...new Set((version.value?.changes||[]).filter(c=>['code','artifact'].includes(c.kind)).map(c=>c.service).filter(Boolean))])
@@ -41,7 +41,8 @@ const activeStep=computed(()=>selected.value?.steps?.find(s=>s.status!=='success
 const currentNode=computed(()=>selected.value?.steps?.[nodeIndex.value])
 const autoRunning=computed(()=>['running','pausing'].includes(control.value.state))
 const canManage=item=>!!item&&(me.value.username==='local'||me.value.role==='admin'||me.value.username===item.owner)
-const canReview=computed(()=>selected.value?.status==='pending_approval'&&selected.value.owner!==me.value.username&&String(selected.value.plan.environment.approvers||'').split(',').map(v=>v.trim()).includes(me.value.username))
+const reviewNode=computed(()=>selected.value?.plan?.nodes?.find(n=>n.id===activeStep.value?.node_id&&n.kind==='approval'))
+const canReview=computed(()=>selected.value?.status==='pending_approval'&&selected.value.owner!==me.value.username&&(reviewNode.value?(reviewNode.value.approvers||[]).includes(me.value.username)&&!(activeStep.value.reviews||[]).some(r=>r.actor===me.value.username):String(selected.value.plan.environment.approvers||'').split(',').map(v=>v.trim()).includes(me.value.username)))
 const mappingMatches=computed(()=>binding.value&&appNames.value.every(name=>binding.value.bindings?.some(b=>b.service===name&&b.artifact_id===request.value.artifacts[name])))
 const previewFresh=computed(()=>preview.value?.preflight_token&&previewInput.value===JSON.stringify(request.value)&&preview.value.preflight_expires*1000>now.value&&!preview.value.blockers?.length)
 const executionRows=computed(()=>selected.value?.steps||[])
@@ -63,8 +64,9 @@ async function loadList(){
   try{const result=await api('api/delivery/runs/page?'+q);if(sequence===listSeq)page.value=result}catch(e){if(sequence===listSeq)toast(e.message,'error')}finally{if(sequence===listSeq)reading.value=false}
 }
 async function load(){
-  const result=await Promise.all([api('api/delivery/templates'),api('api/services'),api('api/release-versions?limit=500'),api('api/environments'),api('api/changes?status=ready&limit=500'),api('api/delivery/runs/owners')])
+  const result=await Promise.all([api('api/delivery/templates'),api('api/services'),api('api/release-versions?limit=500'),api('api/environments'),api('api/changes?status=ready&limit=500'),api('api/delivery/runs/owners'),api('/api/users')])
   ;[templates.value,services.value,versions.value,environments.value,changes.value,owners.value]=result
+  reviewUsers.value=(result[6]||[]).filter(u=>u.enabled&&u.username!=='local').map(u=>({value:u.username,label:(u.display_name||u.username)+'（'+u.username+'）'}))
   if(sourceVersion&&!versions.value.some(v=>v.id===sourceVersion))versions.value.push(await api('api/release-versions/'+sourceVersion))
   await loadList()
 }
@@ -106,7 +108,7 @@ function chooseTemplate(id){
 }
 function newDraft(){if(busy.value||!confirm('清空当前未提交的交付草稿？'))return;request.value.template_id='';startDelivery()}
 function editTemplate(item){
-  returnScreen=screen.value;template.value=item?clone(item):{name:'',mode:sourceVersion?'version':'fixed',services:[],nodes:[{id:crypto.randomUUID(),kind:'deploy',name:'发布应用',service:''}]};screen.value='template'
+  returnScreen=screen.value;template.value=item?clone(item):{name:'',mode:sourceVersion?'version':'fixed',services:[],nodes:[{id:'node-'+crypto.randomUUID().slice(0,20),kind:'deploy',name:'发布应用',service:''}]};screen.value='template'
 }
 async function saveTemplate(){await task(async()=>{
   const saved=await api('api/delivery/templates'+(template.value.id?'/'+template.value.id:''),{method:template.value.id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(template.value)})
@@ -154,8 +156,8 @@ function back(){
 }
 async function action(op){await task(async()=>{
   if(op==='advance'&&!confirm(activeStep.value?.kind==='manual'?'确认已完成该人工节点的说明？':'执行 / 核对当前节点？可能连接真实资源，不会重跑已成功的写操作。'))return
-  await post('api/delivery/runs/'+selected.value.id+'/'+op,{digest:selected.value.digest,confirm_manual:activeStep.value?.kind==='manual'})
-  await refreshDetail()
+  await post('api/delivery/runs/'+selected.value.id+'/'+op,{digest:selected.value.digest,node_id:reviewNode.value?.id,comment:reviewComment.value,confirm_manual:activeStep.value?.kind==='manual'})
+  await refreshDetail();reviewComment.value='';if(['approve','reject'].includes(op))nodeIndex.value=Math.max(0,selected.value.steps.findIndex(s=>s.status!=='success'))
 })}
 async function coordinate(op){await task(async()=>{
   if(!confirm(op==='start'?'启动自动推进？普通节点会顺序执行；人工确认、批次观察或失败时停止。审批通过不会自动启动。':'暂停后续节点？当前已启动的操作不会被强制终止。'))return
@@ -186,7 +188,7 @@ async function rollback(step){await task(async()=>{
   const run=selected.value
   const candidate=await api('api/delivery/runs/'+run.id+'/rollback-candidate?release_id='+step.release_id)
   if(!confirm('生成 '+step.service+' 回退到 '+candidate.version+' 的交付草稿？只保存编排，不立即执行；须重新预检和审核。'))return
-  await recoveryTemplate(run,[{id:crypto.randomUUID(),kind:'deploy',name:'回退 '+step.service,service:step.service}],[step.service],{[step.service]:candidate.artifact_id},'回退交付 #'+run.id+' / 子发布 #'+step.release_id+'：'+reason)
+  await recoveryTemplate(run,[{id:crypto.randomUUID().slice(0,20),kind:'deploy',name:'回退 '+step.service,service:step.service}],[step.service],{[step.service]:candidate.artifact_id},'回退交付 #'+run.id+' / 子发布 #'+step.release_id+'：'+reason)
   toast('回退草稿已生成；请核对当前目标后预检提交','success')
 })}
 async function remainingDraft(){await task(async()=>{
@@ -194,7 +196,7 @@ async function remainingDraft(){await task(async()=>{
   const nodes=run.plan.nodes.flatMap(n=>{
     const steps=run.steps.filter(s=>s.node_id===n.id&&s.status!=='success')
     if(!steps.length)return []
-    if(n.kind==='deploy')return steps.filter(s=>allowed.has(s.service)).map(s=>({...clone(n),id:crypto.randomUUID(),service:s.service}))
+    if(n.kind==='deploy')return steps.filter(s=>allowed.has(s.service)).map(s=>({...clone(n),id:crypto.randomUUID().slice(0,20),service:s.service}))
     // Only never-started operations can be included. Failed/uncertain writes are never replayed.
     if(steps.every(s=>s.status==='pending'&&!s.started_at))return [clone(n)]
     return []
@@ -260,7 +262,7 @@ onBeforeUnmount(()=>{mounted=false;++detailSeq;++candidateSeq;++listSeq;clearInt
     <label v-if="template.mode==='fixed'">应用（多选）<Sel v-model="template.services" :disabled="busy" multiple filterable :options="services.map(s=>s.name)" width="100%" /></label>
     <p v-else>仅版本中的代码 / 制品变更触发应用发布，配置或数据变更不会让所有应用重启。</p>
     <h3>顺序步骤 <HelpTip text="每个应用只能安排一次。人工节点必须填写确认说明。数据同步先冻结为 SQL 变更再纳入编排。" /></h3>
-    <DeliveryNodeEditor :nodes="template.nodes" :apps="services.map(s=>s.name)" :changes="changes" :disabled="busy" />
+    <DeliveryNodeEditor :nodes="template.nodes" :apps="services.map(s=>s.name)" :changes="changes" :users="reviewUsers" :disabled="busy" />
     <div class="footer"><ElButton :disabled="busy" @click="screen=returnScreen">返回，不保存</ElButton><ElButton type="primary" native-type="submit" :loading="busy">保存{{returnScreen==='prepare'?'并继续交付':''}}</ElButton></div>
   </form>
 
@@ -281,7 +283,7 @@ onBeforeUnmount(()=>{mounted=false;++detailSeq;++candidateSeq;++listSeq;clearInt
       <template v-if="selectedTemplate?.mode==='version'&&appNames.length&&!binding?.locked"><label class="checkbox"><input v-model="codeConfirmed" type="checkbox" :disabled="busy" /> 我已人工确认各制品覆盖本版本的代码变更（系统未自动验证代码覆盖）</label><ElButton :disabled="busy||!canManage(version)||!codeConfirmed||appNames.some(n=>!request.artifacts[n])" :loading="busy" @click="pinArtifacts">关联版本制品</ElButton></template>
       <details v-if="version"><summary>关联范围 · {{version.changes?.length||0}} 条变更</summary><ul><li v-for="c in version.changes" :key="c.id">#{{c.id}} {{c.title}} · {{c.service||'无应用部署'}} · {{c.reference||c.kind}}</li></ul></details>
       <div class="flow" aria-label="本次执行顺序"><span v-for="(n,i) in request.nodes" :key="n.id">{{i+1}}. {{n.name}} · {{kinds[n.kind]||n.kind}}</span></div>
-      <details><summary>调整本次执行步骤（不修改模板） · {{request.nodes.length}} 个节点</summary><DeliveryNodeEditor :nodes="request.nodes" :apps="appNames" :changes="version?.changes||changes" :disabled="busy" /></details>
+      <details><summary>调整本次执行步骤（不修改模板） · {{request.nodes.length}} 个节点</summary><DeliveryNodeEditor :nodes="request.nodes" :apps="appNames" :changes="version?.changes||changes" :users="reviewUsers" :disabled="busy" /></details>
       <p class="hint">数据同步任务先对比并冻结为 SQL 变更，纳入 SQL 节点。不可用的旧节点会阻止预检提交。</p>
       <div class="footer"><ElButton :disabled="busy" @click="phase=1">上一步</ElButton><ElButton type="primary" :loading="busy" :disabled="!selectedTemplate||appNames.some(n=>!request.artifacts[n])" @click="resolve">预检范围、制品与目标</ElButton></div>
     </div>
@@ -289,7 +291,7 @@ onBeforeUnmount(()=>{mounted=false;++detailSeq;++candidateSeq;++listSeq;clearInt
       <template v-if="preview"><h3>{{preview.blockers?.length?'预检未通过':'执行预检'}} · {{preview.environment?.display_name}}</h3><p v-for="b in preview.blockers" :key="b" class="error" role="alert">{{b}}</p><details v-if="preview.warnings?.length"><summary>注意事项 · {{preview.warnings.length}}</summary><p v-for="w in preview.warnings" :key="w">{{w}}</p></details>
       <article v-for="app in preview.services" :key="app.service"><b>{{app.service}} → {{app.artifact.version}} / #{{app.artifact.id}}</b><p>{{app.target.host_group||app.target.target_type}} · {{app.target.hosts?.length||1}} 个目标 · 每批 {{app.target.batch_size||1}} 台 · {{app.target.pause_between_batches?'批间观察暂停':'连续批次'}}</p></article>
       <details><summary>核对执行顺序 · {{preview.nodes.length}} 个节点</summary><ol><li v-for="n in preview.nodes" :key="n.id">{{n.name}} · {{kinds[n.kind]||n.kind}}<p v-if="n.instructions">{{n.instructions}}</p></li></ol></details>
-      <p>{{preview.environment?.protected||preview.redis_plans?.length||preview.sql_plans?.length||preview.template?.workbench?'需要审核 · 发起人不可自审':'无需额外审核'}} · 提交和审批不会自动开始执行</p>
+      <p>{{preview.nodes?.some(n=>n.kind==='approval')||preview.environment?.protected||preview.redis_plans?.length||preview.sql_plans?.length||preview.template?.workbench?'需要审核 · 发起人不可自审':'无需额外审核'}} · 提交和审批不会自动开始执行</p>
       <SQLPlanPreview :plans="preview.sql_plans" /><RedisPlanPreview :plans="preview.redis_plans" /><NacosPlanPreview :plans="preview.nacos_plans" />
       <p v-if="previewFresh">预检有效至 {{formatTime(preview.preflight_expires)}}。提交会再次核对配置，修改后须重新预检。</p><p v-else class="error">当前预检不可提交，请重新检查。</p></template>
       <p v-else>尚无有效预检。调整范围、制品或步骤会自动使旧预检失效。</p>
@@ -299,7 +301,7 @@ onBeforeUnmount(()=>{mounted=false;++detailSeq;++candidateSeq;++listSeq;clearInt
 
   <template v-if="screen==='detail'&&selected?.plan">
     <section class="run-summary panel"><div><h3>{{selected.plan.template.name}} <span class="status" :class="selected.status">{{states[selected.status]||selected.status}}</span></h3><p>{{selected.plan.environment.display_name}} · {{selected.plan.version?.version||'固定服务'}} · 发起人 {{selected.owner}} · 审核人 {{selected.approver||'—'}} · {{selected.steps.filter(s=>s.status==='success').length}} / {{selected.steps.length}} 步</p></div>
-      <div class="actions"><template v-if="canReview"><ElButton :loading="busy" @click="action('reject')">驳回</ElButton><ElButton type="primary" :loading="busy" @click="action('approve')">审核通过</ElButton></template><template v-if="canManage(selected)">
+      <div v-if="canReview" class="fld"><label>审核意见（驳回必填）</label><ElInput v-model="reviewComment" type="textarea" :rows="2" maxlength="2000" placeholder="核对发布内容后填写意见" /></div><div class="actions"><template v-if="canReview"><ElButton :loading="busy" @click="action('reject')">驳回</ElButton><ElButton type="primary" :loading="busy" @click="action('approve')">审核通过</ElButton></template><template v-if="canManage(selected)">
       <ElButton v-if="['pending_approval','approved'].includes(selected.status)" :disabled="busy" @click="action('cancel')">取消</ElButton>
       <template v-if="['approved','running'].includes(selected.status)"><ElButton v-if="!autoRunning" type="primary" :loading="busy" @click="coordinate('start')">{{control.state==='paused'||control.state==='interrupted'?'恢复自动推进':'开始执行（自动推进）'}}</ElButton><ElButton v-else :loading="busy" :disabled="control.state==='pausing'" @click="coordinate('pause')">暂停后续步骤</ElButton><ElButton v-if="!autoRunning" :loading="busy" @click="action('advance')">{{activeStep?.kind==='manual'?'确认人工节点':'单步执行 / 核对'}}</ElButton></template></template></div>
     </section>
@@ -310,8 +312,8 @@ onBeforeUnmount(()=>{mounted=false;++detailSeq;++candidateSeq;++listSeq;clearInt
       <ol class="timeline panel"><li v-for="(s,i) in selected.steps" :key="s.node_id+':'+s.service"><button :class="{active:nodeIndex===i}" @click="nodeIndex=i"><span>{{i+1}}. {{s.name}}</span><small>{{states[statusOf(s)]||statusOf(s)}} {{duration(s)}}</small></button></li></ol>
       <section v-if="currentNode" class="panel node-detail"><h3>{{currentNode.name}}</h3><p>{{kinds[currentNode.kind]||currentNode.kind}} · {{states[statusOf(currentNode)]||statusOf(currentNode)}} · {{duration(currentNode)}}</p>
         <p v-if="currentNode.kind==='manual'" class="instructions">{{selected.plan.nodes.find(n=>n.id===currentNode.node_id)?.instructions}}</p><p v-if="currentNode.detail" class="instructions">{{currentNode.detail}}</p>
-        <template v-if="currentNode.release_id"><p>子发布单 #{{currentNode.release_id}} · 成功 {{children[currentNode.release_id]?.succeeded||0}} / {{children[currentNode.release_id]?.total||0}}</p><div class="actions"><template v-if="children[currentNode.release_id]?.status==='waiting_next_batch'&&canManage(selected)"><ElButton type="primary" :loading="busy" @click="continueBatch(currentNode.release_id)">核对后继续下一批</ElButton><ElButton :loading="busy" @click="cancelBatch(currentNode.release_id)">取消剩余批次</ElButton></template><ElButton :loading="logBusy" @click="showLogs(currentNode.release_id)">查看发布日志</ElButton></div></template>
-        <p v-else>节点状态与说明在此更新。SQL、Redis、Nacos 的预检和执行台账见“审核快照”；失败或中断不自动重跑。</p>
+        <template v-if="currentNode.release_id"><p>子发布单 #{{currentNode.release_id}} · 成功 {{children[currentNode.release_id]?.succeeded||0}} / {{children[currentNode.release_id]?.total||0}}</p><div class="actions"><template v-if="children[currentNode.release_id]?.status==='waiting_next_batch'&&canManage(selected)"><span v-if="children[currentNode.release_id]?.continue_after*1000>now">首批观察至 {{formatTime(children[currentNode.release_id].continue_after)}}</span><ElButton type="primary" :loading="busy" :disabled="children[currentNode.release_id]?.continue_after*1000>now" @click="continueBatch(currentNode.release_id)">{{children[currentNode.release_id]?.recovery?'核对后继续回退批次':'核对后继续下一批'}}</ElButton><ElButton v-if="!children[currentNode.release_id]?.recovery" :loading="busy" @click="cancelBatch(currentNode.release_id)">取消剩余批次</ElButton></template><ElButton :loading="logBusy" @click="showLogs(currentNode.release_id)">查看发布日志</ElButton></div></template>
+        <template v-else-if="currentNode.kind==='approval'"><p>{{selected.plan.nodes.find(n=>n.id===currentNode.node_id)?.approval_mode==='all'?'会签：所有指定人员通过':'或签：任一指定人员通过'}} · {{(selected.plan.nodes.find(n=>n.id===currentNode.node_id)?.approvers||[]).join(' / ')}}</p><ul><li v-for="r in currentNode.reviews||[]" :key="r.actor">{{r.actor}} · {{r.approved?'同意':'驳回'}} · {{formatTime(r.at)}}<p>{{r.comment||'无补充意见'}}</p></li></ul><small>当前阶段通过后才会解锁下一阶段；全部审核完成后仍需发起人开始执行。</small></template><p v-else>节点状态与说明在此更新。SQL、Redis、Nacos 的预检和执行台账见“审核快照”；失败或中断不自动重跑。</p>
       </section><p v-else class="panel">所有步骤已完成。</p>
     </div>
     <section v-if="detailTab==='snapshot'" class="panel snapshot">

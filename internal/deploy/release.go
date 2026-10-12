@@ -32,6 +32,8 @@ type ReleaseOrder struct {
 	DeployIDs           []int64 `json:"deploy_ids,omitempty"`
 	StartedAt           int64   `json:"started_at"`
 	EndedAt             int64   `json:"ended_at,omitempty"`
+	ContinueAfter       int64   `json:"continue_after,omitempty"`
+	Recovery            bool    `json:"recovery,omitempty"`
 }
 
 type ReleaseManager struct {
@@ -108,6 +110,8 @@ func (s *Store) GetReleaseOrder(id int64) *ReleaseOrder {
 		return nil
 	}
 	o.DeployIDs = s.ReleaseDeployIDs(id)
+	o.Recovery = s.saeReleaseRecovery(&o)
+	o.ContinueAfter = s.releaseContinueAfter(&o)
 	return &o
 }
 func (s *Store) ReleaseOrders(service string, limit int) []ReleaseOrder {
@@ -135,6 +139,8 @@ func (s *Store) ReleaseOrders(service string, limit int) []ReleaseOrder {
 	rows.Close()
 	for i := range out {
 		out[i].DeployIDs = s.ReleaseDeployIDs(out[i].ID)
+		out[i].Recovery = s.saeReleaseRecovery(&out[i])
+		out[i].ContinueAfter = s.releaseContinueAfter(&out[i])
 	}
 	return out
 }
@@ -227,7 +233,7 @@ func (s *Store) SetReleaseProgress(id int64, next int) {
 }
 func (s *Store) RefreshReleaseCounts(id int64) (int, int) {
 	var ok, failed int
-	_ = s.db.QueryRow(`SELECT COALESCE(SUM(CASE WHEN d.status='success' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN d.status NOT IN ('success','running') THEN 1 ELSE 0 END),0) FROM release_order_deploys rd JOIN deploys d ON d.id=rd.deploy_id WHERE rd.release_id=?`, id).Scan(&ok, &failed)
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(CASE WHEN d.status='success' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN d.status NOT IN ('success','running','waiting_next_batch') THEN 1 ELSE 0 END),0) FROM release_order_deploys rd JOIN deploys d ON d.id=rd.deploy_id WHERE rd.release_id=?`, id).Scan(&ok, &failed)
 	_, _ = s.db.Exec(`UPDATE release_orders SET succeeded=?,failed=? WHERE id=?`, ok, failed, id)
 	return ok, failed
 }
@@ -384,6 +390,9 @@ func (m *ReleaseManager) ValidateTarget(service, environment, reason string) (*S
 	if target.Protected && strings.TrimSpace(target.Approvers) == "" {
 		return nil, fmt.Errorf("受保护环境未配置审批人，不能创建发布单")
 	}
+	if err := validateReleasePolicy(*target, len(target.Hosts)); err != nil {
+		return nil, err
+	}
 	return target, nil
 }
 
@@ -484,6 +493,12 @@ func (m *ReleaseManager) Continue(id int64, actor string) error {
 	if o == nil || o.Status != "waiting_next_batch" {
 		return fmt.Errorf("发布单不在批次暂停状态")
 	}
+	if o.ContinueAfter > time.Now().Unix() {
+		return fmt.Errorf("首批观察期尚未结束，请于 %s 后继续", time.Unix(o.ContinueAfter, 0).Format(time.RFC3339))
+	}
+	if o.Target.ManagedTarget() {
+		return m.continueSAERelease(o, actor)
+	}
 	if err := m.st.compareReleaseStatus(id, "waiting_next_batch", "queued", "", false); err != nil {
 		return err
 	}
@@ -493,8 +508,14 @@ func (m *ReleaseManager) Continue(id int64, actor string) error {
 }
 func (m *ReleaseManager) Cancel(id int64, actor string) error {
 	o := m.st.GetReleaseOrder(id)
+	if o != nil && o.Recovery {
+		return fmt.Errorf("回退流程不能按普通发布取消；请继续回退批次或在云端核对")
+	}
 	if o == nil || (o.Status != "pending_approval" && o.Status != "waiting_next_batch" && o.Status != "queued") {
 		return fmt.Errorf("仅待审批、排队或批次暂停的发布单可取消")
+	}
+	if o.Target.ManagedTarget() && o.Status == "waiting_next_batch" {
+		return m.cancelSAERelease(o, actor)
 	}
 	if err := m.st.compareReleaseStatus(id, o.Status, "canceled", "", true); err != nil {
 		return err
@@ -529,10 +550,7 @@ func (m *ReleaseManager) startNextBatch(id int64) {
 		m.st.SetReleaseStatus(id, "success", "", true)
 		return
 	}
-	end := o.NextIndex + o.BatchSize
-	if end > len(o.Hosts) {
-		end = len(o.Hosts)
-	}
+	end := releaseBatchEnd(o)
 	hosts := make([]Host, 0, end-o.NextIndex)
 	if target.ManagedTarget() {
 		hosts = target.ExecutionHosts()
@@ -552,6 +570,9 @@ func (m *ReleaseManager) startNextBatch(id int64) {
 		}
 	}
 	batchNo := o.NextIndex/o.BatchSize + 1
+	if canaryTarget(o.Target) && o.NextIndex > 0 {
+		batchNo = 2 + (o.NextIndex-policyInt(o.Target.DeployConfig, "canary_count", 1))/o.BatchSize
+	}
 	m.st.SetReleaseStatus(id, "running", "", false)
 	ids, err := m.dp.StartArtifactReleaseBatch(target.Apply(sv), hosts, *artifact, o.Environment, o.Reason, o.Actor, target.MaxParallel)
 	if err != nil {
@@ -570,6 +591,10 @@ func (m *ReleaseManager) monitorBatch(id int64, ids []int64, end int) {
 		done := true
 		for _, d := range ids {
 			v := m.st.GetDeploy(d)
+			if v != nil && v.Status == "waiting_next_batch" {
+				m.st.SetReleaseStatus(id, "waiting_next_batch", "", false)
+				return
+			}
 			if v == nil || v.Status == "running" {
 				done = false
 				break
@@ -591,7 +616,7 @@ func (m *ReleaseManager) monitorBatch(id int64, ids []int64, end int) {
 		m.st.Audit(o.Actor, "timeout", "release", fmt.Sprint(id), map[string]any{"deploy_ids": ids})
 		return
 	}
-	if failed > o.FailureThreshold {
+	if failed > o.FailureThreshold || (canaryTarget(o.Target) && end == policyInt(o.Target.DeployConfig, "canary_count", 1) && failed > 0) {
 		m.st.SetReleaseStatus(id, "failed", "", true)
 		m.st.Audit(o.Actor, "fail", "release", fmt.Sprint(id), map[string]any{"failed": failed})
 		return
@@ -601,7 +626,7 @@ func (m *ReleaseManager) monitorBatch(id int64, ids []int64, end int) {
 		m.st.Audit(o.Actor, "complete", "release", fmt.Sprint(id), nil)
 		return
 	}
-	if o.PauseBetweenBatches {
+	if o.PauseBetweenBatches || (canaryTarget(o.Target) && end == policyInt(o.Target.DeployConfig, "canary_count", 1)) {
 		m.st.SetReleaseStatus(id, "waiting_next_batch", "", false)
 		return
 	}
@@ -611,12 +636,18 @@ func (m *ReleaseManager) monitorBatch(id int64, ids []int64, end int) {
 
 func (m *ReleaseManager) Rollback(id int64, reason, actor string) error {
 	o := m.st.GetReleaseOrder(id)
-	if o == nil || o.Status != "success" {
-		return fmt.Errorf("仅成功发布单可以整体回滚")
+	if o == nil || (o.Status != "success" && o.Status != "waiting_next_batch" && o.Status != "failed" && o.Status != "canceled") {
+		return fmt.Errorf("仅已发布、观察暂停或失败的发布单可以回滚")
+	}
+	if o.Recovery {
+		return fmt.Errorf("已进入回退流程，不可重复发起回退")
 	}
 	env := m.st.GetEnvironment(o.Environment)
 	if env != nil && env.RequireReason && strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("受保护环境回滚必须填写原因")
+	}
+	if o.Target.ManagedTarget() && o.Status == "waiting_next_batch" {
+		return m.rollbackSAERelease(o, reason, actor)
 	}
 	sourceIDs := m.st.ReleaseDeployIDs(id)
 	newIDs := []int64{}

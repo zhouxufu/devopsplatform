@@ -18,12 +18,14 @@ import (
 )
 
 type DeliveryNode struct {
-	ID           string  `json:"id"`
-	Kind         string  `json:"kind"`
-	Name         string  `json:"name"`
-	Service      string  `json:"service,omitempty"`
-	Instructions string  `json:"instructions,omitempty"`
-	ChangeIDs    []int64 `json:"change_ids,omitempty"`
+	ID           string   `json:"id"`
+	Kind         string   `json:"kind"`
+	Name         string   `json:"name"`
+	Service      string   `json:"service,omitempty"`
+	Instructions string   `json:"instructions,omitempty"`
+	Approvers    []string `json:"approvers,omitempty"`
+	ApprovalMode string   `json:"approval_mode,omitempty"`
+	ChangeIDs    []int64  `json:"change_ids,omitempty"`
 }
 type DeliveryTemplate struct {
 	Workbench string         `json:"workbench,omitempty"`
@@ -68,15 +70,16 @@ type DeliveryPlan struct {
 	RedisPlans       []*RedisExecutionPlan `json:"redis_plans,omitempty"`
 }
 type DeliveryStep struct {
-	StartedAt int64  `json:"started_at,omitempty"`
-	EndedAt   int64  `json:"ended_at,omitempty"`
-	NodeID    string `json:"node_id"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	Service   string `json:"service,omitempty"`
-	Status    string `json:"status"`
-	ReleaseID int64  `json:"release_id,omitempty"`
-	Detail    string `json:"detail,omitempty"`
+	StartedAt int64              `json:"started_at,omitempty"`
+	EndedAt   int64              `json:"ended_at,omitempty"`
+	NodeID    string             `json:"node_id"`
+	Name      string             `json:"name"`
+	Kind      string             `json:"kind"`
+	Service   string             `json:"service,omitempty"`
+	Status    string             `json:"status"`
+	ReleaseID int64              `json:"release_id,omitempty"`
+	Detail    string             `json:"detail,omitempty"`
+	Reviews   []ApprovalDecision `json:"reviews,omitempty"`
 }
 type DeliveryRun struct {
 	ID         int64          `json:"id"`
@@ -133,13 +136,24 @@ func validateDeliveryNodes(nodes []DeliveryNode) error {
 		return fmt.Errorf("编排需要 1–30 个顺序节点")
 	}
 	seen := map[string]bool{}
+	executionSeen := false
 	for _, n := range nodes {
 		if !environmentNameRE.MatchString(n.ID) || seen[n.ID] || strings.TrimSpace(n.Name) == "" {
 			return fmt.Errorf("节点需要不重复的英文标识和名称")
 		}
 		seen[n.ID] = true
+		if n.Kind == "approval" {
+			if executionSeen {
+				return fmt.Errorf("人工审核节点必须放在所有执行/确认节点之前")
+			}
+			if err := validateApprovalNode(n); err != nil {
+				return err
+			}
+		} else {
+			executionSeen = true
+		}
 		switch n.Kind {
-		case "deploy", "manual", "mysql", "nacos", "data-sync", "redis":
+		case "deploy", "manual", "mysql", "nacos", "data-sync", "redis", "approval":
 		default:
 			return fmt.Errorf("不支持的节点类型：%s", n.Kind)
 		}
@@ -266,6 +280,24 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	if err := validateDeliveryNodes(nodes); err != nil {
 		return nil, nil, err
 	}
+	requiredReviews, actualReviews := []DeliveryNode{}, []DeliveryNode{}
+	for _, n := range tpl.Nodes {
+		if n.Kind == "approval" {
+			requiredReviews = append(requiredReviews, n)
+		}
+	}
+	for _, n := range nodes {
+		if n.Kind == "approval" {
+			actualReviews = append(actualReviews, n)
+		}
+	}
+	if len(requiredReviews) > 0 {
+		a, _ := json.Marshal(requiredReviews)
+		b, _ := json.Marshal(actualReviews)
+		if string(a) != string(b) {
+			return nil, nil, fmt.Errorf("本次交付不能删除、跳过或改动模板中的审核阶段；请修改模板后重新预检")
+		}
+	}
 	p := &DeliveryPlan{Template: *tpl, Environment: *env, Reason: strings.TrimSpace(req.Reason), Nodes: nodes, Services: []DeliveryService{}, Blockers: []string{}, Warnings: []string{}}
 	if tpl.Workbench != "" {
 		policy, err := s.workbenchPolicy(tpl.Workbench, env.Name)
@@ -368,6 +400,8 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	redisCount := 0
 	for _, node := range nodes {
 		switch node.Kind {
+		case "approval":
+			p.Warnings = append(p.Warnings, node.Name+"：人工审核（"+node.ApprovalMode+"）；通过不会自动执行")
 		case "redis":
 			if deliveryReviewRequired(p) && strings.TrimSpace(env.Approvers) == "" {
 				p.Blockers = append(p.Blockers, "Redis 操作必须审核，请先为该环境配置审核人（开发/测试也需要）")
@@ -411,7 +445,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			p.RedisPlans = append(p.RedisPlans, plan)
 			redisCount++
 			review := "提交后仍须手动确认执行；"
-			if deliveryReviewRequired(p) {
+			if deliveryReviewRequired(p) || hasApprovalNodes(p) {
 				review = "Redis 命令必须由另一名环境审核人审核；"
 			}
 			p.Warnings = append(p.Warnings, review+"精确 Key 的当前数据不冻结、不校验内容，命令顺序执行、非事务、无自动回滚；超时不得重试。缓存清理无法恢复，请确认业务可重建缓存。")
@@ -573,6 +607,9 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	if err != nil {
 		return nil, err
 	}
+	if err := validateRunApprovals(p, actor); err != nil {
+		return nil, err
+	}
 	if len(p.Blockers) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(p.Blockers, "；"))
 	}
@@ -590,7 +627,7 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	planJSON, _ := json.Marshal(p)
 	hash := sha256.Sum256(planJSON)
 	run := &DeliveryRun{Plan: *p, Digest: "sha256:" + hex.EncodeToString(hash[:]), Status: "approved", Owner: actor, CreatedAt: time.Now().Unix(), Revision: 1, Steps: []DeliveryStep{}, envSecrets: secrets}
-	if deliveryReviewRequired(p) {
+	if deliveryReviewRequired(p) || hasApprovalNodes(p) {
 		run.Status = "pending_approval"
 	}
 	for _, node := range p.Nodes {
@@ -718,6 +755,9 @@ func (s *Store) saveDeliveryRun(v *DeliveryRun) error {
 }
 func (s *Store) ReviewDeliveryRun(id int64, actor, digest string, approve bool) (*DeliveryRun, error) {
 	v := s.DeliveryRun(id)
+	if v != nil && hasApprovalNodes(&v.Plan) {
+		return nil, fmt.Errorf("分阶段审批必须指定当前审核节点")
+	}
 	if v == nil || v.Status != "pending_approval" || digest != v.Digest {
 		return nil, fmt.Errorf("审核单状态或内容摘要已改变")
 	}
@@ -746,6 +786,14 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 		return nil, fmt.Errorf("仅已审核或执行中的编排可以继续")
 	}
 	env := s.GetEnvironment(v.Plan.Environment.Name)
+	if hasApprovalNodes(&v.Plan) {
+		if env == nil {
+			return nil, fmt.Errorf("发布环境不存在")
+		}
+		if err := s.checkRunApprovals(v, env); err != nil {
+			return nil, err
+		}
+	}
 	if env == nil || (env.Protected && (v.Approver == "" || !allowedApprover(env.Approvers, v.Approver))) {
 		return nil, fmt.Errorf("环境保护策略已变化，请重新提交审核")
 	}
@@ -757,7 +805,7 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 		}
 		requiresReview = requiresReview || policy.ChangeApproval || env.Protected
 	}
-	if requiresReview && (v.Approver == "" || v.Approver == v.Owner || !allowedApprover(env.Approvers, v.Approver) || !allowedApprover(v.Plan.Environment.Approvers, v.Approver)) {
+	if requiresReview && !hasApprovalNodes(&v.Plan) && (v.Approver == "" || v.Approver == v.Owner || !allowedApprover(env.Approvers, v.Approver) || !allowedApprover(v.Plan.Environment.Approvers, v.Approver)) {
 		return nil, fmt.Errorf("SQL/Redis 工作台操作必须经另一名环境审核人审核，且审核人仍须有权限")
 	}
 	if env.RequireReason && v.Plan.Reason == "" {
@@ -1052,6 +1100,9 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 		req.previewDrafts = true
 		p, secrets, err := st.ResolveDelivery(req, manager)
 		if p != nil {
+			if e := validateRunApprovals(p, actor(r)); e != nil {
+				p.Blockers = append(p.Blockers, e.Error())
+			}
 			if len(p.Blockers) == 0 {
 				p.PreflightToken, p.PreflightExpires = st.signDeliveryPreflight(req, p, secrets, actor(r))
 			}
@@ -1092,6 +1143,8 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 			var req struct {
 				Digest        string `json:"digest"`
 				ConfirmManual bool   `json:"confirm_manual"`
+				NodeID        string `json:"node_id"`
+				Comment       string `json:"comment"`
 			}
 			if err := decode(w, r, &req); err != nil {
 				reply(w, nil, err)
@@ -1099,7 +1152,11 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 			}
 			var err error
 			if action == "approve" || action == "reject" {
-				v, err = st.ReviewDeliveryRun(v.ID, actor(r), req.Digest, action == "approve")
+				if hasApprovalNodes(&v.Plan) {
+					v, err = st.ReviewDeliveryNode(v.ID, actor(r), req.Digest, req.NodeID, req.Comment, action == "approve")
+				} else {
+					v, err = st.ReviewDeliveryRun(v.ID, actor(r), req.Digest, action == "approve")
+				}
 			} else {
 				if !manage(r, v.Owner) {
 					reply(w, nil, fmt.Errorf("仅发起人或管理员可执行或取消"))

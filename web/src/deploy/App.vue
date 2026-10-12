@@ -10,7 +10,8 @@ const embedded = window.parent !== window.window
 const directAPI = !location.pathname.startsWith('/api/plugins/')
 const route = useRoute(), router = useRouter()
 watch(()=>route.path,()=>{if(embedded)window.parent.postMessage({type:'context.visibility',service:!!route.params.name,environment:!!route.params.name},location.origin)},{immediate:true})
-const globalEnvironment = ref(sessionStorage.getItem('lp-deploy-environment') || '')
+const environmentKey=embedded?'lp-deploy-environment:'+window.name:'lp-deploy-environment'
+const globalEnvironment = ref(sessionStorage.getItem(environmentKey) || '')
 const globalService = ref('')
 const platformPanel = ref('')
 provide('globalEnvironment', globalEnvironment)
@@ -21,7 +22,7 @@ function setPlatformContext(patch) {
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'environment') && typeof patch.environment === 'string') {
     globalEnvironment.value = patch.environment
-    sessionStorage.setItem('lp-deploy-environment', patch.environment)
+    sessionStorage.setItem(environmentKey, patch.environment)
   }
   if (embedded) window.parent.postMessage({ type: 'context.update', ...patch }, location.origin)
 }
@@ -57,7 +58,7 @@ window.addEventListener('message', e => {
   }
   if (typeof e.data?.environment === 'string') {
     globalEnvironment.value = e.data.environment
-    sessionStorage.setItem('lp-deploy-environment', e.data.environment)
+    sessionStorage.setItem(environmentKey, e.data.environment)
   }
 })
 try { if (embedded) window.parent.postMessage({ type: 'context.request' }, location.origin) } catch {}

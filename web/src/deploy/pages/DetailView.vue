@@ -10,6 +10,7 @@ import GitBranchSelect from '../components/GitBranchSelect.vue'
 import ApplicationResourcesEditor from '../components/ApplicationResourcesEditor.vue'
 import { ref, computed, onUnmounted, watch, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import ReleasePolicyEditor from '../components/ReleasePolicyEditor.vue'
 import Stages from '../../shared/components/Stages.vue'
 import { toast } from '../../shared/composables/toast.js'
 import Sel from '../../shared/components/Sel.vue'
@@ -57,6 +58,7 @@ const oneClickTarget = computed(() => targets.value.find(t => t.environment === 
 const isManagedTarget = t => t?.target_type === 'aliyun-sae'
 const isManagedJavaTarget = t => t?.target_type === 'ssh-jar' && t?.deploy_config?.java_mode === 'managed'
 const targetReady = t => isManagedTarget(t) ? !!(t?.deploy_config?.connection && t?.deploy_config?.app_id && t?.deploy_config?.namespace_id && t?.deploy_config?.region) : !!(t?.host_group && t?.hosts?.length)
+const releasePolicyText=t=>t?.deploy_config?.release_mode==='canary'?`金丝雀 · 首批 ${t.deploy_config.canary_count||1} 实例 · 观察 ${t.deploy_config.observe_seconds??300}s · ${t.target_type==='aliyun-sae'?'剩余 '+(t.deploy_config.batch_count||2)+' 批（人工确认）':'后续每批 '+t.batch_size+' 台'}`:t?.target_type==='aliyun-sae'?t.deploy_config?.release_mode==='batch'?`SAE 分 ${t.deploy_config.batch_count||2} 批 · ${t.deploy_config.batch_mode==='auto'?'自动':'人工确认'}`:'SAE 原有发布策略':`分批 · 每批 ${t?.batch_size||1} 台 / 并发 ${t?.max_parallel||1}${t?.pause_between_batches?' / 批次暂停':''}`
 const targetResource = t => isManagedTarget(t) ? `SAE ${t.deploy_config?.app_id || '未配置'} · ${t.deploy_config?.region || '未知地域'}` : t?.host_group ? `${t.host_group} · ${t.hosts?.length || 0} 台主机` : '未绑定环境主机组'
 const saeConnections = computed(() => connections.value.filter(c => c.kind === 'aliyun-sae'))
 const activeDeploy = computed(() => deploys.value.find(d => d.status === 'running' && d.environment === deployEnv.value))
@@ -713,7 +715,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
       <div class="env-grid">
         <article v-for="t in targets" :key="t.environment" class="env-card manage">
           <div class="env-title"><span :class="['env-dot', envState[t.environment]?.current ? 'ok' : '']"></span><div><h4>{{ t.protected ? '🔒 ' : '' }}{{ t.display_name }}</h4><small>{{ t.environment }}</small></div></div>
-          <dl class="env-meta"><div><dt>当前版本</dt><dd>{{ envState[t.environment]?.current?.version || '未发布' }}</dd></div><div><dt>环境资源</dt><dd>{{ targetResource(t) }}</dd></div><div><dt>运行变量</dt><dd>{{t.runtime_env_keys?.length ? `${t.runtime_env_keys.length} 项（已加密）` : '未配置'}}</dd></div><div><dt>发布策略</dt><dd>{{isManagedTarget(t)?'SAE 变更单轮询':`每批 ${t.batch_size} 台 / 并发 ${t.max_parallel}${t.pause_between_batches?' / 批次暂停':''}`}}</dd></div><div v-if="isManagedJavaTarget(t)"><dt>检查失败</dt><dd>{{({rollback:'自动恢复旧版本',stop:'停止新版本',keep:'保留新版本运行'})[t.deploy_config?.health_failure_action||'rollback']}}</dd></div><div><dt>{{isManagedTarget(t)?'命名空间':'部署目录'}}</dt><dd><code>{{ isManagedTarget(t)?t.deploy_config?.namespace_id:t.remote_dir }}</code></dd></div></dl>
+          <dl class="env-meta"><div><dt>当前版本</dt><dd>{{ envState[t.environment]?.current?.version || '未发布' }}</dd></div><div><dt>环境资源</dt><dd>{{ targetResource(t) }}</dd></div><div><dt>运行变量</dt><dd>{{t.runtime_env_keys?.length ? `${t.runtime_env_keys.length} 项（已加密）` : '未配置'}}</dd></div><div><dt>发布策略</dt><dd>{{releasePolicyText(t)}}</dd></div><div v-if="isManagedJavaTarget(t)"><dt>检查失败</dt><dd>{{({rollback:'自动恢复旧版本',stop:'停止新版本',keep:'保留新版本运行'})[t.deploy_config?.health_failure_action||'rollback']}}</dd></div><div><dt>{{isManagedTarget(t)?'命名空间':'部署目录'}}</dt><dd><code>{{ isManagedTarget(t)?t.deploy_config?.namespace_id:t.remote_dir }}</code></dd></div></dl>
           <div class="env-actions"><ElButton size="small" type="primary" :disabled="!targetReady(t)" @click="releaseTo(t)">{{targetReady(t) ? '发布' : '先配置资源'}}</ElButton><ElButton v-if="isManagedJavaTarget(t)" size="small" @click="openInstances(t)">实例管理</ElButton><ElButton size="small" @click="editTarget(t)">编辑配置</ElButton><button class="remove op-btn" @click="deleteTarget(t)">移除</button></div>
         </article>
         <div v-if="!targets.length" class="add-env"><span>尚未配置部署环境</span><small>使用右上角“配置环境”绑定发布资源</small></div>
@@ -773,7 +775,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
       <div class="fld"><label>目标环境</label><span>{{ selectedTarget?.protected ? '🔒 ' : '' }}{{ selectedTarget?.display_name }}</span></div>
       <div class="fld"><label>环境执行目标</label><span>{{targetResource(selectedTarget)}}；提交时自动快照目标配置</span></div>
       <div class="version-diff"><div><small>当前版本</small><code>{{envState[deployEnv]?.current?.version||'未发布'}}</code></div><span>→</span><div><small>目标版本</small><code>{{selectedVersion}} · #{{selectedArtifact?.id}}</code></div></div>
-      <div class="fld"><label>发布策略</label><span>{{isManagedTarget(selectedTarget)?'由 SAE 执行滚动变更，平台轮询变更单结果':`每批 ${selectedTarget?.batch_size||1} 台 · 并发 ${selectedTarget?.max_parallel||1} · 允许失败 ${selectedTarget?.failure_threshold||0} 台`}}</span></div>
+      <div class="fld"><label>发布策略</label><span>{{releasePolicyText(selectedTarget)}}</span></div>
       <div v-if="!isManagedTarget(selectedTarget)" class="fld"><label>远端目录</label><code>{{ selectedTarget?.remote_dir || '未配置' }}</code></div>
       <div v-if="selectedTarget?.target_type === 'ssh-jar'" class="fld"><label>启动命令</label><code style="word-break:break-all">{{ selectedTarget?.start_cmd || '未配置' }}</code></div>
       <div class="fld"><label>应用环境变量</label><span>{{selectedTarget?.runtime_env_keys?.length ? `${selectedTarget.runtime_env_keys.length} 项（已加密快照）` : '无'}}</span></div>
@@ -843,7 +845,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
         <small class="help">环境隔离由“环境 → 独立 SAE 应用 ID”保证；同一 SAE 应用不能重复绑定到其他环境。</small>
       </template>
       </section><section v-show="targetSection==='policy'" class="target-group">
-      <template v-if="targetForm.target_type!=='aliyun-sae'"><div class="strategy-row"><div class="fld"><label>每批主机数</label><ElInputNumber v-model="targetForm.batch_size" :min="1" :max="100" /></div><div class="fld"><label>批内最大并发</label><ElInputNumber v-model="targetForm.max_parallel" :min="1" :max="100" /></div><div class="fld"><label>允许失败主机数</label><ElInputNumber v-model="targetForm.failure_threshold" :min="0" :max="100" /></div></div><label class="pause-check"><input v-model="targetForm.pause_between_batches" type="checkbox"/> 每批完成后暂停，人工确认再继续</label></template>
+      <ReleasePolicyEditor :target="targetForm" :disabled="savingTarget" />
       <details class="advanced-box"><summary>高级部署参数</summary>
         <div class="fld"><label>部署驱动</label><Sel v-model="targetForm.target_type" :options="[{value:'ssh-jar',label:'Java JAR / SSH'},{value:'ssh-static',label:'静态站点 / SSH'},{value:'docker-host',label:'Docker 主机 / SSH'},...(svc?.artifact_type==='static'?[]:[{value:'aliyun-sae',label:'阿里云 SAE（JAR / Docker）'}])]" width="100%" /></div>
         <div v-if="!['aliyun-sae','ssh-jar'].includes(targetForm.target_type)" class="fld"><label>停止命令</label><ElInput v-model="targetForm.stop_cmd" /></div>
@@ -868,7 +870,7 @@ const CAT_COLOR = { 源码: 'var(--info)', 构建: 'var(--brand)', 打包: 'var(
 
     <Modal :show="showReleaseDetail" :title="`发布单 #${activeRelease?.id || ''}`" wide @close="showReleaseDetail=false">
       <div class="release-summary"><span>🚀</span><div><b>{{activeRelease?.version}} → {{activeRelease?.environment}}</b><small>{{statusText(activeRelease?.status)}} · {{activeRelease?.succeeded||0}}/{{activeRelease?.total||0}} 个目标成功</small></div></div>
-      <dl class="env-meta release-snapshot"><div><dt>目标快照</dt><dd>{{targetResource(activeRelease?.target_snapshot)}}</dd></div><div><dt>{{isManagedTarget(activeRelease?.target_snapshot)?'命名空间':'部署目录'}}</dt><dd><code>{{isManagedTarget(activeRelease?.target_snapshot)?activeRelease?.target_snapshot?.deploy_config?.namespace_id:(activeRelease?.target_snapshot?.remote_dir||'—')}}</code></dd></div><div><dt>执行策略</dt><dd>{{isManagedTarget(activeRelease?.target_snapshot)?'SAE 变更单':`每批 ${activeRelease?.batch_size||1} 台 / 并发 ${activeRelease?.target_snapshot?.max_parallel||1}`}}</dd></div><div><dt>健康检查</dt><dd>{{isManagedTarget(activeRelease?.target_snapshot)?'SAE 变更单状态':(activeRelease?.target_snapshot?.health_url||'未配置')}}</dd></div></dl>
+      <dl class="env-meta release-snapshot"><div><dt>目标快照</dt><dd>{{targetResource(activeRelease?.target_snapshot)}}</dd></div><div><dt>{{isManagedTarget(activeRelease?.target_snapshot)?'命名空间':'部署目录'}}</dt><dd><code>{{isManagedTarget(activeRelease?.target_snapshot)?activeRelease?.target_snapshot?.deploy_config?.namespace_id:(activeRelease?.target_snapshot?.remote_dir||'—')}}</code></dd></div><div><dt>执行策略</dt><dd>{{releasePolicyText(activeRelease?.target_snapshot)}}</dd></div><div><dt>健康检查</dt><dd>{{isManagedTarget(activeRelease?.target_snapshot)?'SAE 变更单状态':(activeRelease?.target_snapshot?.health_url||'未配置')}}</dd></div></dl>
       <table><thead><tr><th>执行目标</th><th>状态</th><th>时间</th><th></th></tr></thead><tbody><tr v-for="id in activeRelease?.deploy_ids||[]" :key="id"><td>{{deployOf(id)?.host||`任务 #${id}`}}<small v-if="deployOf(id)?.external_id" class="artifact-id">变更单 {{deployOf(id).external_id}}</small></td><td><span :class="statusClass(deployOf(id)?.status)">{{statusText(deployOf(id)?.status||'queued')}}</span></td><td>{{fmtTime(deployOf(id)?.started_at)}}</td><td><button v-if="deployOf(id)" class="op op-btn" @click="openDeployLog(deployOf(id))">日志</button></td></tr></tbody></table><div v-if="!activeRelease?.deploy_ids?.length" class="empty">审批或排队完成后生成执行任务</div>
     </Modal>
 

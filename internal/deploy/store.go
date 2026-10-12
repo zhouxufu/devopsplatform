@@ -1010,7 +1010,7 @@ func (s *Store) GetDeploy(id int64) *Deploy {
 
 func (s *Store) ActiveDeploy(service, host string) *Deploy {
 	var d Deploy
-	if s.db.QueryRow(`SELECT id,service,version,host,status,actor,started_at FROM deploys WHERE service=? AND host=? AND status='running' ORDER BY id DESC LIMIT 1`, service, host).
+	if s.db.QueryRow(`SELECT id,service,version,host,status,actor,started_at FROM deploys WHERE service=? AND host=? AND status IN ('running','waiting_next_batch') ORDER BY id DESC LIMIT 1`, service, host).
 		Scan(&d.ID, &d.Service, &d.Version, &d.Host, &d.Status, &d.Actor, &d.StartedAt) == nil {
 		return &d
 	}

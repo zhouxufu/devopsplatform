@@ -132,6 +132,7 @@ function openTrace(traceId) {
 }
 function applyPlatformContext(ctx) {
   if (!ctx) return false
+  if(svc.value!==(ctx.service||'')||environment.value!==(ctx.environment||''))host.value=''
   svc.value = ctx.service || ''
   environment.value = ctx.environment || ''
   if (ctx.rangeStart && ctx.rangeEnd && ctx.rangeEnd > ctx.rangeStart) {

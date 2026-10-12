@@ -490,6 +490,9 @@ func (s *Store) UpsertServiceEnvironment(v ServiceEnvironment) error {
 		}
 		v.Hosts = group.Hosts
 	}
+	if err := validateReleasePolicy(v, len(v.Hosts)); err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, host := range v.Hosts {
 		if seen[host] {
