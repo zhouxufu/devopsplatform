@@ -308,7 +308,7 @@ onBeforeUnmount(() => clearInterval(recentClock))
         <span class="context-divider"></span>
         <div class="context-field"><label>时间范围</label>
         <div class="seg">
-          <button :class="{on:st.rangeMinutes===15}" title="将所有工作区切回当前时间；动态窗口会在每次查询时推进到现在" @click="useRecentRange">最近15分钟{{st.rangeMinutes===15?'（动态）':''}}</button>
+          <button type="button" :class="{on:st.rangeMinutes===15}" :aria-pressed="st.rangeMinutes===15" title="将所有工作区切回当前时间；动态窗口会在每次查询时推进到现在" @click="useRecentRange">最近15分钟{{st.rangeMinutes===15?'（动态）':''}}</button>
           <RangePicker v-model="st.range" @change="timeRangeChanged" width="200px" />
         </div>
       </div>
@@ -384,7 +384,8 @@ onBeforeUnmount(() => clearInterval(recentClock))
 .seg{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
 .seg button{background:transparent;border:none;color:var(--muted);padding:5px 10px;font-size:12px;cursor:pointer;border-right:1px solid var(--border)}
 .seg button:last-child{border-right:none}
-.seg button.on{background:#1f2937;color:var(--text)}
+.seg button.on{background:var(--brand-soft);color:var(--brand-ink);font-weight:600}
+.seg>button:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}
 .account,.logout{border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:11px;padding:6px 8px;cursor:pointer;white-space:nowrap}.account{margin-left:auto}.account:hover,.logout:hover{background:var(--panel2);color:var(--text)}.topr{font-size:15px;color:var(--muted);cursor:pointer;user-select:none;padding:5px 7px;border-radius:6px}.topr:hover{background:var(--panel2);color:var(--text)}
 .wsarea{flex:1;position:relative;overflow:hidden;background:var(--bg)}
 .ws{position:absolute;inset:0;border:none;width:100%;height:100%;display:none}
