@@ -35,11 +35,12 @@ type DeliveryTemplate struct {
 	Owner     string         `json:"owner"`
 }
 type DeliveryRequest struct {
-	TemplateID  int64            `json:"template_id"`
-	VersionID   int64            `json:"version_id"`
-	Environment string           `json:"environment"`
-	Reason      string           `json:"reason"`
-	Artifacts   map[string]int64 `json:"artifacts"`
+	PreflightToken string           `json:"preflight_token,omitempty"`
+	TemplateID     int64            `json:"template_id"`
+	VersionID      int64            `json:"version_id"`
+	Environment    string           `json:"environment"`
+	Reason         string           `json:"reason"`
+	Artifacts      map[string]int64 `json:"artifacts"`
 	// A run may override/add/remove nodes without changing the reusable template.
 	Nodes         []DeliveryNode `json:"nodes,omitempty"`
 	previewDrafts bool           // Set only by the read-only preview route, never from JSON.
@@ -51,20 +52,24 @@ type DeliveryService struct {
 	DestinationDigest string             `json:"destination_digest"`
 }
 type DeliveryPlan struct {
-	WorkbenchPolicy *WorkbenchPolicy      `json:"workbench_policy,omitempty"`
-	Template        DeliveryTemplate      `json:"template"`
-	Version         *ReleaseVersion       `json:"version,omitempty"`
-	Environment     Environment           `json:"environment"`
-	Reason          string                `json:"reason"`
-	Services        []DeliveryService     `json:"services"`
-	Nodes           []DeliveryNode        `json:"nodes"`
-	Blockers        []string              `json:"blockers"`
-	Warnings        []string              `json:"warnings"`
-	SQLPlans        []*SQLExecutionPlan   `json:"sql_plans,omitempty"`
-	NacosPlans      []*NacosExecutionPlan `json:"nacos_plans,omitempty"`
-	RedisPlans      []*RedisExecutionPlan `json:"redis_plans,omitempty"`
+	PreflightToken   string                `json:"preflight_token,omitempty"`
+	PreflightExpires int64                 `json:"preflight_expires,omitempty"`
+	WorkbenchPolicy  *WorkbenchPolicy      `json:"workbench_policy,omitempty"`
+	Template         DeliveryTemplate      `json:"template"`
+	Version          *ReleaseVersion       `json:"version,omitempty"`
+	Environment      Environment           `json:"environment"`
+	Reason           string                `json:"reason"`
+	Services         []DeliveryService     `json:"services"`
+	Nodes            []DeliveryNode        `json:"nodes"`
+	Blockers         []string              `json:"blockers"`
+	Warnings         []string              `json:"warnings"`
+	SQLPlans         []*SQLExecutionPlan   `json:"sql_plans,omitempty"`
+	NacosPlans       []*NacosExecutionPlan `json:"nacos_plans,omitempty"`
+	RedisPlans       []*RedisExecutionPlan `json:"redis_plans,omitempty"`
 }
 type DeliveryStep struct {
+	StartedAt int64  `json:"started_at,omitempty"`
+	EndedAt   int64  `json:"ended_at,omitempty"`
 	NodeID    string `json:"node_id"`
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`
@@ -99,6 +104,9 @@ func deliverySchema(dialect string) []string {
 		identity, doc = "BIGINT PRIMARY KEY AUTO_INCREMENT", "LONGTEXT"
 	}
 	queries := []string{
+		`CREATE TABLE IF NOT EXISTS delivery_preflight_uses (nonce VARCHAR(64) PRIMARY KEY, run_id BIGINT NOT NULL)`,
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS delivery_version_artifacts (version_id BIGINT PRIMARY KEY, document %s NOT NULL, used INTEGER NOT NULL DEFAULT 0)`, doc),
+		`CREATE TABLE IF NOT EXISTS delivery_controls (run_id BIGINT PRIMARY KEY, state VARCHAR(32) NOT NULL, actor VARCHAR(191) NOT NULL, lease VARCHAR(64) NOT NULL, lease_until BIGINT NOT NULL, message TEXT NOT NULL)`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS delivery_templates (id %s, document %s NOT NULL, owner VARCHAR(191) NOT NULL)`, identity, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS delivery_runs (id %s, plan %s NOT NULL, digest VARCHAR(80) NOT NULL, status VARCHAR(32) NOT NULL, execution %s NOT NULL, env_secrets %s NOT NULL, owner VARCHAR(191) NOT NULL, approver VARCHAR(191) NOT NULL, created_at BIGINT NOT NULL, revision BIGINT NOT NULL)`, identity, doc, doc, doc),
 	}
@@ -286,6 +294,18 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 			return nil, nil, fmt.Errorf("请选择已就绪的发布版本")
 		}
 		p.Version = version
+		pinned := s.VersionArtifacts(version.ID)
+		if len(pinned.Bindings) > 0 {
+			if pinned.ScopeDigest != versionCodeScope(version) {
+				p.Blockers = append(p.Blockers, "版本代码范围发生变化，请重新关联制品")
+			}
+			for _, binding := range pinned.Bindings {
+				a := s.GetArtifact(binding.ArtifactID)
+				if req.Artifacts[binding.Service] != binding.ArtifactID || a == nil || a.Digest != binding.Digest {
+					p.Blockers = append(p.Blockers, "制品与版本锁定映射不一致："+binding.Service)
+				}
+			}
+		}
 		for _, c := range version.Changes {
 			if c.Kind == "code" || c.Kind == "artifact" {
 				if c.Service == "" {
@@ -556,6 +576,17 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	if len(p.Blockers) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(p.Blockers, "；"))
 	}
+	var nonce string
+	if req.PreflightToken != "" {
+		nonce, err = s.verifyDeliveryPreflight(req, p, secrets, actor)
+		if err != nil {
+			return nil, err
+		}
+		var used int64
+		if s.db.QueryRow(`SELECT run_id FROM delivery_preflight_uses WHERE nonce=?`, nonce).Scan(&used) == nil {
+			return s.DeliveryRun(used), nil
+		}
+	}
 	planJSON, _ := json.Marshal(p)
 	hash := sha256.Sum256(planJSON)
 	run := &DeliveryRun{Plan: *p, Digest: "sha256:" + hex.EncodeToString(hash[:]), Status: "approved", Owner: actor, CreatedAt: time.Now().Unix(), Revision: 1, Steps: []DeliveryStep{}, envSecrets: secrets}
@@ -575,11 +606,60 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	}
 	execution, _ := json.Marshal(run.Steps)
 	secretJSON, _ := json.Marshal(secrets)
-	result, err := s.db.Exec(`INSERT INTO delivery_runs(plan,digest,status,execution,env_secrets,owner,approver,created_at,revision) VALUES(?,?,?,?,?,?,?, ?,1)`, string(planJSON), run.Digest, run.Status, string(execution), string(secretJSON), actor, "", run.CreatedAt)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`INSERT INTO delivery_runs(plan,digest,status,execution,env_secrets,owner,approver,created_at,revision) VALUES(?,?,?,?,?,?,?, ?,1)`, string(planJSON), run.Digest, run.Status, string(execution), string(secretJSON), actor, "", run.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	run.ID, _ = result.LastInsertId()
+	if nonce != "" {
+		if _, err = tx.Exec(`INSERT INTO delivery_preflight_uses(nonce,run_id) VALUES(?,?)`, nonce, run.ID); err != nil {
+			tx.Rollback()
+			var used int64
+			if s.db.QueryRow(`SELECT run_id FROM delivery_preflight_uses WHERE nonce=?`, nonce).Scan(&used) == nil {
+				return s.DeliveryRun(used), nil
+			}
+			return nil, err
+		}
+	}
+	if p.Version != nil {
+		var document string
+		if tx.QueryRow(`SELECT document FROM delivery_version_artifacts WHERE version_id=?`, p.Version.ID).Scan(&document) == nil {
+			var pinned VersionArtifacts
+			if json.Unmarshal([]byte(document), &pinned) != nil || pinned.ScopeDigest != versionCodeScope(p.Version) {
+				return nil, fmt.Errorf("版本制品范围已变化，请重新预检")
+			}
+			for _, b := range pinned.Bindings {
+				matches := false
+				for _, app := range p.Services {
+					matches = matches || (app.Service == b.Service && app.Artifact.ID == b.ArtifactID && app.Artifact.Digest == b.Digest)
+				}
+				if !matches {
+					return nil, fmt.Errorf("版本制品关联已变化，请重新预检")
+				}
+			}
+			if _, err = tx.Exec(`UPDATE delivery_version_artifacts SET used=1 WHERE version_id=? AND document=?`, p.Version.ID, document); err != nil {
+				return nil, err
+			}
+			var current string
+			var locked int
+			if err = tx.QueryRow(`SELECT document,used FROM delivery_version_artifacts WHERE version_id=?`, p.Version.ID).Scan(&current, &locked); err != nil || current != document || locked != 1 {
+				return nil, fmt.Errorf("版本制品关联已变化，请重新预检")
+			}
+		} else if nonce != "" && len(p.Services) > 0 {
+			return nil, fmt.Errorf("请先关联版本制品，再重新预检")
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
 	s.Audit(actor, "create", "delivery-run", fmt.Sprint(run.ID), map[string]any{"digest": run.Digest, "environment": req.Environment})
 	return run, nil
 }
@@ -688,6 +768,9 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 		if step.Status == "success" {
 			continue
 		}
+		if step.StartedAt == 0 {
+			step.StartedAt = time.Now().Unix()
+		}
 		if step.Kind == "redis" {
 			if step.Status == "executing" {
 				return nil, fmt.Errorf("Redis 节点正在执行或中断待核对，禁止自动重试")
@@ -710,6 +793,7 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 			detail, err := s.executeRedisNode(ctx, v, plan)
 			cancel()
 			step.Detail = detail
+			step.EndedAt = time.Now().Unix()
 			if err != nil {
 				step.Status, v.Status = "failed", "failed"
 				if detail == "" {
@@ -746,6 +830,7 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 			detail, err := s.executeNacosNode(ctx, v, plan)
 			cancel()
 			step.Detail = detail
+			step.EndedAt = time.Now().Unix()
 			if err != nil {
 				step.Status, v.Status = "failed", "failed"
 				if detail == "" {
@@ -782,6 +867,7 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 			detail, err := s.executeSQLNode(ctx, v, plan)
 			cancel()
 			step.Detail = detail
+			step.EndedAt = time.Now().Unix()
 			if err != nil {
 				step.Status, v.Status = "failed", "failed"
 				if step.Detail == "" {
@@ -803,8 +889,10 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 			}
 			if child.Status == "success" {
 				step.Status = "success"
+				step.EndedAt = time.Now().Unix()
 			} else if !releaseStatusActive(child.Status) {
 				step.Status, v.Status = "failed", "failed"
+				step.EndedAt = time.Now().Unix()
 			} else {
 				return nil, fmt.Errorf("当前应用尚未发布完成；分批暂停请在子发布单中继续")
 			}
@@ -818,6 +906,7 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 				return nil, fmt.Errorf("请完成说明中的操作后显式确认人工节点")
 			}
 			step.Status, v.Status = "success", "running"
+			step.EndedAt = time.Now().Unix()
 			if err := s.saveDeliveryRun(v); err != nil {
 				return nil, err
 			}
@@ -902,6 +991,7 @@ func (s *Store) advanceDeliveryRun(id int64, actor string, confirmManual bool, m
 }
 
 func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManager) {
+	registerDeliveryExperienceRoutes(mux, st, manager)
 	actor := func(r *http.Request) string {
 		if v := strings.TrimSpace(r.Header.Get("X-User")); v != "" {
 			return v
@@ -960,8 +1050,11 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 			return
 		}
 		req.previewDrafts = true
-		p, _, err := st.ResolveDelivery(req, manager)
+		p, secrets, err := st.ResolveDelivery(req, manager)
 		if p != nil {
+			if len(p.Blockers) == 0 {
+				p.PreflightToken, p.PreflightExpires = st.signDeliveryPreflight(req, p, secrets, actor(r))
+			}
 			p.NacosPlans = publicNacosPlans(p.NacosPlans)
 		}
 		reply(w, p, err)
@@ -971,6 +1064,10 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 		var req DeliveryRequest
 		if err := decode(w, r, &req); err != nil {
 			reply(w, nil, err)
+			return
+		}
+		if tpl := st.DeliveryTemplate(req.TemplateID); tpl != nil && tpl.Workbench == "" && req.PreflightToken == "" {
+			reply(w, nil, fmt.Errorf("请先完成本次预检，提交必须使用预检凭证"))
 			return
 		}
 		v, err := st.CreateDeliveryRun(req, actor(r), manager)
@@ -1009,6 +1106,11 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 					return
 				}
 				if action == "advance" {
+					control := st.DeliveryControl(v.ID)
+					if control.State == "running" || control.State == "pausing" {
+						reply(w, nil, fmt.Errorf("自动协调器运行中，请先暂停后续步骤"))
+						return
+					}
 					v, err = st.AdvanceDeliveryRun(v.ID, actor(r), req.ConfirmManual, manager)
 				} else {
 					if v.Status != "pending_approval" && v.Status != "approved" {
