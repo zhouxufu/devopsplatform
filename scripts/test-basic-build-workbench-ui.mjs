@@ -16,6 +16,7 @@ page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept())
 const app={name:'qa-orders',application_id:'qa-1',artifact_type:'jar',git_url:'https://example.invalid/a.git',branch:'main',build_tool:'gradle',gradle_executable:'gradle',gradle_tasks:'clean build',artifact_glob:'build/libs/*.jar',steps:[]}
 const delivery={runner:'local',variable_groups:[],build_environment:{mode:'local'}}
 const targets=[{environment:'test',display_name:'测试',target_type:'ssh-jar',host_group:'test-group',hosts:['qa-host'],remote_dir:'/opt/qa',deploy_config:{java_mode:'managed',java_version:'21'}}]
+targets.push({...targets[0],environment:'dev',display_name:'开发'})
 const run=n=>({id:n,service:app.name,version:'a00000'+n,branch:'feature/menu',actor:'alice',status:'failed',started_at:1791780000,ended_at:1791780012,stages:[{name:'拉取源码',status:'success'},{name:'编译',status:'failed'}]})
 const artifact={id:17,service:app.name,version:'a000017',kind:'jar',source:'pipeline-run',source_id:17,metadata:{branch:'feature/menu'},created_at:1791780000,digest:'sha256:fixture',uri:'/fixture/artifact.jar',published_environments:['test']}
 let rejectBuild=true,createdApp,noTargets=false
@@ -37,7 +38,7 @@ await page.route('**/*',async route=>{
   else if(api==='/api/me')body={username:'alice',role:'admin'}
   else if(api==='/api/registry/applications')body=[]
   else if(api.endsWith('/delivery'))body=delivery
-  else if(api==='/api/environments')body=[{name:'test',display_name:'测试'}]
+  else if(api==='/api/environments')body=[{name:'test',display_name:'测试'},{name:'dev',display_name:'开发'}]
   else if(api.endsWith('/environments'))body=noTargets?[]:targets
   else if(api==='/api/runners')body=[{name:'local',kind:'local',enabled:true,concurrency:1}]
   else if(api==='/api/steps')body=[{id:'shell-script',name:'自定义 Shell 脚本',category:'构建',kind:'build',params:[{name:'SCRIPT',type:'shell',label:'脚本（Bash）',default:'pwd'}]}]
@@ -60,6 +61,12 @@ try{
  await goto('/');await page.getByRole('heading',{name:'基础构建',exact:true}).waitFor();await page.getByText('qa-orders',{exact:true}).first().waitFor()
  assert.equal(await page.locator('article.app-card').count(),0,'table must be default')
  assert((await page.locator('table').innerText()).includes('#1'),'latest status uses per-app summary')
+ await goto('/svc/qa-orders/overview');const environment=page.locator('.header-environment');await environment.waitFor();await environment.locator('.el-select__selected-item').filter({hasText:'测试'}).waitFor()
+ assert(await environment.locator('.el-select__selection').evaluate(e=>e.clientWidth>=50),'header environment text is squeezed out')
+ await environment.click();await page.getByRole('option',{name:'开发',exact:true}).click();await page.locator('.env-card.focused').filter({hasText:'开发'}).waitFor()
+ await environment.click();await page.getByRole('option',{name:'测试',exact:true}).click();await page.locator('.env-card.focused').filter({hasText:'测试'}).waitFor();await environment.locator('input').press('Escape')
+ for(const theme of ['light','dark']){await page.evaluate(t=>{localStorage.setItem('lp-theme',t);window.dispatchEvent(new StorageEvent('storage',{key:'lp-theme',newValue:t,storageArea:localStorage}))},theme);for(const width of [1440,900]){await page.setViewportSize({width,height:960});await environment.locator('.el-select__selected-item').filter({hasText:'测试'}).waitFor();await page.waitForTimeout(250);assert(await environment.locator('.el-select__selection').evaluate(e=>e.clientWidth>=50),'environment label squeezed '+theme+' '+width);await page.screenshot({path:output+'/overview-environment-'+theme+'-'+width+'.png'})}}
+ await page.setViewportSize({width:1440,height:960});targets.pop()
  await goto('/svc/qa-orders/build');await page.getByRole('button',{name:'开始构建',exact:true}).waitFor()
  assert.equal(await page.getByRole('button',{name:'开始构建',exact:true}).count(),1)
  await page.getByRole('button',{name:'下一页',exact:true}).click();await page.getByRole('button',{name:'#67 · a0000067',exact:true}).waitFor()
@@ -79,5 +86,5 @@ try{
  noTargets=true;await page.evaluate(()=>sessionStorage.setItem('lp-deploy-environment','test'));await goto('/svc/qa-orders/overview');await page.reload();await page.getByRole('heading',{name:'qa-orders',exact:true}).waitFor();const notice=page.locator('.el-message').filter({hasText:'当前环境 test 尚未配置该应用的发布目标'});await notice.waitFor();assert.equal(await notice.count(),1);assert.equal(await page.locator('.context-warning').count(),0,'persistent banner returned');assert.equal(await page.getByRole('button',{name:'＋ 配置环境',exact:true}).count(),1);assert.equal(await page.getByRole('button',{name:'配置部署环境',exact:true}).count(),0);assert.equal(await page.locator('.overview-next').count(),0,'redundant configuration strip returned');await notice.locator('.el-message__closeBtn').click();await notice.waitFor({state:'hidden'});await page.getByRole('button',{name:'构建',exact:true}).click();await page.getByRole('button',{name:'概览',exact:true}).click();await page.waitForTimeout(200);assert.equal(await notice.count(),0,'tab switch repeats dismissed notice')
  await goto('/svc/qa-orders/advanced');await page.getByRole('heading',{name:'高级构建流水线',exact:true}).waitFor();assert.equal(await page.locator('.advanced-notice').count(),0);await page.getByRole('button',{name:'＋ 添加构建步骤',exact:true}).click();const script=page.locator('textarea').first();await script.fill('printf fixture-script');await page.getByRole('button',{name:'保存流水线',exact:true}).click();await page.locator('.el-message').filter({hasText:'流水线已保存；未执行任何步骤'}).waitFor();assert.equal(writes.at(-1).body.steps[0].step,'shell-script');assert.equal(writes.at(-1).body.steps[0].params.SCRIPT,'printf fixture-script');assert.equal(writes.filter(w=>w.api==='/api/pipeline/runs').length,1,'saving a script executed it')
  await page.screenshot({path:output+'/advanced-shell.png'});assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[])
- console.log(JSON.stringify({ok:true,checks:['default app table','per-app latest summary','one build entry','server paging and back','stage/search/follow logs','retry explanation','one-off parameters preserve defaults','full-page grouped settings','draft continuity and cancel','exact artifact publishing','light/dark 1440/900/700/390','no real writes']}))
+ console.log(JSON.stringify({ok:true,checks:['visible environment label and switching in light/dark 1440/900','default app table','per-app latest summary','one build entry','server paging and back','stage/search/follow logs','retry explanation','one-off parameters preserve defaults','full-page grouped settings','draft continuity and cancel','exact artifact publishing','light/dark 1440/900/700/390','no real writes']}))
 }catch(e){await page.screenshot({path:output+'/failure.png'});console.log(await page.getByRole('dialog').allTextContents());throw e}finally{await browser.close()}
