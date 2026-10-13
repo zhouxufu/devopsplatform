@@ -48,7 +48,7 @@ async function save(){if(saving.value)return;error.value='';let items;try{items=
 function configure(row){bindingService.value=row.service;showBindings.value=true}
 </script>
 <template>
-<Modal :show="show" :title="batch?'批量新建变更':'交付内容 · '+(item?.title||'')" extra-wide @close="close">
+<Modal :show="show" :title="batch?'批量新建变更':'交付内容 · '+(item?.title||'')" extra-wide contained :busy="saving" @close="close">
  <div class="delivery-editor">
  <p class="hint">一次维护、多应用交付。保存只建立草稿，不构建、不执行 SQL、不发布配置。</p>
  <p v-if="error" class="error" role="alert">{{error}}</p><p v-if="loading">正在读取交付内容…</p>
@@ -74,11 +74,11 @@ function configure(row){bindingService.value=row.service;showBindings.value=true
  <details class="span"><summary>风险与回退说明</summary><label>风险等级<Sel v-model="row.risk_level" :options="[{value:'low',label:'低'},{value:'medium',label:'中'},{value:'high',label:'高'}]" :disabled="row.readonly||saving" /></label><ElInput v-model="row.rollback_plan" placeholder="回退说明" :disabled="row.readonly||saving" /></details>
  </div></article>
  <label>{{batch?'关联需求 / Bug（选填）':'新增内容同时关联其他需求 / Bug（选填）'}}<Sel v-model="also" :options="links" multiple filterable width="100%" /></label>
- <div class="footer"><span>{{refreshing?'正在合并新增交付内容':dirty?'有未保存修改':'已保存'}} · {{rows.length}} 项</span><ElButton :disabled="saving||refreshing" @click="discard">重新载入</ElButton><ElButton :disabled="saving||refreshing" @click="close">关闭</ElButton><ElButton type="primary" :loading="saving" :disabled="refreshing" @click="save">{{batch?'保存全部变更':'保存全部内容'}}</ElButton></div>
  </template></div>
+ <template #footer><div class="footer"><span>{{refreshing?'正在合并新增交付内容':dirty?'有未保存修改':'已保存'}} · {{rows.length}} 项</span><ElButton :disabled="saving||refreshing" @click="discard">重新载入</ElButton><ElButton :disabled="saving||refreshing" @click="close">关闭</ElButton><ElButton type="primary" :loading="saving" :disabled="loading||refreshing" @click="save">{{batch?'保存全部变更':'保存全部内容'}}</ElButton></div></template>
 </Modal>
 <ApplicationResourcesEditor :show="showBindings" :services="services" :initial-service="bindingService" @close="showBindings=false;loadResources(bindingService)" />
 </template>
 <style scoped>
-.delivery-editor{display:grid;gap:14px}.hint,.tools{color:var(--muted);font-size:13px}.error{color:var(--red,#d33);background:var(--surface);padding:12px;border:1px solid}.delivery-editor nav,.tools,.row-head,.footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.tools,.row-head{justify-content:space-between}.content-row{border:1px solid var(--border);padding:16px;border-radius:8px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}.span{grid-column:1/-1}label{display:grid;gap:7px;min-width:0}.config-entry{display:flex;gap:8px;margin-bottom:8px}.config-entry>.el-input{flex:1;min-width:0}.empty{padding:25px;text-align:center;color:var(--muted)}.footer{position:sticky;bottom:0;background:var(--surface);padding:14px 0;border-top:1px solid var(--border);justify-content:flex-end}.footer>span{margin-right:auto}details label{margin:10px 0}@media(max-width:700px){.grid{grid-template-columns:1fr}.config-entry{flex-wrap:wrap}.config-entry>.el-input{flex-basis:100%}}
+.delivery-editor{display:grid;gap:14px}.hint,.tools{color:var(--muted);font-size:13px}.error{color:var(--red,#d33);background:var(--surface);padding:12px;border:1px solid}.delivery-editor nav,.tools,.row-head,.footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.tools,.row-head{justify-content:space-between}.content-row{border:1px solid var(--border);padding:16px;border-radius:8px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}.span{grid-column:1/-1}label{display:grid;gap:7px;min-width:0}.config-entry{display:flex;gap:8px;margin-bottom:8px}.config-entry>.el-input{flex:1;min-width:0}.empty{padding:25px;text-align:center;color:var(--muted)}.footer{justify-content:flex-end;background:var(--panel)}.footer>span{margin-right:auto}details label{margin:10px 0}@media(max-width:700px){.grid{grid-template-columns:1fr}.config-entry{flex-wrap:wrap}.config-entry>.el-input{flex-basis:100%}}
 </style>

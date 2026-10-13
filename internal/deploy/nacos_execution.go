@@ -80,13 +80,56 @@ func (s *Store) nacosBinding(service, environment, alias string) (*ResourceConne
 			if c == nil || c.Kind != "nacos" {
 				return nil, fmt.Errorf("Nacos 环境连接不存在")
 			}
+			if err := normalizeNacosBindingConfig(b.Config); err != nil {
+				return nil, err
+			}
 			if len(b.Config) > 0 {
-				return nil, fmt.Errorf("命名空间在 Nacos 连接中指定，暂不支持绑定覆盖")
+				// Never mutate the saved/shared connection. Include target overrides
+				// in the destination digest so edits after approval fail closed.
+				copy := *c
+				copy.Config = map[string]string{}
+				for key, value := range c.Config {
+					copy.Config[key] = value
+				}
+				for key, value := range b.Config {
+					if value != "" {
+						copy.Config[key] = value
+					}
+				}
+				c = &copy
 			}
 			return c, nil
 		}
 	}
 	return nil, fmt.Errorf("应用 %s 的资源 %s 未绑定 %s 环境的 Nacos 连接", service, alias, environment)
+}
+
+func normalizeNacosBindingConfig(config map[string]string) error {
+	for key, value := range config {
+		if key != "data_id" && key != "group" {
+			return fmt.Errorf("Nacos 绑定仅支持 Data ID 和 Group；命名空间及认证在连接中指定")
+		}
+		value = strings.TrimSpace(value)
+		if len(value) > 255 || strings.ContainsAny(value, "\r\n\x00") {
+			return fmt.Errorf("Nacos 环境绑定的 %s 无效", key)
+		}
+		config[key] = value
+	}
+	return nil
+}
+
+func nacosResolvedTarget(connection *ResourceConnection, change *NacosChange) (dataID, group string, err error) {
+	dataID, group = change.DataID, change.Group
+	if value := connection.Config["data_id"]; value != "" {
+		dataID = value
+	}
+	if value := connection.Config["group"]; value != "" {
+		group = value
+	}
+	if dataID == "" {
+		return "", "", fmt.Errorf("当前环境未指定 Nacos Data ID，请在应用环境资源绑定中配置，或填写变更的默认 Data ID")
+	}
+	return dataID, group, nil
 }
 
 func (s *Store) prepareNacosNode(ctx context.Context, nodeID string, ids []int64, environment string) (*NacosExecutionPlan, error) {
@@ -107,11 +150,15 @@ func (s *Store) prepareNacosNode(ctx context.Context, nodeID string, ids []int64
 		if err != nil {
 			return nil, err
 		}
+		dataID, group, err := nacosResolvedTarget(connection, change.Nacos)
+		if err != nil {
+			return nil, err
+		}
 		n, err := newNacosClient(ctx, connection)
 		if err != nil {
 			return nil, err
 		}
-		before, err := n.read(ctx, change.Nacos.DataID, change.Nacos.Group)
+		before, err := n.read(ctx, dataID, group)
 		if err != nil {
 			return nil, err
 		}
@@ -124,7 +171,7 @@ func (s *Store) prepareNacosNode(ctx context.Context, nodeID string, ids []int64
 			if err != nil {
 				return nil, err
 			}
-			if previousEnv != environment || previous.Service != change.Service || previous.Alias != change.Nacos.ResourceAlias || previous.DataID != change.Nacos.DataID || previous.Group != change.Nacos.Group || previous.Format != change.Nacos.Format || previous.DestinationDigest != sqlDestination(connection) || previous.AfterMD5 != nacosMD5(before) {
+			if previousEnv != environment || previous.Service != change.Service || previous.Alias != change.Nacos.ResourceAlias || previous.DataID != dataID || previous.Group != group || previous.Format != change.Nacos.Format || previous.DestinationDigest != sqlDestination(connection) || previous.AfterMD5 != nacosMD5(before) {
 				return nil, fmt.Errorf("恢复目标或新版本配置已变化，禁止恢复；请重新核对")
 			}
 			expected := nacosInverseEntries(previous.Diff)
@@ -143,7 +190,7 @@ func (s *Store) prepareNacosNode(ctx context.Context, nodeID string, ids []int64
 				diff = append(diff, NacosDiff{Key: original.Key, Before: original.After, After: original.Before})
 			}
 		}
-		item := NacosConfigPlan{ChangeID: id, Service: change.Service, Alias: change.Nacos.ResourceAlias, Connection: connection.Name, Endpoint: connection.Endpoint, DestinationDigest: sqlDestination(connection), ChangeDigest: digestJSON([]any{change.Service, change.Nacos}), DataID: change.Nacos.DataID, Group: change.Nacos.Group, Namespace: connection.Config["namespace"], Format: change.Nacos.Format, BeforeMD5: nacosMD5(before), AfterMD5: nacosMD5(after), Diff: diff}
+		item := NacosConfigPlan{ChangeID: id, Service: change.Service, Alias: change.Nacos.ResourceAlias, Connection: connection.Name, Endpoint: connection.Endpoint, DestinationDigest: sqlDestination(connection), ChangeDigest: digestJSON([]any{change.Service, change.Nacos}), DataID: dataID, Group: group, Namespace: connection.Config["namespace"], Format: change.Nacos.Format, BeforeMD5: nacosMD5(before), AfterMD5: nacosMD5(after), Diff: diff}
 		item.Restore = change.Nacos.Restore != nil
 		target := nacosTargetKey(item)
 		if seen[target] {

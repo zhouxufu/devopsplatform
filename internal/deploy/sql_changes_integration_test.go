@@ -123,6 +123,32 @@ func TestSQLMySQLDDLPreviewExecuteAndDedup(t *testing.T) {
 		t.Fatal("conflicting column passed preflight")
 	}
 }
+
+func TestSQLMySQLAliasedQualifiedUpdateUsesSameScope(t *testing.T) {
+	st, m, db, table := sqlTargetFixture(t)
+	if _, err := db.Exec("CREATE TABLE `" + table + "` (id int NOT NULL PRIMARY KEY, name varchar(64)) ENGINE=InnoDB"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO `" + table + "` (id,name) VALUES (1,'old'),(2,'keep')"); err != nil {
+		t.Fatal(err)
+	}
+	c := sqlChangeFixture(t, st, "UPDATE delivery_qa.`"+table+"` AS t SET t.name='new' WHERE t.id=1")
+	run := sqlRunFixture(t, st, m, c, "test")
+	op := run.Plan.SQLPlans[0].Statements[0]
+	if op.ExpectedRows != 1 || op.Scope != "id = 1" || op.Database != "delivery_qa" || strings.Contains(op.SQL, "t.") {
+		t.Fatalf("incorrect approved scope: %+v", op)
+	}
+	got, err := st.AdvanceDeliveryRun(run.ID, "alice", false, m)
+	if err != nil || got.Steps[0].Status != "success" {
+		t.Fatalf("execution failed: %v %+v", err, got)
+	}
+	for id, expected := range map[int]string{1: "new", 2: "keep"} {
+		var actual string
+		if err := db.QueryRow("SELECT name FROM `"+table+"` WHERE id=?", id).Scan(&actual); err != nil || actual != expected {
+			t.Fatalf("wrong row updated: %d %s %v", id, actual, err)
+		}
+	}
+}
 func TestSQLMySQLApprovalAndSchemaDrift(t *testing.T) {
 	st, m, db, table := sqlTargetFixture(t)
 	if _, e := db.Exec("CREATE TABLE " + table + " (id bigint NOT NULL PRIMARY KEY) ENGINE=InnoDB"); e != nil {

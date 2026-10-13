@@ -968,6 +968,11 @@ func (s *Store) SaveApplicationResources(service string, resources ApplicationRe
 		if connection == nil || connection.Kind != requirement.Kind {
 			return fmt.Errorf("资源 %s 必须绑定 %s 类型连接", binding.Alias, requirement.Kind)
 		}
+		if requirement.Kind == "nacos" {
+			if err := normalizeNacosBindingConfig(binding.Config); err != nil {
+				return err
+			}
+		}
 		key := binding.Environment + "\x00" + binding.Alias
 		if seenBindings[key] {
 			return fmt.Errorf("同一环境的资源别名不能重复绑定")

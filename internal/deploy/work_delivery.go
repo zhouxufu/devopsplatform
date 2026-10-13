@@ -30,8 +30,8 @@ type NacosEntry struct {
 func normalizeNacosChange(c *Change) error {
 	n := c.Nacos
 	n.DataID, n.Group = strings.TrimSpace(n.DataID), strings.TrimSpace(n.Group)
-	if c.Kind != "nacos" || c.Service == "" || !validResourceName(n.ResourceAlias) || n.DataID == "" || n.Group == "" {
-		return fmt.Errorf("Nacos 配置需要应用、资源别名、Data ID 和 Group")
+	if c.Kind != "nacos" || c.Service == "" || !validResourceName(n.ResourceAlias) || n.Group == "" {
+		return fmt.Errorf("Nacos 配置需要应用、资源别名和默认 Group；Data ID 可在环境资源绑定中指定")
 	}
 	if n.Format != "yaml" && n.Format != "properties" && n.Format != "json" {
 		return fmt.Errorf("配置格式仅支持 yaml、properties 或 json")

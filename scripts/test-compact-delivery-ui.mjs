@@ -6,7 +6,8 @@ const base='http://127.0.0.1:9800',dist=process.env.CONSOLE_UI_DIST
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright')
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH})
 const page=await browser.newPage({viewport:{width:1440,height:960}}),errors=[],unexpected=[]
-let uploaded=0,batch=null,work=null,batches=0
+let uploaded=0,batch=null,work=null,batches=0,savedBindings=null
+const appResources={requirements:[{alias:'db',kind:'mysql'},{alias:'config',kind:'nacos'}],bindings:[{alias:'config',environment:'test',connection:'qa-nacos'},{alias:'config',environment:'prod',connection:'qa-nacos',config:{data_id:'prod.yaml',group:'APP'}}]}
 page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept())
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=','base64')
 await page.route('**/*',async route=>{
@@ -21,16 +22,18 @@ await page.route('**/*',async route=>{
  if(method==='GET'){
   if(p.endsWith('/api/me'))return reply({username:'alice',role:'admin',auth_enabled:true})
   if(p.endsWith('/api/services'))return reply([{name:'api'},{name:'web'}])
-  if(p.endsWith('/api/environments'))return reply([{name:'test',display_name:'测试'}])
+  if(p.endsWith('/api/environments'))return reply([{name:'test',display_name:'测试'},{name:'prod',display_name:'生产'}])
+  if(p.endsWith('/api/connections'))return reply([{name:'qa-nacos',kind:'nacos',endpoint:'http://example.invalid/nacos'}])
   if(p.endsWith('/api/work-items/page'))return reply({items:work?[work]:[],total:work?1:0,page:1,page_size:20})
   if(p.endsWith('/api/work-items'))return reply(work?[work]:[])
   if(/\/api\/work-items\/\d+$/.test(p))return reply(work)
-  if(p.endsWith('/api/services/api/resources')||p.endsWith('/api/services/web/resources'))return reply({requirements:[{alias:'db',kind:'mysql'},{alias:'config',kind:'nacos'}],bindings:[]})
+  if(p.endsWith('/api/services/api/resources')||p.endsWith('/api/services/web/resources'))return reply(savedBindings||appResources)
   return reply([])
  }
  if(method==='POST'&&p.endsWith('/api/work-item-attachments')){uploaded++;return reply({id:uploaded.toString(16).padStart(32,'0'),name:'image-'+uploaded+'.png',reference:'attachment:'+uploaded.toString(16).padStart(32,'0')})}
  if(method==='POST'&&p.endsWith('/api/work-items')){work={...r.postDataJSON(),id:910101,owner:'alice'};return reply(work)}
  if(method==='POST'&&p.endsWith('/api/changes/batch')){batch=r.postDataJSON();batches++;return reply(batch.changes.map((c,i)=>({...c,id:i+1,status:'draft'})))}
+ if(method==='PUT'&&p.endsWith('/api/services/web/resources')){savedBindings=r.postDataJSON();return reply(savedBindings)}
  unexpected.push(method+' '+p);return route.abort()
 })
 const choose=async(surface,label,option)=>{
@@ -56,9 +59,19 @@ try{
  const bulk=page.getByRole('dialog',{name:'批量新建变更',exact:true});await bulk.getByRole('button',{name:'移除',exact:true}).click()
  await bulk.getByRole('button',{name:/^其他操作/}).click();await bulk.getByRole('button',{name:'＋ 添加其他操作',exact:true}).click();await choose(bulk,'应用','api');await bulk.locator('label').filter({hasText:/^操作 \/ 引用/}).locator('textarea').fill('上线后核验')
  await bulk.getByRole('button',{name:/^SQL 变更/}).click();await bulk.getByRole('button',{name:'＋ 添加SQL 变更',exact:true}).click();await choose(bulk,'应用','web');await choose(bulk,'资源','db · mysql');await bulk.locator('label').filter({hasText:/^SQL 脚本/}).locator('textarea').fill("UPDATE menu SET name='新菜单' WHERE id=1;")
+ await bulk.getByText('风险与回退说明',{exact:true}).click()
+ for(const [width,height] of [[1440,960],[900,600],[700,520],[390,650]]){
+  await page.setViewportSize({width,height});const body=bulk.locator('.el-dialog__body'),footer=bulk.locator('.el-dialog__footer');await body.evaluate(e=>e.scrollTop=e.scrollHeight);await page.waitForTimeout(150)
+  const b=await body.boundingBox(),f=await footer.boundingBox(),d=await bulk.boundingBox();assert(b.y+b.height<=f.y+1,'footer overlaps form '+width);assert(d.y>=0&&d.y+d.height<=height+1,'dialog escapes viewport '+width)
+  const links=bulk.locator('label').filter({hasText:/^关联需求 \/ Bug/}).locator('.el-select');await links.scrollIntoViewIfNeeded();const l=await links.boundingBox();assert(l.y+l.height<=f.y+1,'last field hidden '+width);assert(await bulk.getByRole('button',{name:'保存全部变更',exact:true}).isVisible());assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false)
+  await page.screenshot({path:'/tmp/devops-delivery-footer-'+width+'.png'})
+ }
+ await page.setViewportSize({width:1440,height:960});await bulk.getByRole('button',{name:'配置该应用资源',exact:true}).click();const binding=page.getByRole('dialog',{name:'应用环境资源绑定',exact:true});await binding.waitFor();
+ const nacos=binding.locator('.nacos-binding');await nacos.nth(1).waitFor();assert.equal(await nacos.count(),2);await nacos.nth(0).getByPlaceholder('该环境 Data ID；留空沿用变更默认值').fill('test.yaml');await nacos.nth(0).getByPlaceholder('留空沿用变更默认 Group').fill('QA');assert.equal(await nacos.nth(1).getByPlaceholder('该环境 Data ID；留空沿用变更默认值').inputValue(),'prod.yaml')
+ await binding.getByRole('button',{name:'保存绑定',exact:true}).click();await binding.waitFor({state:'hidden'});assert.equal(savedBindings.bindings[0].config.data_id,'test.yaml');assert.equal(savedBindings.bindings[0].config.group,'QA');assert.equal(savedBindings.bindings[1].config.data_id,'prod.yaml');assert((await bulk.locator('label').filter({hasText:/^SQL 脚本/}).locator('textarea').inputValue()).includes('新菜单'))
  await bulk.getByRole('button',{name:/^Nacos 配置/}).click();await bulk.getByRole('button',{name:'＋ 添加Nacos 配置',exact:true}).click();await choose(bulk,'应用','api');await choose(bulk,'资源','config · nacos');await bulk.locator('label').filter({hasText:/^Data ID/}).locator('input').fill('app.yaml');await bulk.getByPlaceholder('配置项，例如 feature.enabled').fill('feature.menu');await bulk.getByPlaceholder('期望值').fill('true')
  await bulk.getByRole('button',{name:'关闭',exact:true}).click();await bulk.waitFor({state:'hidden'});await page.getByRole('button',{name:'＋ 新建变更',exact:true}).click();await bulk.waitFor();await bulk.getByRole('button',{name:/^SQL 变更/}).click();assert((await bulk.locator('textarea').first().inputValue()).includes('新菜单'))
  await bulk.getByRole('button',{name:'保存全部变更',exact:true}).click();await bulk.waitFor({state:'hidden'});assert.equal(batches,1);assert.equal(batch.changes.length,3);assert.deepEqual(new Set(batch.changes.map(c=>c.kind)),new Set(['manual','mysql','nacos']));assert.equal(batch.changes.find(c=>c.kind==='mysql').service,'web')
  assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[])
- console.log(JSON.stringify({ok:true,checks:['Markdown safe preview','two image uploads and gallery navigation','requirement draft closes and resumes','persisted format','mixed multi-app batch','closed batch draft resumes','one atomic save','no real writes']}))
+ console.log(JSON.stringify({ok:true,checks:['contained footer 1440/900/700/390','per-environment Nacos Data ID and Group','resource overlay preserves SQL draft','Markdown safe preview','two image uploads and gallery navigation','requirement draft closes and resumes','persisted format','mixed multi-app batch','closed batch draft resumes','one atomic save','no real writes']}))
 }catch(e){console.log(await page.getByRole('dialog').allTextContents());await page.screenshot({path:'/tmp/devops-compact-test-failure.png'});throw e}finally{await browser.close()}

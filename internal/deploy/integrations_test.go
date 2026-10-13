@@ -192,7 +192,7 @@ func TestSQLParserAndSchemaSimulation(t *testing.T) {
 		t.Fatal("skipped conflicting structure")
 	}
 	for _, unsafe := range []string{
-		"DROP TABLE menus", "ALTER TABLE menus DROP COLUMN name", "CREATE TABLE menus (id int) AS SELECT 1", "CREATE TABLE menus (id int) garbage", "ALTER TABLE menus ADD COLUMN id int, DROP COLUMN name", "CREATE INDEX idx ON menus (name(3))", "UPDATE menus SET name='x'", "DELETE FROM menus WHERE 1=1", "UPDATE other.menus SET name='x' WHERE id=1", "UPDATE menus SET name=sleep(1) WHERE id=1", "INSERT INTO menus (id) SELECT id FROM other", "INSERT INTO menus (id) VALUES (@@version)", "CREATE TABLE menus (id int); INSERT INTO menus (id) VALUES (1)", "/*!50000 DROP TABLE menus */", "SELECT 1", "UPDATE menus SET name='x' WHERE id IN (SELECT id FROM other)",
+		"DROP TABLE menus", "ALTER TABLE menus DROP COLUMN name", "CREATE TABLE menus (id int) AS SELECT 1", "CREATE TABLE menus (id int) garbage", "ALTER TABLE menus ADD COLUMN id int, DROP COLUMN name", "CREATE INDEX idx ON menus (name(3))", "UPDATE menus SET name='x'", "DELETE FROM menus WHERE 1=1", "UPDATE menus SET name=sleep(1) WHERE id=1", "INSERT INTO menus (id) SELECT id FROM other", "INSERT INTO menus (id) VALUES (@@version)", "CREATE TABLE menus (id int); INSERT INTO menus (id) VALUES (1)", "/*!50000 DROP TABLE menus */", "SELECT 1", "UPDATE menus SET name='x' WHERE id IN (SELECT id FROM other)",
 	} {
 		if _, e := parseChangeSQL(unsafe); e == nil {
 			t.Errorf("accepted unsafe SQL: %s", unsafe)

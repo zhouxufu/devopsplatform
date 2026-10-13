@@ -53,6 +53,7 @@ type SQLStatement struct {
 	ChangeID        int64  `json:"change_id"`
 	SQL             string `json:"sql"`
 	Table           string `json:"table"`
+	Database        string `json:"database,omitempty"`
 	Action          string `json:"action"`
 	Skip            bool   `json:"skip"`
 	Reason          string `json:"reason,omitempty"`
@@ -347,6 +348,7 @@ func parseChangeSQL(content string) ([]SQLStatement, error) {
 				return nil, fmt.Errorf("SQL 解析失败：%w", e)
 			}
 			var where *sqlparser.Where
+			qualifier := ""
 			switch v := stmt.(type) {
 			case *sqlparser.Insert:
 				values, ok := v.Rows.(sqlparser.Values)
@@ -354,9 +356,8 @@ func parseChangeSQL(content string) ([]SQLStatement, error) {
 					return nil, fmt.Errorf("INSERT 仅支持指定字段的 VALUES，不支持 IGNORE/REPLACE/SELECT/ON DUPLICATE")
 				}
 				op.Table = v.Table.Name.String()
-				if !v.Table.Qualifier.IsEmpty() {
-					return nil, fmt.Errorf("禁止跨库 SQL")
-				}
+				op.Database = v.Table.Qualifier.String()
+				v.Table.Qualifier = sqlparser.TableIdent{}
 				op.Action = "insert"
 				for _, c := range v.Columns {
 					op.columns = append(op.columns, c.String())
@@ -378,7 +379,7 @@ func parseChangeSQL(content string) ([]SQLStatement, error) {
 				if len(v.OrderBy) > 0 || v.Limit != nil {
 					return nil, fmt.Errorf("UPDATE 不支持 ORDER BY/LIMIT")
 				}
-				op.Table, e = singleSQLTable(v.TableExprs)
+				op.Table, op.Database, qualifier, e = singleSQLChangeTable(v.TableExprs)
 				where = v.Where
 				op.Action = "update"
 				for _, expr := range v.Exprs {
@@ -392,7 +393,7 @@ func parseChangeSQL(content string) ([]SQLStatement, error) {
 				if len(v.Targets) > 0 || len(v.Partitions) > 0 || len(v.OrderBy) > 0 || v.Limit != nil {
 					return nil, fmt.Errorf("DELETE 仅支持单表带 WHERE")
 				}
-				op.Table, e = singleSQLTable(v.TableExprs)
+				op.Table, op.Database, qualifier, e = singleSQLChangeTable(v.TableExprs)
 				where = v.Where
 				op.Action = "delete"
 			default:
@@ -408,16 +409,16 @@ func parseChangeSQL(content string) ([]SQLStatement, error) {
 				if e = validateSQLPredicate(where.Expr); e != nil {
 					return nil, e
 				}
-				op.Scope = sqlparser.String(where.Expr)
 			}
 			if e = sqlparser.Walk(func(node sqlparser.SQLNode) (bool, error) {
 				switch n := node.(type) {
 				case *sqlparser.FuncExpr, *sqlparser.Subquery:
 					return false, fmt.Errorf("不支持函数或子查询")
 				case *sqlparser.ColName:
-					if !n.Qualifier.IsEmpty() || !sqlIdentifierRE.MatchString(n.Name.String()) {
-						return false, fmt.Errorf("字段不得带库/表限定或会话变量")
+					if !n.Qualifier.Qualifier.IsEmpty() || (!n.Qualifier.IsEmpty() && n.Qualifier.Name.String() != qualifier) || !sqlIdentifierRE.MatchString(n.Name.String()) {
+						return false, fmt.Errorf("字段限定必须是当前单表名称或声明的别名，不支持跨表字段或会话变量")
 					}
+					n.Qualifier = sqlparser.TableName{}
 					op.columns = append(op.columns, n.Name.String())
 				case *sqlparser.SQLVal:
 					if n.Type == sqlparser.ValArg {
@@ -427,6 +428,15 @@ func parseChangeSQL(content string) ([]SQLStatement, error) {
 				return true, nil
 			}, stmt); e != nil {
 				return nil, e
+			}
+			if op.Database != "" && !sqlIdentifierRE.MatchString(op.Database) {
+				return nil, fmt.Errorf("数据库名称无效")
+			}
+			// Normalize aliases for both scope reads and execution. Never run the
+			// original qualified SQL against a different environment database.
+			op.SQL = sqlparser.String(stmt)
+			if where != nil {
+				op.Scope = sqlparser.String(where.Expr)
 			}
 		}
 		if !sqlIdentifierRE.MatchString(op.Table) {
@@ -461,6 +471,39 @@ func singleSQLTable(exprs sqlparser.TableExprs) (string, error) {
 		return "", fmt.Errorf("不支持跨库或子查询")
 	}
 	return n.Name.String(), nil
+}
+
+// Change-only normalization; read queries and data synchronization retain their
+// existing narrower dialect. Database qualification is checked at preflight.
+func singleSQLChangeTable(exprs sqlparser.TableExprs) (table, database, qualifier string, err error) {
+	if len(exprs) != 1 {
+		return "", "", "", fmt.Errorf("仅支持单表 SQL")
+	}
+	a, ok := exprs[0].(*sqlparser.AliasedTableExpr)
+	if !ok || a.Hints != nil || len(a.Partitions) > 0 {
+		return "", "", "", fmt.Errorf("不支持 JOIN、索引提示或分区限定；支持单表别名")
+	}
+	n, ok := a.Expr.(sqlparser.TableName)
+	if !ok {
+		return "", "", "", fmt.Errorf("不支持子查询")
+	}
+	table, database, qualifier = n.Name.String(), n.Qualifier.String(), n.Name.String()
+	if !a.As.IsEmpty() {
+		qualifier = a.As.String()
+		if !sqlIdentifierRE.MatchString(qualifier) {
+			return "", "", "", fmt.Errorf("表别名无效")
+		}
+	}
+	n.Qualifier = sqlparser.TableIdent{}
+	a.Expr, a.As = n, sqlparser.TableIdent{}
+	return table, database, qualifier, nil
+}
+
+func validateSQLDatabase(op SQLStatement, database string) error {
+	if op.Database != "" && op.Database != database {
+		return fmt.Errorf("SQL 指定数据库 %s 与环境绑定数据库 %s 不一致，禁止跨库；请使用不带库名的表名以复用到多个环境", op.Database, database)
+	}
+	return nil
 }
 func validateSQLPredicate(expr sqlparser.Expr) error {
 	switch v := expr.(type) {
@@ -730,6 +773,9 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 			return nil, err
 		}
 		for _, op := range ops {
+			if err := validateSQLDatabase(op, resource.Config["database"]); err != nil {
+				return nil, err
+			}
 			op.ChangeID, op.MaxAffectedRows = id, c.SQL.MaxAffectedRows
 			p.Statements = append(p.Statements, op)
 			tables[op.Table] = true

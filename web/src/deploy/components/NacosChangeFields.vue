@@ -4,7 +4,7 @@ import {ElButton,ElInput} from '../../shared/components/ui.js';
 defineProps({model:{type:Object,required:true},disabled:Boolean});
 </script>
 <template>
-  <label>Data ID<ElInput v-model="model.data_id" :disabled="disabled||!!model.restore" /></label>
+  <label>Data ID（默认，可选）<ElInput v-model="model.data_id" :disabled="disabled||!!model.restore" placeholder="优先使用目标环境绑定的 Data ID" /></label>
   <label>Group<ElInput v-model="model.group" :disabled="disabled||!!model.restore" /></label>
   <label>格式<Sel v-model="model.format" :options="['yaml','properties','json']" :disabled="disabled||!!model.restore" width="100%" /></label>
   <div class="span">
@@ -17,7 +17,7 @@ defineProps({model:{type:Object,required:true},disabled:Boolean});
     <ElButton v-if="!disabled&&!model.restore" @click="model.entries.push({key:'',value:'',action:'set'})">＋ 配置项</ElButton>
   </div>
   <p class="hint span" v-if="model.restore">恢复草稿引用历史完整文档快照，配置项只读；标记就绪后重新预览、审核并执行。当前文档变化会阻止恢复。</p>
-  <p class="hint span" v-else>保存不会发布。标记就绪后，选择目标环境预览差异，再通过部署编排审核执行。{{model.format==='properties'?'properties 值按原文保存。':'YAML/JSON 的点表示层级；true、123、null 为对应类型，字符串可用双引号。'}}只支持已有配置、标量配置项；请勿粘贴生产密钥。</p>
+  <p class="hint span" v-else>环境资源绑定的 Data ID / Group 优先，未指定时沿用这里的默认值；预览展示最终目标。保存不会发布。标记就绪后，选择目标环境预览差异，再通过部署编排审核执行。{{model.format==='properties'?'properties 值按原文保存。':'YAML/JSON 的点表示层级；true、123、null 为对应类型，字符串可用双引号。'}}只支持已有配置、标量配置项；请勿粘贴生产密钥。</p>
 </template>
 <style scoped>
 .config-entry{display:grid;grid-template-columns:minmax(0,1fr) 100px minmax(0,1fr) auto;gap:8px;margin-bottom:8px}.hint{color:var(--muted);font-size:12px;line-height:1.6}@media(max-width:700px){.config-entry{grid-template-columns:minmax(0,1fr) 100px}.config-entry>:nth-child(3){grid-column:1}}
