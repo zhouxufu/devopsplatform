@@ -49,12 +49,24 @@ func normalizeNacosChange(c *Change) error {
 	for i := range n.Entries {
 		e := &n.Entries[i]
 		e.Key = strings.TrimSpace(e.Key)
-		if !nacosKeyRE.MatchString(e.Key) || seen[e.Key] || len(e.Value) > 65536 || (e.Action != "set" && e.Action != "delete") {
-			return fmt.Errorf("配置项不能为空、不能重复；操作仅支持 set 或 delete")
+		if e.Key == "" {
+			return fmt.Errorf("第 %d 个配置项：请填写配置项名称", i+1)
+		}
+		if !nacosKeyRE.MatchString(e.Key) {
+			return fmt.Errorf("第 %d 个配置项：名称使用字母、数字、短横线、下划线和点", i+1)
+		}
+		if seen[e.Key] {
+			return fmt.Errorf("第 %d 个配置项：名称重复，请修改或删除重复项", i+1)
+		}
+		if len(e.Value) > 65536 {
+			return fmt.Errorf("第 %d 个配置项：期望值不能超过 64 KiB", i+1)
+		}
+		if e.Action != "set" && e.Action != "delete" {
+			return fmt.Errorf("第 %d 个配置项：请选择设置值或删除项", i+1)
 		}
 		for key := range seen {
 			if strings.HasPrefix(key, e.Key+".") || strings.HasPrefix(e.Key, key+".") {
-				return fmt.Errorf("同一变更不能同时修改父路径和子路径")
+				return fmt.Errorf("第 %d 个配置项：不能同时修改父路径和子路径", i+1)
 			}
 		}
 		seen[e.Key] = true

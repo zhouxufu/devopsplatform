@@ -12,13 +12,13 @@ export function deliveryRows(changes, editable, services=[]) {
   }
   return rows;
 }
-export function expandDeliveryRows(rows, title) {
+export function expandDeliveryRows(rows, title, origins=[]) {
   const out=[];
   for(const row of rows){
     if(row.readonly)continue;
     const names=row.kind==='code'?row.services:[row.service||''];
-    if(!names.length)throw new Error('代码内容请选择至少一个应用');
-    if(row.kind==='code'&&row.originals.some(c=>!names.includes(c.service)))throw new Error('已保存的代码应用不能在此移除；请在变更列表核对版本引用后处理');
+    if(!names.length)throw Object.assign(new Error('代码内容请选择至少一个应用'),{rowKey:row.key,field:'services'});
+    if(row.kind==='code'&&row.originals.some(c=>!names.includes(c.service)))throw Object.assign(new Error('已保存的代码应用不能在此移除；请在变更列表核对版本引用后处理'),{rowKey:row.key,field:'services'});
     for(const service of [...new Set(names)]){
       const old=row.originals.find(c=>c.service===service);
       const c={...row,id:old?.id||0,service,title:old?.title||row.title||`${title} · ${{code:'代码',mysql:'SQL',nacos:'配置',manual:'人工',redis:'Redis',artifact:'制品'}[row.kind]||row.kind}${service?' · '+service:''}`};
@@ -27,6 +27,7 @@ export function expandDeliveryRows(rows, title) {
       // Unchanged rows, including shared ones, are not rewritten.
       if(old&&['kind','title','service','reference','summary','risk_level','rollback_plan','sql','nacos','redis'].every(k=>JSON.stringify(c[k])===JSON.stringify(old[k])))continue;
       out.push(c);
+      origins.push(row.key);
     }
   }
   return out;
