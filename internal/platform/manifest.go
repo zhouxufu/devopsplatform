@@ -75,7 +75,7 @@ func DiscoverPlugins(root string) ([]*Manifest, error) {
 		if backend == nil || !backend.Internal || backend.Backend != "" {
 			return nil, fmt.Errorf("plugin %s requires enabled internal backend %s", m.Name, m.Backend)
 		}
-		if m.UIPath != "/ui" && m.UIPath != "/ui/dbms" && m.UIPath != "/ui/redis" {
+		if m.UIPath != "/ui" && m.UIPath != "/ui/dbms" && m.UIPath != "/ui/redis" && m.UIPath != "/ui/research" && m.UIPath != "/ui/api-center" {
 			return nil, fmt.Errorf("plugin %s: unsupported ui_path", m.Name)
 		}
 		m.AdminAddr = backend.AdminAddr

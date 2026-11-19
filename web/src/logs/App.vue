@@ -1,7 +1,10 @@
 <script setup>
-import { ref, provide, onMounted, onBeforeUnmount } from 'vue'
-import { isDark, toggleTheme } from '../shared/composables/theme.js'
-import { serviceNames } from './services.js'
+import PageSurface from '../shared/components/PageSurface.vue'
+import {useRoute as useMenuRoute,useRouter as useMenuRouter} from 'vue-router'
+
+import {ref, provide, onMounted, onBeforeUnmount} from 'vue'
+import {isDark, toggleTheme} from '../shared/composables/theme.js'
+import {serviceNames} from './services.js'
 import PlatformNav from '../shared/components/PlatformNav.vue'
 import WorkspaceSidebar from '../shared/components/WorkspaceSidebar.vue'
 import PlatformPanel from '../shared/components/PlatformPanel.vue'
@@ -18,6 +21,8 @@ window.addEventListener('message', e => {
 const embedded = window.parent !== window
 const services = ref([])
 const platformContext = ref(null)
+const externalLogSource=ref('')
+provide('externalLogSource',externalLogSource)
 provide('logServices', services)
 provide('platformContext', platformContext)
 // 全局上下文（嵌入模式由壳驱动）
@@ -40,37 +45,13 @@ onMounted(async () => {
   services.value = serviceNames(await fetch('api/services').then(r => r.json()).catch(() => ({})))
 })
 onBeforeUnmount(() => window.removeEventListener('message', onContext))
+const menuRoute=useMenuRoute(),menuRouter=useMenuRouter()
+
+
+
+import {SidebarMenu,SidebarMenuButton,SidebarMenuItem} from '../shared/shadcn-ui.js'
 </script>
-<template>
-  <div class="layout" :class="{ embedded }">
-    <WorkspaceSidebar>
-      <span class="logo"><UiIcon name="logs"/></span>
-      <nav aria-label="日志平台导航">
-        <RouterLink to="/search"><UiIcon name="search"/><i>搜索</i></RouterLink>
-        <RouterLink to="/live"><UiIcon name="live"/><i>Live</i></RouterLink>
-        <RouterLink to="/subs"><UiIcon name="bell"/><i>订阅</i></RouterLink>
-        <RouterLink to="/status"><UiIcon name="status"/><i>状态</i></RouterLink>
-      </nav>
-      <PlatformNav @open="platformPanel=$event" />
-    </WorkspaceSidebar>
-    <main><RouterView /></main>
-    <PlatformPanel :view="platformPanel" plugin="logs" @switch="platformPanel=$event" @close="platformPanel=''" />
-  </div>
-</template>
-<style scoped>
-.layout{position:relative;display:flex;height:100vh}
-.layout>header{box-sizing:border-box;width:46px;flex:0 0 46px;display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px 0;border-right:1px solid var(--border);background:var(--panel);overflow-y:auto}
-.logo{font-size:15px}
-.layout.embedded .logo{display:none}
-nav{display:flex;flex-direction:column;gap:4px;width:100%}
-nav a{display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0;width:100%;border-radius:8px;color:var(--muted);text-decoration:none;font-size:10px}
-nav a.router-link-active{color:var(--text);background:var(--panel2)}
-main{flex:1;min-width:0;display:flex;flex-direction:column}
-.layout:not(.embedded)>header{width:160px;flex-basis:160px;align-items:flex-start;padding:14px 10px}
-.layout:not(.embedded) nav a{flex-direction:row;justify-content:flex-start;width:100%;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
-.layout:not(.embedded) :deep(.platform-nav button){flex-direction:row;justify-content:flex-start;padding:10px;font-size:12px;gap:10px;white-space:nowrap}
-.themebtn{margin-top:auto;font-size:14px;cursor:pointer;color:var(--muted);padding:4px}
-.themebtn:hover{color:var(--text)}
-.layout>header{width:var(--sidebar-width);flex-basis:var(--sidebar-width);padding:12px 6px;gap:16px}nav a{min-height:54px;justify-content:center;gap:5px;padding:9px 0;border-radius:10px;font-size:11px}nav a i{font-style:normal}nav a:hover{background:var(--panel2);color:var(--text)}nav a.router-link-active{background:var(--brand-soft);color:var(--brand-ink);font-weight:600}.layout:not(.embedded)>header{width:176px;flex-basis:176px;padding:20px 12px}.layout:not(.embedded) nav a,.layout:not(.embedded) :deep(.platform-nav button){font-size:13px;min-height:44px}
-@media(max-width:760px){.layout:not(.embedded)>header{width:var(--sidebar-width);flex-basis:var(--sidebar-width);padding:12px 6px}.layout:not(.embedded) .logo{display:none}.layout:not(.embedded) nav a,.layout:not(.embedded) :deep(.platform-nav button){flex-direction:column;justify-content:center;padding:9px 0;gap:5px;font-size:11px}}
-</style>
+<template><div :class="{ embedded }" class="layout"><WorkspaceSidebar v-slot="{collapsed}"><span class="logo"><UiIcon name="logs"/></span><SidebarMenu class="platform-navigation"><SidebarMenuItem v-for="n in [['/search','search','搜索'],['/live','live','实时日志'],['/subs','bell',externalLogSource?'本地订阅':'订阅'],['/status','status',externalLogSource?'本地采集':'状态']]" :aria-label="n[2]"><SidebarMenuButton class="h-10 text-sm" :is-active="([menuRoute.path]).includes(n[0])" @click="(key=>menuRouter.push(key))(n[0])"><UiIcon :name="n[1]"/><span><span>{{n[2]}}</span></span></SidebarMenuButton></SidebarMenuItem></SidebarMenu><PlatformNav @open="platformPanel=$event"/></WorkspaceSidebar><main :class="{'log-query-host':menuRoute.path==='/search'||menuRoute.path==='/'}"><PageSurface :fill="['/','/search','/live'].includes(menuRoute.path)" :flush="['/','/search','/live'].includes(menuRoute.path)"><RouterView/></PageSurface></main><PlatformPanel :view="platformPanel" plugin="logs" @switch="platformPanel=$event" @close="platformPanel=''"/></div></template>
+
+
+<style scoped>main{flex:1;min-width:0;min-height:0;overflow:auto}.logo{display:flex;align-items:center;gap:.5rem;padding:.75rem;font-weight:600}.standalone-context{display:flex;flex-wrap:wrap;align-items:end;gap:1rem;margin-bottom:1.5rem}</style>

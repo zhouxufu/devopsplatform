@@ -1,20 +1,31 @@
 <script setup>
-import PageHeader from "../../shared/components/PageHeader.vue"
-import { ref, computed, inject, watch, onMounted, onUnmounted } from 'vue'
-import Sel from '../../shared/components/Sel.vue'
-import { ElButton, ElInput, ElInputNumber } from '../../shared/components/ui.js'
-import Modal from '../../shared/components/Modal.vue'
-import { toast } from '../../shared/composables/toast.js'
+import DataTable from "../../shared/components/DataTable.vue"
 
-const rules = ref([]), st = ref({}), notifs = ref([])
-const loading = ref(true)
+import {useTableLayout} from '../../shared/composables/tableLayout.js'
+const {pinTableActions}=useTableLayout()
+
+
+
+import PageHeader from "../../shared/components/PageHeader.vue"
+import {ref, computed, inject, watch, onMounted} from 'vue'
+
+
+import StatePanel from '../../shared/components/StatePanel.vue'
+
+import {useAlertRules} from '../../shared/composables/alertRules.js'
+import {useAsyncData,requestList} from '../../shared/composables/asyncData.js'
+import {toast} from '../../shared/composables/toast.js'
+
+
 const curEnvironment = inject('curEnvironment', ref(''))
 const environments = inject('environments', ref([]))
 const services = ref([]), instances = ref([]), metrics = ref([]), ifaces = ref([])
-const show = ref(false), editing = ref(null)
+const notificationDetail=ref('')
+const notificationKey=n=>JSON.stringify([n.at,n.rule,n.kind,n.detail])
+const show = ref(false), editing = ref(null), formRef=ref(null)
 const form = ref({})
 const supArr = ref([])
-let timer = null
+const {rules,st,notifs,loading,error,load,saving,busyId,save:saveRule,action}=useAlertRules(curEnvironment)
 
 const TYPES = [
   { v: 'error_rate', label: '错误率' },
@@ -24,74 +35,41 @@ const TYPES = [
 ]
 const environmentOptions = computed(() => [...new Set([curEnvironment.value, ...environments.value].filter(e => e && e !== '*'))])
 
-async function load() {
-  loading.value = true
-  const q = new URLSearchParams({ environment: curEnvironment.value || '' })
-  ;[rules.value, st.value, notifs.value] = await Promise.all([
-    fetch('api/alerts?' + q).then(r => r.json()).then(d => d ?? []),
-    fetch('api/alerts/status?' + q).then(r => r.json()),
-    fetch('api/alert-notifications?' + new URLSearchParams({ limit: 50, environment: curEnvironment.value || '' })).then(r => r.json()).then(d => d ?? []),
-  ])
-  loading.value = false
-}
-onMounted(async () => {
-  load()
-  services.value = (await fetch('api/otlp/services').then(r => r.json()).catch(() => [])) ?? []
-  timer = setInterval(load, 15000)
+onMounted(async()=>{
+  try {
+    services.value=await requestList('api/otlp/services')
+  }catch(e){toast('可选服务和环境读取失败：'+e.message,'error')}
 })
-onUnmounted(() => clearInterval(timer))
-watch(curEnvironment, load)
-
 const supCandidates = computed(() => rules.value.filter(r => r.id !== editing.value?.id && (r.environment || '') === (form.value.environment || '') && (r.instance || '') === (form.value.instance || '')))
 
-watch([() => form.value.service, () => form.value.environment], async ([svc]) => {
-  metrics.value = []
-  ifaces.value = []
-  if (!svc) return
-  const environment = form.value.environment === '*' ? '' : (form.value.environment || '')
-  instances.value = (await fetch('api/instances?' + new URLSearchParams({ service: svc, environment })).then(r => r.json()).catch(() => [])) ?? []
-  if (form.value.instance && !instances.value.includes(form.value.instance)) form.value.instance = ''
-  metrics.value = (await fetch('api/otlp/names?' + new URLSearchParams({ service: svc, environment, instance: form.value.instance || '' })).then(r => r.json()).catch(() => [])) ?? []
-})
-watch([() => form.value.metric, () => form.value.instance], async ([m]) => {
-  ifaces.value = []
-  if (!m || !form.value.service) return
-  const environment = form.value.environment === '*' ? '' : (form.value.environment || '')
-  ifaces.value = (await fetch('api/otlp/interfaces?' + new URLSearchParams({ service: form.value.service, environment, instance: form.value.instance || '', name: m })).then(r => r.json()).catch(() => [])) ?? []
-})
-
+const {data:choices,loading:choicesLoading,error:choicesError,load:readChoices}=useAsyncData()
+watch(choices,value=>{instances.value=value?.instances||[];metrics.value=value?.metrics||[];ifaces.value=value?.ifaces||[]})
+function loadChoices(){
+ const f={...form.value}
+ readChoices(async signal=>{
+  if(!show.value||!f.service)return {instances:[],metrics:[],ifaces:[]}
+  const p={service:f.service,environment:f.environment==='*'?'':f.environment||'',instance:f.instance||''}
+  const [instances,metrics,ifaces]=await Promise.all([
+   requestList('api/instances?'+new URLSearchParams(p),{signal}),requestList('api/otlp/names?'+new URLSearchParams(p),{signal}),
+   f.metric?requestList('api/otlp/interfaces?'+new URLSearchParams({...p,name:f.metric}),{signal}):[],
+  ])
+  return {instances,metrics,ifaces}
+ })
+}
+watch([()=>form.value.service,()=>form.value.environment,()=>form.value.instance,()=>form.value.metric,show],loadChoices)
+function resetChoices(stage){if(stage!=='metric')supArr.value=[];if(stage==='service')form.value.instance='';if(stage!=='metric')form.value.metric='';form.value.iface=''}
 function open(r) {
   editing.value = r || null
   form.value = r ? { ...r } : { name: '', service: '', environment: curEnvironment.value || environments.value[0] || '*', instance: '', metric: '', iface: '', type: 'error_rate', quantile: 0.99, window_min: 5, threshold: 1, min_sample: 10, webhook: '', silence_sec: 300 }
   supArr.value = r?.suppress_by ? r.suppress_by.split(',').map(s => s.trim()).filter(Boolean) : []
-  if (r) { // 编辑时回填级联下拉
-    metrics.value = [{ iface: '' }].slice(0, 0)
-    const environment = r.environment === '*' ? '' : (r.environment || '')
-    Promise.all([
-      fetch('api/instances?' + new URLSearchParams({ service: r.service, environment })).then(x => x.json()).catch(() => []),
-      fetch('api/otlp/names?' + new URLSearchParams({ service: r.service, environment, instance: r.instance || '' })).then(x => x.json()).catch(() => []),
-      fetch('api/otlp/interfaces?' + new URLSearchParams({ service: r.service, environment, instance: r.instance || '', name: r.metric })).then(x => x.json()).catch(() => []),
-    ]).then(([ins, ns, ifs]) => { instances.value = ins ?? []; metrics.value = ns ?? []; ifaces.value = ifs ?? [] })
-  }
   show.value = true
 }
 async function save() {
-  if (!form.value.name || !form.value.webhook || !form.value.service || !form.value.environment || !form.value.metric) return toast('名称/服务/环境/指标/Webhook 必填')
-  const body = { ...form.value, suppress_by: supArr.value.join(',') }
-  const url = editing.value ? `api/alerts/${editing.value.id}` : 'api/alerts'
-  const r = await fetch(url, { method: editing.value ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  if (r.ok) { show.value = false; toast('已保存'); load() } else toast('保存失败')
+  if(saving.value||await validateFields(formRef.value,form.value,{},_validationErrors))return
+  const body={...form.value,suppress_by:supArr.value.join(',')}
+  if(await saveRule(body,editing.value?.id))show.value=false
 }
-async function toggle(r) {
-  await fetch(`api/alerts/${r.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...r, enabled: !r.enabled }) })
-  load()
-}
-async function test(id) { const r = await fetch(`api/alerts/${id}/test`, { method: 'POST' }); toast(r.ok ? '已发送' : '失败') }
-async function silence(r, ms) {
-  await fetch(`api/alerts/${r.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...r, silence_until: ms > 0 ? Date.now() + ms : 0 }) })
-  toast(ms > 0 ? '已静默 1h' : '已解除'); load()
-}
-
+const toggle=r=>action(r,'toggle'), test=id=>action({id},'test'), silence=(r,ms)=>action(r,'silence',ms)
 const typeLabel = t => TYPES.find(x => x.v === t)?.label || t
 const qName = q => q === 0.5 ? 'TP50' : q === 0.95 ? 'TP95' : 'TP99'
 function condText(r) {
@@ -103,108 +81,22 @@ function condText(r) {
   }
 }
 const KC = { 触发: 'var(--error)', 持续中: 'var(--warn)', 已恢复: 'var(--ok)', 汇总: 'var(--info)', 测试: 'var(--info)', 被抑制: 'var(--dim)', 静默: 'var(--dim)', 限流: 'var(--dim)' }
+
+import OptionPicker from '../../shared/components/OptionPicker.vue'
+
+import {ref as _viewRef} from 'vue'
+const _view1=_viewRef([])
+
+import {reactive as _validationReactive} from 'vue'
+import {validateFields,setFieldErrors,scrollToValidationField} from '../../shared/formValidation.js'
+const _validationErrors=_validationReactive({})
+
+
+import {Accordion,AccordionContent,AccordionItem,AccordionTrigger,Button,Card,CardAction,CardContent,CardFooter,CardHeader,CardTitle,Checkbox,CheckboxGroupRoot,Dialog,DialogContent,DialogDescription,DialogFooter,DialogHeader,DialogTitle,DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuTrigger,Empty,EmptyContent,EmptyDescription,EmptyHeader,Field,FieldDescription,FieldError,FieldLabel,Input,NumberField,NumberFieldContent,NumberFieldDecrement,NumberFieldIncrement,NumberFieldInput,Spinner,Table,TableBody,TableCell,TableHead,TableHeader,TableRow} from '../../shared/shadcn-ui.js'
 </script>
-<template>
-  <div style="padding:16px">
-<PageHeader title="指标报警"><template #actions><ElButton type="primary" size="small" @click="open()">＋ 新建指标报警</ElButton></template></PageHeader>
-    <div class="table-scroll"><table>
-      <thead><tr><th>名称</th><th>对象</th><th>条件</th><th>状态</th><th>最近评估</th><th>已发送</th><th>操作</th></tr></thead>
-      <tbody>
-        <tr v-for="r in rules" :key="r.id">
-          <td>{{ r.name }}</td>
-          <td><code style="color:var(--info)">{{ r.service }}</code> <code style="color:var(--brand)">[{{ r.environment === '*' ? '全部环境' : r.environment }}/{{ r.instance || '全部实例' }}]</code><div style="color:var(--dim);font-size:11px">{{ r.metric }}{{ r.iface ? ' · ' + r.iface : ' · 全部接口' }}</div></td>
-          <td><code style="color:var(--warn)">{{ typeLabel(r.type) }}</code> {{ condText(r) }}
-            <div v-if="st[r.id]?.recent" style="color:var(--dim);font-size:11px">{{ Object.entries(st[r.id].recent).map(([k, v]) => k + '=' + v).join(' ') }}</div>
-          </td>
-          <td>
-            <span v-if="!r.enabled" style="color:var(--dim)">已停用</span>
-            <span v-else-if="st[r.id]?.firing" class="st-fail">● 报警中</span>
-            <span v-else class="st-ok">● 正常</span>
-            <div v-if="r.enabled && st[r.id]?.silenced" style="color:var(--dim);font-size:11px">🔕 静默至 {{ st[r.id].silence_until }}</div>
-            <div v-else-if="r.enabled && st[r.id]?.suppressed_by" style="color:var(--dim);font-size:11px">⏸ 被「{{ st[r.id].suppressed_by }}」抑制</div>
-          </td>
-          <td style="color:var(--dim)">{{ st[r.id]?.last_eval || '—' }}</td>
-          <td>{{ st[r.id]?.sent || 0 }}</td>
-          <td>
-            <button class="op op-btn" @click="test(r.id)">测试</button>
-            <button class="op op-btn" @click="open(r)">编辑</button>
-            <button class="op op-btn" style="color:var(--warn)" @click="silence(r, st[r.id]?.silenced ? 0 : 3600000)">{{ st[r.id]?.silenced ? '解除静默' : '静默1h' }}</button>
-            <button class="op op-btn del" @click="toggle(r)">{{ r.enabled ? '停用' : '启用' }}</button>
-          </td>
-        </tr>
-      </tbody>
-    </table></div>
-    <div v-if="loading" class="empty">加载中…</div><div v-else-if="!rules.length" class="empty">暂无指标报警规则（错误率 / 响应时间 / 调用量突变）</div>
+<template><section class="console-content list-page-surface "><PageHeader title="告警"><template #actions><Button @click="open()" variant="default" size="sm" type="button">＋ 新建报警</Button></template></PageHeader><div class="table-scroll"><div v-if="!error" class="console-table min-w-0 max-w-full"><div v-if="loading||busyId!==null" class="flex items-center gap-2 py-2" role="status"><Spinner/>正在读取</div><div class="min-w-0 max-w-full" :style="{maxHeight:({x:1184}).y?({x:1184}).y+'px':undefined}"><DataTable class="[&_[data-slot=table-container]]:rounded-lg [&_[data-slot=table-container]]:border" :rows="(((rules)||[]).map((r,rowIndex)=>({...r,__rowKey:r.id}))||[])" :columns="[{id:'c0',label:&quot;名称&quot;,size:200,minSize:64,required:true,defaultHidden:false,flex:true,selection:false,pin:'left'},{id:'c1',label:&quot;对象&quot;,size:220,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c2',label:&quot;条件&quot;,size:240,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c3',label:&quot;状态&quot;,size:88,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c4',label:&quot;最近评估&quot;,size:180,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c5',label:&quot;已发送&quot;,size:90,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c6',label:&quot;操作&quot;,size:128,minSize:64,required:true,defaultHidden:false,flex:false,selection:false,pin:'right'}]" table-key="monitor-pages-AlertsView-0" :row-key="(record,rowIndex)=>typeof (&quot;__rowKey&quot;)==='function'?(&quot;__rowKey&quot;)(record):record[&quot;__rowKey&quot;]??rowIndex"><template #header-c0>名称</template><template #cell-c0="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:r,rowIndex:rowIndex} in [{record,rowIndex}]"><div>{{ r.name }}</div></template></div></template><template #header-c1>对象</template><template #cell-c1="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:r,rowIndex:rowIndex} in [{record,rowIndex}]"><div><code>{{ r.service }}</code> <code>[{{ r.environment === '*' ? '全部环境' : r.environment }}/{{ r.instance || '全部实例' }}]</code><div style="color:var(--dim);font-size:.75rem">{{ r.metric }}{{ r.iface ? ' · ' + r.iface : ' · 全部接口' }}</div></div></template></div></template><template #header-c2>条件</template><template #cell-c2="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:r,rowIndex:rowIndex} in [{record,rowIndex}]"><div><code>{{ typeLabel(r.type) }}</code> {{ condText(r) }}
+            <div v-if="st[r.id]?.recent" style="color:var(--dim);font-size:.75rem">{{ Object.entries(st[r.id].recent).map(([k, v]) => k + '=' + v).join(' ') }}</div></div></template></div></template><template #header-c3>状态</template><template #cell-c3="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:r,rowIndex:rowIndex} in [{record,rowIndex}]"><div><span v-if="!r.enabled" style="color:var(--dim)">已停用</span><span v-else-if="st[r.id]?.firing" class="st-fail">● 报警中</span><span v-else-if="st[r.id]?.last_eval" style="color:var(--muted-foreground)">未触发</span><span v-else style="color:var(--dim)">待评估</span><div v-if="r.enabled && st[r.id]?.silenced" style="color:var(--dim);font-size:.75rem">🔕 静默至 {{ st[r.id].silence_until }}</div><div v-else-if="r.enabled && st[r.id]?.suppressed_by" style="color:var(--dim);font-size:.75rem">⏸ 被「{{ st[r.id].suppressed_by }}」抑制</div></div></template></div></template><template #header-c4>最近评估</template><template #cell-c4="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:r,rowIndex:rowIndex} in [{record,rowIndex}]"><div style="color:var(--dim)">{{ st[r.id]?.last_eval || '—' }}</div></template></div></template><template #header-c5>已发送</template><template #cell-c5="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:r,rowIndex:rowIndex} in [{record,rowIndex}]"><div>{{ st[r.id]?.sent || 0 }}</div></template></div></template><template #header-c6>操作</template><template #cell-c6="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:r,rowIndex:rowIndex} in [{record,rowIndex}]"><div class="cell-actions"><Button @click="open(r)" variant="ghost" size="sm" type="button" :disabled="(busyId!==null||saving)">编辑</Button><DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="sm" type="button" :disabled="(busyId!==null||saving)">更多</Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem @select="test(r.id)" :disabled="busyId!==null||saving">测试</DropdownMenuItem><DropdownMenuItem @select="silence(r, st[r.id]?.silenced ? 0 : 3600000)" :disabled="busyId!==null||saving">{{ st[r.id]?.silenced ? '解除静默' : '静默1h' }}</DropdownMenuItem><DropdownMenuItem @select="toggle(r)" :disabled="busyId!==null||saving">{{ r.enabled ? '停用' : '启用' }}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div></template></div></template><template #empty><Empty><EmptyHeader><EmptyDescription>{{"暂无指标报警规则"}}</EmptyDescription></EmptyHeader></Empty></template></DataTable></div></div></div><StatePanel v-if="error" error title="规则读取失败" :message="error"><Button @click="load" variant="outline" size="default" type="button">重试</Button></StatePanel><Accordion v-if="!error" class="notification-history" type="multiple" :model-value="(_view1||[]).map(String)" @update:model-value="_view1=$event"><AccordionItem :value="String(&quot;history&quot;)"><AccordionTrigger>通知投递记录</AccordionTrigger><AccordionContent force-mount v-show="!(!(_view1||[]).map(String).includes(String(&quot;history&quot;)))"><div class="table-scroll"><div class="console-table min-w-0 max-w-full"><div v-if="loading" class="flex items-center gap-2 py-2" role="status"><Spinner/>正在读取</div><div class="min-w-0 max-w-full" :style="{maxHeight:({x:640}).y?({x:640}).y+'px':undefined}"><DataTable class="[&_[data-slot=table-container]]:rounded-lg [&_[data-slot=table-container]]:border" :rows="(((notifs)||[]).map((n,i)=>({...n,__rowKey:i}))||[])" :columns="[{id:'c0',label:&quot;时间&quot;,size:180,minSize:64,required:true,defaultHidden:false,flex:false,selection:false,pin:'left'},{id:'c1',label:&quot;规则&quot;,size:180,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c2',label:&quot;类型&quot;,size:100,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c3',label:&quot;详情&quot;,size:180,minSize:64,required:false,defaultHidden:false,flex:true,selection:false,pin:false}]" table-key="monitor-pages-AlertsView-1" :row-key="(record,rowIndex)=>typeof (&quot;__rowKey&quot;)==='function'?(&quot;__rowKey&quot;)(record):record[&quot;__rowKey&quot;]??rowIndex"><template #header-c0>时间</template><template #cell-c0="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:n,rowIndex:i} in [{record,rowIndex}]"><div style="color:var(--dim);font-family:var(--mono)">{{ new Date(n.at * 1000).toLocaleString('zh-CN', { hour12: false }) }}</div></template></div></template><template #header-c1>规则</template><template #cell-c1="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:n,rowIndex:i} in [{record,rowIndex}]"><div>{{ n.rule }}</div></template></div></template><template #header-c2>类型</template><template #cell-c2="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(true)}"><template v-for="{record:n,rowIndex:i} in [{record,rowIndex}]"><div :style="{ color: KC[n.kind] || 'var(--muted-foreground)' }">{{ n.kind }}</div></template></div></template><template #header-c3>详情</template><template #cell-c3="{record,rowIndex}"><div class="min-w-0 break-words"><template v-for="{record:n,rowIndex:i} in [{record,rowIndex}]"><Accordion type="single" collapsible :model-value="notificationDetail===notificationKey(n)?'detail':''" @update:model-value="value=>notificationDetail=value?notificationKey(n):''"><AccordionItem value="detail" class="border-0"><AccordionTrigger class="items-start gap-2 py-1 text-left text-sm font-normal hover:no-underline" :aria-label="'展开通知详情：'+n.rule"><span class="line-clamp-2 whitespace-normal break-all text-muted-foreground">{{n.detail||'无详情'}}</span></AccordionTrigger><AccordionContent class="max-h-60 overflow-auto whitespace-pre-wrap break-all">{{n.detail||'无详情'}}</AccordionContent></AccordionItem></Accordion></template></div></template><template #empty><Empty><EmptyHeader><EmptyDescription>{{"最近 7 天暂无通知"}}</EmptyDescription></EmptyHeader></Empty></template></DataTable></div></div></div></AccordionContent></AccordionItem></Accordion><Dialog :open="show" @update:open="async v=>{if(!v){!saving&amp;&amp;(show=false)}}"><DialogContent class="flex max-h-[92dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[var(--editor-width)]" :class="false?'inset-0 h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 rounded-none sm:max-w-none':''" :style="{'--editor-width':typeof (&quot;min(680px,92vw)&quot;)==='number'?(&quot;min(680px,92vw)&quot;)+'px':(&quot;min(680px,92vw)&quot;)}" :show-close-button="!saving" @interact-outside="e=>{if(!(false))e.preventDefault()}" @escape-key-down="e=>{if(!(!saving))e.preventDefault()}"><DialogHeader class="shrink-0 border-b p-5 pr-12"><DialogTitle>{{editing ? '编辑指标报警' : '新建指标报警'}}</DialogTitle><DialogDescription class="sr-only">详情与操作</DialogDescription></DialogHeader><div class="min-h-0 flex-1 overflow-auto p-5"><form ref="formRef" @submit.prevent=""><fieldset   class="min-w-0 space-y-5" :disabled="saving"><Field data-validation-field="name" :data-validation-rules="JSON.stringify([{required:true,message:'请填写名称'}])" :data-invalid="!!_validationErrors['name']" @vue:mounted="delete _validationErrors['name']"><FieldLabel>名称</FieldLabel><Input v-model="form.name" placeholder="便于识别的规则名称"/><FieldError v-if="_validationErrors['name']">{{_validationErrors['name'].message}}</FieldError></Field><div class="alert-object-grid"><Field data-validation-field="service" :data-validation-rules="JSON.stringify([{required:true,message:'请选择应用'}])" :data-invalid="!!_validationErrors['service']" @vue:mounted="delete _validationErrors['service']"><FieldLabel>应用</FieldLabel><OptionPicker v-model="form.service" :options="services"  width="100%" @change="resetChoices('service')"/><FieldError v-if="_validationErrors['service']">{{_validationErrors['service'].message}}</FieldError></Field><Field data-validation-field="environment" :data-validation-rules="JSON.stringify([{required:true,message:'请选择环境'}])" :data-invalid="!!_validationErrors['environment']" @vue:mounted="delete _validationErrors['environment']"><FieldLabel>环境</FieldLabel><OptionPicker v-model="form.environment" :options="[{value:'*',label:'全部环境（显式）'},...environmentOptions.map(e=>({value:e,label:e}))]" width="100%" @change="resetChoices('service')"/><FieldError v-if="_validationErrors['environment']">{{_validationErrors['environment'].message}}</FieldError></Field><Field><FieldLabel>实例</FieldLabel><OptionPicker v-model="form.instance" :options="instances" all-label="全部实例" width="100%" :disabled="choicesLoading" @change="resetChoices('instance')"/></Field><Field data-validation-field="metric" :data-validation-rules="JSON.stringify([{required:true,message:'请选择指标'}])" :data-invalid="!!_validationErrors['metric']" @vue:mounted="delete _validationErrors['metric']"><FieldLabel>指标</FieldLabel><OptionPicker v-model="form.metric" :options="metrics"  width="100%" :disabled="choicesLoading" @change="resetChoices('metric')"/><FieldError v-if="_validationErrors['metric']">{{_validationErrors['metric'].message}}</FieldError></Field><Field><FieldLabel>接口</FieldLabel><OptionPicker v-model="form.iface" :options="ifaces.map(i=>({value:i.iface,label:i.iface||'无接口维度'}))" all-label="全部接口" filterable width="100%" :disabled="choicesLoading"/></Field><span v-if="choicesError" role="alert">{{choicesError}}<Button @click="loadChoices" variant="outline" size="default" type="button">重试</Button></span></div><Field><FieldLabel>报警类型</FieldLabel><OptionPicker v-model="form.type" :options="TYPES.map(t=>({value:t.v,label:t.label}))" width="100%"/></Field><div class="alert-object-grid"><Field><FieldLabel>评估窗口（分钟）</FieldLabel><NumberField v-model="form.window_min" :min="1"><NumberFieldContent><NumberFieldDecrement/><NumberFieldInput/><NumberFieldIncrement/></NumberFieldContent></NumberField></Field><Field><FieldLabel>{{form.type==='latency'?'耗时阈值（ms） ≥':'变化或错误率阈值（%） ≥'}}</FieldLabel><NumberField v-model="form.threshold" :min="0"><NumberFieldContent><NumberFieldDecrement/><NumberFieldInput/><NumberFieldIncrement/></NumberFieldContent></NumberField></Field><Field v-if="form.type==='latency'"><FieldLabel>耗时分位</FieldLabel><OptionPicker v-model="form.quantile" :options="[{value:0.5,label:'TP50'},{value:0.95,label:'TP95'},{value:0.99,label:'TP99'}]" width="100%"/></Field><Field v-else><FieldLabel>最小样本数</FieldLabel><NumberField v-model="form.min_sample" :min="0"><NumberFieldContent><NumberFieldDecrement/><NumberFieldInput/><NumberFieldIncrement/></NumberFieldContent></NumberField></Field></div><Field data-validation-field="webhook" :data-validation-rules="JSON.stringify([{required:true,message:'请填写通知 Webhook'}])" :data-invalid="!!_validationErrors['webhook']" @vue:mounted="delete _validationErrors['webhook']"><FieldLabel>通知 Webhook</FieldLabel><Input v-model="form.webhook" placeholder="https://..."/><FieldError v-if="_validationErrors['webhook']">{{_validationErrors['webhook'].message}}</FieldError></Field><Field><FieldLabel>通知间隔（分钟）</FieldLabel><NumberField :model-value="form.silence_sec/60" :min="1" @update:model-value="v=>form.silence_sec=(v||1)*60"><NumberFieldContent><NumberFieldDecrement/><NumberFieldInput/><NumberFieldIncrement/></NumberFieldContent></NumberField><FieldDescription>触发后在此时间内不重复通知。</FieldDescription></Field><Field><FieldLabel>依赖抑制（可选）</FieldLabel><CheckboxGroupRoot v-if="supCandidates.length" v-model="supArr" class="flex flex-wrap items-center gap-3"><FieldLabel v-for="c in supCandidates" class="flex items-center gap-2 font-normal"><Checkbox  :key="c.id" :value="c.name"/>{{c.name}}</FieldLabel></CheckboxGroupRoot><span v-else class="r-muted">暂无同一作用域的其他规则。</span><FieldDescription>所选规则报警中时，本规则不发送通知。</FieldDescription></Field></fieldset></form></div><DialogFooter class="shrink-0 flex-wrap border-t p-4"><Button @click="show=false" variant="outline" size="default" type="button" :disabled="(saving)">取消</Button><Button @click="save" variant="default" size="default" type="button" :disabled="(busyId!==null ||choicesLoading||!!choicesError)||(saving)"><Spinner v-if="saving"/>保存</Button></DialogFooter></DialogContent></Dialog></section></template>
+<style scoped>.alert-object-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.notification-history{margin-top:20px}.r-muted{color:var(--muted-foreground)}
+@media(max-width:540px){.alert-object-grid{grid-template-columns:1fr}}</style>
 
-    <h3 style="font-size:14px;margin:20px 0 10px">通知历史（7 天，含被抑制/限流记录）</h3>
-    <div class="table-scroll"><table>
-      <thead><tr><th>时间</th><th>规则</th><th>类型</th><th>详情</th></tr></thead>
-      <tbody>
-        <tr v-for="(n, i) in notifs" :key="i">
-          <td style="color:var(--dim);font-family:var(--mono)">{{ new Date(n.at * 1000).toLocaleString('zh-CN', { hour12: false }) }}</td>
-          <td>{{ n.rule }}</td>
-          <td :style="{ color: KC[n.kind] || 'var(--muted)' }">{{ n.kind }}</td>
-          <td style="color:var(--dim)">{{ n.detail }}</td>
-        </tr>
-      </tbody>
-    </table></div>
-    <div v-if="!loading && !notifs.length" class="empty" style="margin-top:8px">暂无通知记录</div>
-
-    <Modal :show="show" :title="editing ? '编辑指标报警' : '新建指标报警'" @close="show = false">
-      <div class="fld"><label>名称</label><ElInput v-model="form.name" /></div>
-      <div class="fld"><label>监控对象</label>
-        <div style="display:flex;gap:6px">
-          <Sel v-model="form.service" :options="services" placeholder="选服务" filterable style="flex:1" width="auto" />
-          <Sel v-model="form.environment" :options="[{ value: '*', label: '全部环境（显式）' }, ...environmentOptions.map(e => ({ value: e, label: e }))]" placeholder="选择环境" style="flex:.9" width="auto" />
-          <Sel v-model="form.instance" :options="instances" all-label="全部实例" style="flex:1" width="auto" />
-          <Sel v-model="form.metric" :options="metrics" placeholder="选指标" filterable style="flex:1.4" width="auto" />
-        </div>
-      </div>
-      <div class="fld"><label>接口（可选）</label><Sel v-model="form.iface" :options="ifaces.map(i => ({ value: i.iface, label: i.iface + '（' + Math.round(i.cnt) + ' 次）' }))" all-label="全部接口" filterable width="100%" /></div>
-      <div class="fld"><label>报警类型</label>
-        <Sel v-model="form.type" :options="TYPES.map(t => ({ value: t.v, label: t.label }))" width="130px" />
-      </div>
-
-      <div class="fld" v-if="form.type === 'error_rate'"><label>条件（持续满足防毛刺）</label>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <span style="color:var(--dim)">窗口</span><ElInputNumber v-model="form.window_min" :min="1" size="small" controls-position="right" style="width:80px" /><span style="color:var(--dim)">分钟，错误率 ≥</span>
-          <ElInputNumber v-model="form.threshold" :min="0" size="small" controls-position="right" style="width:90px" /><span style="color:var(--dim)">%，样本 ≥</span>
-          <ElInputNumber v-model="form.min_sample" :min="0" size="small" controls-position="right" style="width:80px" />
-        </div>
-      </div>
-      <div class="fld" v-else-if="form.type === 'latency'"><label>条件（持续满足防毛刺）</label>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <Sel v-model="form.quantile" :options="[{ value: 0.5, label: 'TP50' }, { value: 0.95, label: 'TP95' }, { value: 0.99, label: 'TP99' }]" width="100px" />
-          <span style="color:var(--dim)">≥</span><ElInputNumber v-model="form.threshold" :min="0" size="small" controls-position="right" style="width:95px" /><span style="color:var(--dim)">ms，窗口</span>
-          <ElInputNumber v-model="form.window_min" :min="1" size="small" controls-position="right" style="width:80px" /><span style="color:var(--dim)">分钟</span>
-        </div>
-      </div>
-      <div class="fld" v-else><label>条件（环比前一个等长窗口）</label>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <span style="color:var(--dim)">窗口</span><ElInputNumber v-model="form.window_min" :min="1" size="small" controls-position="right" style="width:80px" />
-          <span style="color:var(--dim)">分钟，{{ form.type === 'traffic_up' ? '激增' : '骤降' }} ≥</span>
-          <ElInputNumber v-model="form.threshold" :min="0" size="small" controls-position="right" style="width:90px" /><span style="color:var(--dim)">%，基线样本 ≥</span>
-          <ElInputNumber v-model="form.min_sample" :min="0" size="small" controls-position="right" style="width:80px" />
-        </div>
-      </div>
-
-      <div class="fld"><label>依赖抑制（可选）：勾选的规则报警中时，本规则不通知</label>
-        <div v-if="supCandidates.length" class="supbox">
-          <label v-for="c in supCandidates" :key="c.id" class="supitem">
-            <input type="checkbox" :value="c.name" v-model="supArr"> {{ c.name }}
-          </label>
-        </div>
-        <div v-else style="color:var(--dim);font-size:12px">暂无其他规则可选（先创建上游规则）</div>
-      </div>
-      <div class="fld"><label>Webhook（钉钉/企微/通用）</label><ElInput v-model="form.webhook" placeholder="https://..." /></div>
-      <div class="fld"><label>静默期（分钟，触发后此时间内不重复通知）</label><ElInputNumber :model-value="form.silence_sec / 60" :min="1" size="small" controls-position="right" style="width:90px" @update:model-value="v => form.silence_sec = (v || 0) * 60" /></div>
-      <div style="display:flex"><ElButton type="primary" style="margin-left:auto" @click="save">保存</ElButton></div>
-    </Modal>
-  </div>
-</template>
-<style scoped>
-.supbox{display:flex;flex-wrap:wrap;gap:6px;max-height:120px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px}
-.supitem{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);padding:3px 8px;border-radius:6px;background:var(--panel2);cursor:pointer;white-space:nowrap}
-.supitem:has(input:checked){color:var(--text);background:var(--brand);opacity:.9}
-.supitem input{accent-color:var(--brand)}
-</style>
+<style scoped>.list-page-surface{min-width:0}</style>

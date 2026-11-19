@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 )
 
 type NacosConfigPlan struct {
+	Skip              bool        `json:"skip,omitempty"`
+	PriorRunID        int64       `json:"prior_run_id,omitempty"`
 	ChangeID          int64       `json:"change_id"`
 	Service           string      `json:"service"`
 	Alias             string      `json:"alias"`
@@ -205,16 +208,42 @@ func (s *Store) prepareNacosNode(ctx context.Context, nodeID string, ids []int64
 		if err != nil {
 			return nil, err
 		}
-		var count int
-		if err = s.db.QueryRow(`SELECT COUNT(*) FROM nacos_execution_ledger WHERE target_key=? AND change_id=?`, target, id).Scan(&count); err != nil {
+		var status string
+		var priorRun int64
+		err = s.db.QueryRow(`SELECT status,run_id FROM nacos_execution_ledger WHERE target_key=? AND change_id=?`, target, id).Scan(&status, &priorRun)
+		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}
-		if count > 0 {
-			return nil, fmt.Errorf("Nacos 变更 #%d 已执行或结果待核对，不允许重复执行", id)
+		if err == nil {
+			if status != "success" {
+				return nil, fmt.Errorf("Nacos 变更 #%d 的执行结果为 %s，必须核对，不能自动跳过或重试", id, status)
+			}
+			if !s.provenNacosSuccess(item, priorRun) {
+				return nil, fmt.Errorf("Nacos 变更 #%d 与历史成功快照不一致，请新增后续变更", id)
+			}
+			if len(item.Diff) > 0 {
+				return nil, fmt.Errorf("已执行 Nacos 变更 #%d 的配置项发生漂移，请核对，不自动回写历史值", id)
+			}
+			item.Skip, item.PriorRunID = true, priorRun
 		}
 		p.Configs = append(p.Configs, item)
 	}
 	return p, nil
+}
+
+func (s *Store) provenNacosSuccess(item NacosConfigPlan, runID int64) bool {
+	prior := s.DeliveryRun(runID)
+	if prior == nil {
+		return false
+	}
+	for _, p := range prior.Plan.NacosPlans {
+		for _, c := range p.Configs {
+			if c.ChangeID == item.ChangeID && c.ChangeDigest == item.ChangeDigest && nacosTargetKey(c) == nacosTargetKey(item) && !c.Skip {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func nacosInverseEntries(diffs []NacosDiff) []NacosEntry {
@@ -272,6 +301,13 @@ func (s *Store) executeNacosNode(ctx context.Context, run *DeliveryRun, p *Nacos
 		if nacosMD5(before) != item.BeforeMD5 {
 			return "", fmt.Errorf("审批后 Nacos 配置已变化，禁止覆盖，请重新预览审核")
 		}
+		if item.Skip {
+			var status string
+			var priorRun int64
+			if err := s.db.QueryRow(`SELECT status,run_id FROM nacos_execution_ledger WHERE target_key=? AND change_id=?`, nacosTargetKey(item), item.ChangeID).Scan(&status, &priorRun); err != nil || status != "success" || priorRun != item.PriorRunID || !s.provenNacosSuccess(item, priorRun) {
+				return "", fmt.Errorf("Nacos 历史成功记录变化，请重新预检")
+			}
+		}
 		clients = append(clients, n)
 	}
 	tx, err := s.db.Begin()
@@ -280,6 +316,9 @@ func (s *Store) executeNacosNode(ctx context.Context, run *DeliveryRun, p *Nacos
 	}
 	defer tx.Rollback()
 	for _, item := range p.Configs {
+		if item.Skip {
+			continue
+		}
 		_, err = tx.Exec(`INSERT INTO nacos_execution_ledger(target_key,change_id,run_id,node_id,status,detail) VALUES(?,?,?,?,'running','已保留执行权，中断时必须核对远端结果')`, nacosTargetKey(item), item.ChangeID, run.ID, p.NodeID)
 		if err != nil {
 			return "", fmt.Errorf("Nacos 变更已执行或执行结果待核对，禁止重复提交")
@@ -289,6 +328,9 @@ func (s *Store) executeNacosNode(ctx context.Context, run *DeliveryRun, p *Nacos
 		return "", err
 	}
 	for i, item := range p.Configs {
+		if item.Skip {
+			continue
+		}
 		after, err := s.decryptSecret(item.AfterEncrypted)
 		if err == nil && nacosMD5(after) != item.AfterMD5 {
 			err = fmt.Errorf("配置快照摘要不一致")

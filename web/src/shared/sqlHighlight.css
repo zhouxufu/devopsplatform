@@ -1,0 +1,12 @@
+.sql-highlight .sql-token-keyword{color:#6d28d9;font-weight:600}
+.sql-highlight .sql-token-string{color:#047857}
+.sql-highlight .sql-token-number{color:#9a3412}
+.sql-highlight .sql-token-comment{color:#475569;font-style:italic}
+.sql-highlight .sql-token-type{color:#075985}
+.sql-highlight .sql-token-operator{color:#9d174d}
+.dark .sql-highlight .sql-token-keyword{color:#c4b5fd}
+.dark .sql-highlight .sql-token-string{color:#6ee7b7}
+.dark .sql-highlight .sql-token-number{color:#fdba74}
+.dark .sql-highlight .sql-token-comment{color:#a1a1aa}
+.dark .sql-highlight .sql-token-type{color:#7dd3fc}
+.dark .sql-highlight .sql-token-operator{color:#f9a8d4}

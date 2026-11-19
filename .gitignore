@@ -26,3 +26,7 @@
 /web/dist/
 /coverage/
 /.worktrees/
+
+# Local QA evidence, source snapshots and packaged plugins are not source.
+/artifacts/
+/dist-plugins/

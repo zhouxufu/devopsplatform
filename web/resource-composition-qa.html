@@ -1,0 +1,22 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>资源复用交互验收（合成数据）</title><div id="app"></div><script type="module">
+import {createApp,ref} from 'vue/dist/vue.esm-bundler.js'
+import ApplicationResourcesEditor from './src/deploy/components/ApplicationResourcesEditor.vue'
+import EnvironmentNacosEditor from './src/deploy/components/EnvironmentNacosEditor.vue'
+import './src/shared/theme.css'
+const environments=[{name:'dev',display_name:'开发'},{name:'test',display_name:'测试'},{name:'prod',display_name:'生产'}]
+const connections=[{name:'common-mysql',kind:'mysql',endpoint:'fixture.invalid:3306',config:{database:'business'}},{name:'nacos-test',kind:'nacos',endpoint:'http://fixture.invalid',config:{namespace:'testing'}}]
+const groups=['business','dictionary'].map((name,i)=>({name,revision:i+1,requirements:[{alias:name+'-db',kind:'mysql'}],bindings:[{alias:name+'-db',environment:'test',connection:'common-mysql'}]}))
+let saved={composition_version:2,resource_groups:['business'],group_revisions:{business:1},own_requirements:[],own_bindings:[],nacos_configs:[]},environmentConnection='nacos-test'
+const api=async(path,opt={})=>{
+ await new Promise(resolve=>setTimeout(resolve,100))
+ if(path==='api/resource-groups')return groups
+ if(path==='api/connections')return connections
+ if(path==='api/environments')return environments
+ if(path.includes('/nacos/configs')){const page=new URL('http://fixture/'+path).searchParams.get('page');return{items:page==='2'?[{alias:'config-21',data_id:'public-last.yml',group:'PUBLIC'}]:Array.from({length:20},(_,i)=>({alias:'config-'+i,data_id:i?'public-'+i+'.yml':'bus.yml',group:i?'PUBLIC':'DEFAULT_GROUP'})),total:21,namespace:'testing'}}
+ if(path.includes('/nacos')){if(opt.method==='PUT')environmentConnection=JSON.parse(opt.body).connection;return{connection:environmentConnection}}
+ if(path.includes('/resources')){if(opt.method==='PUT')saved=JSON.parse(opt.body);return structuredClone(saved)}
+ return []
+}
+window.fetch=async(url,opt)=>new Response(JSON.stringify(await api(String(url).replace('/api/resources/','api/'),opt)),{headers:{'Content-Type':'application/json'}})
+createApp({components:{ApplicationResourcesEditor,EnvironmentNacosEditor},setup(){const show=ref(false);return{show,environments,services:[{name:'bus'}]}},template:`<main style="padding:24px"><h2>资源复用交互验收 · 合成数据，不访问真实资源</h2><button @click="show=true">配置 bus 应用资源</button><EnvironmentNacosEditor :environment="environments[1]"/><ApplicationResourcesEditor :show="show" :services="services" initial-service="bus" @close="show=false"/></main>`}).provide('api',api).mount('#app')
+</script></html>

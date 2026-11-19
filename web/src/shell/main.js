@@ -1,7 +1,3 @@
-import { createApp } from 'vue'
-import App from './App.vue'
-import '../shared/theme.css'
-import { initTheme } from '../shared/composables/theme.js'
-initTheme()
-
-createApp(App).mount('#app')
+// Separate entry graphs prevent legacy CSS from being loaded into the new shell.
+if(new URLSearchParams(location.search).get('platform-page')==='1')import('./legacyMain.js')
+else import('./shadcnMain.js')

@@ -157,3 +157,31 @@ func TestZentaoPathInfoRejectsUnknownOrUnsafeArguments(t *testing.T) {
 		t.Fatal("accepted unsupported method")
 	}
 }
+
+func TestZentaoRequirementPathInfoPositionsAndGuards(t *testing.T) {
+	z := &zentaoLegacy{root: "http://example.test/zentao", pathInfo: true}
+	for _, tc := range []struct {
+		module, method string
+		args           url.Values
+		suffix         string
+	}{
+		{"product", "browse", url.Values{"productID": {"13"}, "pageID": {"2"}, "orderBy": {"lastEditedDate_desc"}}, "/product-browse-13-all-all-0-story-lastEditedDate_desc-0-100-2.json"},
+		{"story", "edit", url.Values{"storyID": {"7"}}, "/story-edit-7.json"},
+	} {
+		got, err := z.requestURL(tc.module, tc.method, tc.args)
+		if err != nil || got != z.root+tc.suffix {
+			t.Fatalf("%s/%s: %s %v", tc.module, tc.method, got, err)
+		}
+	}
+	for _, args := range []url.Values{{"pageID": {"1/../../"}}, {"pageID": {"1-2"}}, {"password": {"secret"}}, {"storyType": {""}}} {
+		if _, err := z.requestURL("product", "browse", args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	if _, err := z.requestURL("story", "edit", url.Values{"storyID": {"7-8"}}); err == nil {
+		t.Fatal("unsafe story ID accepted")
+	}
+	if _, err := z.requestURL("story", "delete", nil); err == nil {
+		t.Fatal("unsupported story action accepted")
+	}
+}

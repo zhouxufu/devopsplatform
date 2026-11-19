@@ -129,3 +129,41 @@ func TestMemberCanReleaseButCannotManageResources(t *testing.T) {
 		t.Fatalf("build status = %d, want 204", got)
 	}
 }
+
+func TestSixCharacterPasswordBoundary(t *testing.T) {
+	registry, err := OpenRegistry(filepath.Join(t.TempDir(), "registry.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	user := User{Username: "six-char", Role: RoleMember, Enabled: true}
+	for _, password := range []string{"", "12345", "一二三四五"} {
+		if _, err := registry.SaveUser(user, password); err == nil {
+			t.Fatalf("short new password accepted (%d bytes)", len(password))
+		}
+	}
+	if _, err := registry.SaveUser(user, "123456"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Authenticate(user.Username, "123456"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.SaveUser(user, "54321"); err == nil {
+		t.Fatal("short replacement accepted")
+	}
+	if _, err := registry.SaveUser(user, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Authenticate(user.Username, "123456"); err != nil {
+		t.Fatal("blank edit changed password", err)
+	}
+	if _, err := registry.SaveUser(user, "一二三四五六"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Authenticate(user.Username, "一二三四五六"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Authenticate(user.Username, "123456"); err == nil {
+		t.Fatal("old password still accepted after reset")
+	}
+}

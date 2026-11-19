@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -95,7 +96,7 @@ func TestDirectoryManualAssociationIsAtomicAndPreservesAccounts(t *testing.T) {
 		if user.Username == "disabled" {
 			user.Source = "" // Only the identity mapping is expected to change.
 			for _, original := range snapshot.Users {
-				if original.Username == "disabled" && user != original {
+				if original.Username == "disabled" && !reflect.DeepEqual(user, original) {
 					t.Fatal("association mutated disabled account")
 				}
 			}

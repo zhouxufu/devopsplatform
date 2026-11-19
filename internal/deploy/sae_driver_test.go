@@ -94,6 +94,12 @@ func TestSAEDriverDeploysJarAndImmutableImage(t *testing.T) {
 	d.saeFactory = func(*ResourceConnection) (saeProvider, error) { return fake, nil }
 	d.saePollInterval = time.Millisecond
 	sv := &Service{Name: "orders", ArtifactType: "jar", TargetType: TargetAliyunSAE, DeployConfig: map[string]string{"connection": "sae-main", "app_id": "app-test", "namespace_id": "cn-hangzhou:test", "region": "cn-hangzhou"}}
+	if err := st.InitializeEnvironments([]Environment{{Name: "test", DisplayName: "测试"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertService(*sv); err != nil {
+		t.Fatal(err)
+	}
 	jarPath := t.TempDir() + "/orders.jar"
 	if err := os.WriteFile(jarPath, []byte("jar"), 0o600); err != nil {
 		t.Fatal(err)

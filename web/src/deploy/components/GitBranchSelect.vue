@@ -1,9 +1,11 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ElSelect, ElOption, ElButton } from 'element-plus'
+import {computed, onBeforeUnmount, ref, watch} from 'vue'
+
+import HelpTip from '../../shared/components/HelpTip.vue'
+import {toast} from '../../shared/composables/toast.js'
 // repositories: [{service}] for saved applications; git_url/connection may
 // explicitly override them while editing a draft (including empty connection).
-const props=defineProps({modelValue:{type:String,default:''},repositories:{type:Array,default:()=>[]},disabled:Boolean,placeholder:{type:String,default:'筛选或输入分支；留空使用默认分支'}})
+const props=defineProps({modelValue:{type:String,default:''},repositories:{type:Array,default:()=>[]},disabled:Boolean,compact:Boolean,placeholder:{type:String,default:'筛选或输入分支；留空使用默认分支'}})
 const emit=defineEmits(['update:modelValue'])
 const branches=ref([]),defaults=ref([]),loading=ref(false),attempted=ref(false),error=ref(''),synced=ref(false)
 const scope=computed(()=>JSON.stringify(props.repositories))
@@ -14,6 +16,7 @@ watch(scope,invalidate)
 onBeforeUnmount(invalidate)
 const options=computed(()=>props.modelValue&&!branches.value.includes(props.modelValue)?[props.modelValue,...branches.value]:branches.value)
 const ready=computed(()=>props.repositories.length>0&&props.repositories.every(r=>r.git_url?.trim()||r.service))
+const hint=computed(()=>loading.value?'正在同步远程分支…仍可手填分支后按回车确认。':error.value?error.value+'；当前输入已保留，可修改凭据后重试。':!ready.value?(props.repositories.length?'请先填写代码仓库':'先选择关联应用，再同步分支')+'；也可手填后按回车确认。':synced.value?'已同步 '+branches.value.length+' 个'+(props.repositories.length>1?'共同':'')+'分支'+(defaults.value.length?' · 默认：'+defaults.value.join(' / '):'')+(props.modelValue&&!branches.value.includes(props.modelValue)?' · 当前分支不在同步列表，请核对':'')+'。手填后按回车确认。':'读取远程分支，不拉取代码；手填后按回车确认。同步由平台执行。')
 async function sync(){
  if(props.disabled||loading.value||!ready.value)return
  const current=++revision;controller?.abort();controller=new AbortController();const signal=controller.signal
@@ -37,7 +40,7 @@ async function sync(){
   branches.value=[...lists[0]].filter(name=>lists.every(list=>list.has(name))).sort()
   defaults.value=[...new Set(result.map(r=>r.default_branch).filter(Boolean))]
   synced.value=true
- }catch(e){if(current===revision&&e.name!=='AbortError')error.value=e.message}
+ }catch(e){if(current===revision&&e.name!=='AbortError'){error.value=e.message;if(props.compact)toast(error.value+'；当前输入已保留，可重试','error')}}
  finally{if(current===revision)loading.value=false}
 }
 function opened(value){if(value&&!attempted.value)sync()}
@@ -52,22 +55,13 @@ function confirmManual(event){
  if(active?.textContent?.trim()&&active.textContent.trim()!==query)return
  event.preventDefault();event.stopPropagation();emit('update:modelValue',query);selector.value?.blur()
 }
+
+import OptionPicker from '../../shared/components/OptionPicker.vue'
+
+
+
+import {Button,Spinner} from '../../shared/shadcn-ui.js'
 </script>
-<template>
- <div class="branch-field" @keydown.enter.capture="confirmManual">
-  <div class="branch-controls">
-   <ElSelect ref="selector" :model-value="modelValue||''" :disabled="disabled" filterable allow-create default-first-option clearable :placeholder="placeholder" @update:model-value="emit('update:modelValue',$event||'')" @visible-change="opened">
-    <ElOption v-for="branch in options" :key="branch" :value="branch" :label="branch" />
-   </ElSelect>
-   <ElButton :disabled="disabled||!ready" :loading="loading" @click="sync">同步分支</ElButton>
-  </div>
-  <small v-if="loading">正在同步远程分支…仍可手填分支后按回车确认。</small>
-  <small v-else-if="error" class="branch-error" role="alert">{{error}}；当前输入已保留，可修改凭据后重试。</small>
-  <small v-else-if="!ready">{{repositories.length?'请先填写代码仓库':'先选择关联应用，再同步分支'}}；也可手填后按回车确认。</small>
-  <small v-else-if="synced">已同步 {{branches.length}} 个{{repositories.length>1?'共同':''}}分支<template v-if="defaults.length"> · 默认：{{defaults.join(' / ')}}</template><template v-if="modelValue&&!branches.includes(modelValue)"> · 当前分支不在同步列表，请核对</template>。手填后按回车确认。</small>
-  <small v-else>读取远程分支，不拉取代码；手填后按回车确认。同步由平台执行。</small>
- </div>
-</template>
-<style scoped>
-.branch-field{display:grid;gap:6px;min-width:0}.branch-controls{display:flex;gap:8px;min-width:0}.branch-controls>.el-select{flex:1;min-width:0}.branch-controls>.el-button{flex-shrink:0}.branch-field small{color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}.branch-field .branch-error{color:var(--red,#e55)}
-</style>
+<template><div :class="{'is-compact':compact}" @keydown.enter.capture="confirmManual" class="branch-field"><div class="branch-controls"><OptionPicker ref="selector" :model-value="modelValue||''" :disabled="disabled" :placeholder="placeholder" @update:model-value="emit('update:modelValue',$event||'')" class="min-w-36" :options="[...(options).map((branch)=>({value:branch,label:branch}))]" allow-create @open="opened(true)" all-label="不限"/><Button @click="sync" variant="outline" size="default" type="button" :disabled="(disabled||!ready)||(loading)"><Spinner v-if="loading"/>同步分支</Button><HelpTip v-if="compact" :text="hint" align="right" :class="{'branch-error':error}"/></div><small v-if="!compact" :class="{'branch-error':error}" :role="error?'alert':undefined">{{hint}}</small></div></template>
+<style scoped>.branch-field{display:grid;gap:6px;min-width:0}.branch-controls{display:flex;gap:8px;min-width:0}.branch-field small{color:var(--muted-foreground);font-size:.75rem;line-height:1.5;overflow-wrap:anywhere}.branch-field .branch-error{color:var(--red,#e55)}
+.is-compact{display:block}.is-compact .branch-controls{align-items:center}.is-compact .help-tip{flex-shrink:0}</style>

@@ -1,0 +1,24 @@
+# Reference for the default root; devopsplatformctl generates the managed unit.
+# devopsplatformctl-victorialogs: /home/devopsplatform
+[Unit]
+Description=DevOpsPlatform VictoriaLogs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=devopsplatform
+Group=devopsplatform
+Environment=GOMAXPROCS=2
+Environment=GOMEMLIMIT=1GiB
+EnvironmentFile=/home/devopsplatform/config/victorialogs.env
+ExecStart=/home/devopsplatform/storage/current/victoria-logs-prod -httpListenAddr=${VLOGS_LISTEN_ADDR} -storageDataPath=/home/devopsplatform/data/victorialogs -retentionPeriod=${VLOGS_RETENTION_DAYS}d -retention.maxDiskSpaceUsageBytes=${VLOGS_DISK_LIMIT} -inmemoryDataFlushInterval=1s -insert.maxLineSizeBytes=2MiB -memory.allowedBytes=${VLOGS_MEMORY_LIMIT}
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+LimitNOFILE=65535
+UMask=0027
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

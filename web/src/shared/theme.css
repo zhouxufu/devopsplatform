@@ -1,100 +1,94 @@
-/* Shared console tokens. Preserve theme preference and dense log table geometry. */
-:root{
-  --bg:#f3f5f9; --panel:#ffffff; --panel2:#f0f3f8; --border:#dde3ed;
-  --text:#1d293d; --muted:#59687e; --dim:#66768d;
-  --brand:#2563eb; --error:#c73345; --warn:#976000; --info:#2563eb;
-  --ok:#19744e; --trace:#7955c7;
-  --brand-soft:#edf3ff; --brand-ink:#2563eb; --input-bg:#ffffff;
-  --shadow-sm:0 2px 8px rgb(29 41 61 / 4%);
-  --shadow-float:0 20px 64px rgb(29 41 61 / 18%);
-  --radius:12px; --sidebar-width:64px;
-  --mono:'SF Mono',Menlo,Consolas,monospace;
+/* Arco owns component tokens; custom editors and charts share those tokens. */
+:root,body{
+ --bg:var(--color-fill-1,#f7f8fa);--panel:var(--color-bg-2,#fff);--panel2:var(--color-fill-2,#f2f3f5);--border:var(--color-border-2,#e5e6eb);
+ --text:var(--color-text-1,#1d2129);--muted:var(--color-text-2,#4e5969);--dim:var(--color-text-3,#86909c);
+ --brand:rgb(var(--primary-6,22,93,255));--brand-soft:var(--color-primary-light-1,#e8f3ff);--brand-ink:var(--brand);
+ --input-bg:var(--color-fill-2,#f2f3f5);--error:rgb(var(--danger-6,245,63,63));--warn:rgb(var(--warning-6,255,125,0));--info:var(--brand);--ok:rgb(var(--success-6,0,180,42));--trace:rgb(var(--purple-6,114,46,209));
+ --radius:4px;--sidebar-width:56px;--mono:'SF Mono',Menlo,Consolas,monospace;
+ --shadow-sm:none;--shadow-float:0 8px 32px rgb(0 0 0 / 16%);
 }
-html.dark{
-  --bg:#101722; --panel:#182230; --panel2:#202d3e; --border:#304055;
-  --text:#e6edf7; --muted:#a5b3c7; --dim:#93a3ba;
-  --brand:#78a7ff; --error:#ff8696; --warn:#eac073; --info:#78a7ff;
-  --ok:#68d5a5; --trace:#c7a3f5;
-  --brand-soft:#243853; --brand-ink:#78a7ff; --input-bg:#131d2b;
-  --shadow-sm:0 2px 8px rgb(0 0 0 / 12%);
-  --shadow-float:0 24px 72px rgb(0 0 0 / 40%);
-}
+html.dark,body[arco-theme=dark]{--bg:var(--color-bg-1,#17171a);--input-bg:var(--color-fill-2);--shadow-float:0 8px 32px rgb(0 0 0 / 40%)}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font:13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;height:100vh;overflow:hidden;transition:background .15s,color .15s;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--text);font:var(--font-size-body-3)/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;height:100vh;overflow:hidden;-webkit-font-smoothing:antialiased}
 #app{height:100vh;display:flex;flex-direction:column}
-select,input,button,textarea{background:var(--input-bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;font-size:13px;cursor:pointer;font-family:inherit}
-input,textarea{cursor:text}
-button:hover{border-color:var(--muted)}
-button:disabled{cursor:not-allowed}
-:where(button,a,input,select,textarea,summary,[tabindex]):focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+:where(select,input,button,textarea):not([class*='arco-']){background:var(--input-bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:5px 10px;font-size:var(--font-size-body-2);font-family:inherit}
+:where(button,select):not([class*='arco-']){cursor:pointer}input,textarea{cursor:text}button:disabled{cursor:not-allowed}
+:where(button,a,input,select,textarea,summary,[tabindex]):focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 input[type=checkbox]{accent-color:var(--brand)}
-h2{font-size:22px;line-height:1.4;font-weight:650;letter-spacing:-.4px}
-h3{font-weight:600}
-::selection{background:var(--brand-soft);color:var(--text)}
-.ui-icon{flex-shrink:0}
-.btn-p{background:#2563eb!important;border-color:#2563eb!important;color:#fff!important}
-table{width:100%;border-collapse:collapse;font-size:12px}
-th{text-align:left;color:var(--dim);font-weight:500;font-size:11px;padding:7px 10px;border-bottom:1px solid var(--border)}
-td{padding:8px 10px;border-bottom:1px solid var(--border)}
-tr:hover td{background:var(--panel2)}
-.op{color:var(--brand);cursor:pointer;margin-right:10px}
-.op.del{color:var(--error)}
-.op-btn{border:0;background:transparent;padding:0;font:inherit}.op-btn:hover{text-decoration:underline}
-.table-scroll{width:100%;overflow-x:auto}.table-scroll table{min-width:720px}
-.st-ok{color:var(--ok)}.st-fail{color:var(--error)}.st-run{color:var(--warn)}
-.empty{padding:40px;color:var(--dim);text-align:center}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;box-shadow:var(--shadow-sm)}
-.card h4{font-size:12px;color:var(--muted);margin-bottom:8px}
-.fld{margin-bottom:10px}
-.fld label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
-.fld input,.fld select,.fld textarea{width:100%}
-/* 图表（SVG）主题适配 */
-.lp-grid{stroke:var(--border)}
-.lp-axis{fill:var(--dim)}
-/* Element Plus follows the same palette; high specificity avoids lazy CSS order drift. */
-:root:root,html.dark:root{
-  --el-color-primary:var(--brand);--el-color-primary-light-3:#5988f0;--el-color-primary-light-5:#8aacfa;
-  --el-color-primary-light-7:color-mix(in srgb,var(--brand) 20%,var(--panel));
-  --el-color-primary-light-8:var(--brand-soft);--el-color-primary-light-9:var(--brand-soft);--el-color-primary-dark-2:#1d4ed8;
-  --el-bg-color:var(--panel);--el-bg-color-page:var(--bg);--el-bg-color-overlay:var(--panel);
-  --el-fill-color-blank:var(--input-bg);--el-fill-color-light:var(--panel2);--el-fill-color:var(--panel2);
-  --el-text-color-primary:var(--text);--el-text-color-regular:var(--text);--el-text-color-secondary:var(--muted);--el-text-color-placeholder:var(--dim);
-  --el-border-color:var(--border);--el-border-color-light:var(--border);--el-border-color-lighter:var(--border);
-  --el-border-radius-base:8px;--el-font-size-base:13px;
-}
-.el-button.el-button{font-weight:500;transition:background .15s,border-color .15s;min-height:34px;padding:8px 14px}
-.el-button.el-button--small{min-height:28px;padding:5px 10px}
-.el-button.el-button--primary:not(.is-plain){background:#2563eb;border-color:#2563eb;color:#fff;box-shadow:0 2px 4px rgb(37 99 235 / 16%)}
-.el-button.el-button--primary:not(.is-plain):hover:not(:disabled){background:#1d4ed8;border-color:#1d4ed8}
-.el-input__wrapper.el-input__wrapper,.el-select__wrapper.el-select__wrapper{background:var(--input-bg);min-height:34px;border-radius:8px}
-.el-input__inner.el-input__inner,.el-select__input.el-select__input{border:0;border-radius:0;padding:0;background:transparent}
-.el-input__inner:focus-visible,.el-select__input:focus-visible{outline:none} /* wrapper supplies the keyboard focus ring */
-.el-textarea__inner.el-textarea__inner{background:var(--input-bg);border-radius:8px;line-height:1.7}
-.el-dialog.el-dialog{padding:24px;border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-float);max-height:90vh;overflow:auto}
-.el-dialog__header.el-dialog__header{padding:0 32px 18px 0;margin-bottom:20px;border-bottom:1px solid var(--border)}
-.el-dialog__title.el-dialog__title{font-size:18px;font-weight:600;line-height:1.5}
-.el-dialog__body.el-dialog__body{padding:0;color:var(--text)}
-.el-dialog__headerbtn.el-dialog__headerbtn{top:14px;right:14px;width:40px;height:40px}
-.el-overlay.el-overlay{background:rgb(8 18 33 / 48%);backdrop-filter:blur(3px)}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
-/* One compact navigation policy across standalone and embedded plugins.
-   Expansion overlays the workspace; editors and tables never jump sideways. */
-:root:root:root .layout:has(>header.workspace-sidebar){position:relative}
-:root:root:root .layout>header.workspace-sidebar{position:absolute;inset:0 auto 0 0;z-index:40;width:64px;flex-basis:64px;padding:12px 6px;display:flex;flex-direction:column;align-items:stretch;gap:12px;overflow-x:hidden;overflow-y:auto;transition:width .16s ease,box-shadow .16s ease}
-:root:root:root .layout:has(>header.workspace-sidebar)>main{margin-left:64px}
-:root:root:root .layout:has(>header.workspace-sidebar)>main{padding:16px 20px}
-@media(max-width:760px){:root:root:root .layout:has(>header.workspace-sidebar)>main{padding:12px}}
-@media(pointer:coarse){:root:root:root .el-button,:root:root:root .primary-modes button{min-height:44px}}
-:root:root:root .workspace-sidebar>.logo,:root:root:root .workspace-sidebar>b{display:none}
-:root:root:root .workspace-sidebar>nav{width:100%;margin:0;display:flex;flex-direction:column;gap:4px}
-:root:root:root .workspace-sidebar>nav a,:root:root:root .workspace-sidebar>nav button,:root:root:root .workspace-sidebar .platform-nav button{display:flex;flex-direction:row;justify-content:flex-start;align-items:center;gap:0;width:100%;height:44px;min-height:44px;padding:12px 17px;white-space:nowrap;font-size:13px}
-:root:root:root .workspace-sidebar i{width:0;opacity:0;overflow:hidden;font-style:normal;transition:opacity .16s ease}
-:root:root:root .layout>header.workspace-sidebar.is-open{width:176px;box-shadow:var(--shadow-float)}
-:root:root:root .workspace-sidebar.is-open>nav a,:root:root:root .workspace-sidebar.is-open>nav button,:root:root:root .workspace-sidebar.is-open .platform-nav button{gap:12px}
-:root:root:root .workspace-sidebar.is-open i{width:auto;opacity:1}
-:root:root:root .layout>header.workspace-sidebar.is-pinned{box-shadow:none}
-:root:root:root .layout:has(>header.workspace-sidebar.is-pinned)>main{margin-left:176px}
-:root:root:root .workspace-sidebar a:focus-visible,:root:root:root .workspace-sidebar button:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
-/* All calendars and advanced date panels float above the page, never take up
-   filter-row height. Keep oversized native calendars scrollable on narrow screens. */
+h2{font-size:var(--font-size-title-2);line-height:1.4;font-weight:600;letter-spacing:0}h3{font-weight:600}::selection{background:var(--brand-soft);color:var(--text)}
+.ui-icon{flex-shrink:0}.btn-p{background:var(--brand)!important;border-color:var(--brand)!important;color:var(--color-white)!important}
+/* Business cells share Arco typography and inherit its current theme. */
+
+.op{color:var(--brand);cursor:pointer;margin-right:10px}.op.del{color:var(--error)}.op-btn{border:0;background:transparent;padding:0;font:inherit}.op-btn:hover{text-decoration:underline}
+.table-scroll{width:100%;overflow-x:auto}.st-ok{color:var(--ok)}.st-fail{color:var(--error)}.st-run{color:var(--warn)}.empty{padding:40px;color:var(--dim);text-align:center}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;box-shadow:none}.card h4{font-size:var(--font-size-body-1);color:var(--muted);margin-bottom:8px}.fld{margin-bottom:12px}.fld label{display:block;font-size:var(--font-size-body-2);color:var(--muted);margin-bottom:6px}.fld input,.fld select,.fld textarea{width:100%}.lp-grid{stroke:var(--border)}.lp-axis{fill:var(--dim)}
+/* Compatibility class names are local layout hooks, not Element components. */
+.el-input,.el-select,.el-input-number{vertical-align:middle}.el-button+.el-button{margin-left:0}.arco-btn{font-weight:400}.arco-textarea-wrapper{width:100%}.arco-textarea{font-family:inherit}.arco-modal.console-modal{max-height:90dvh;display:inline-flex;flex-direction:column;border-radius:6px;overflow:hidden}.arco-modal.console-modal>.arco-modal-body{min-height:0;overflow:auto;overscroll-behavior:contain}.arco-modal.console-modal.arco-modal-fullscreen{max-height:100dvh;height:100dvh;border-radius:0}.arco-modal.console-modal.arco-modal-fullscreen>.arco-modal-body{flex:1}.arco-modal-footer{flex-shrink:0}.arco-modal-header{flex-shrink:0}.arco-popover-content{color:var(--text)}
+/* Embedded plugins receive one business navigation from the host. Keep their
+   route components mounted; only the redundant local sidebar is hidden. */
+body[data-console-embedded] .workspace-sidebar{display:none!important}
+body[data-console-embedded] :is(.layout,.research-layout,.workbench-layout)>main{margin-left:0!important;min-width:0}
+:root[data-console-theme=arco] :is(.layout,.research-layout):has(>.workspace-sidebar)>main{padding:20px 24px}
+:root[data-console-theme=arco] .workspace-sidebar{width:200px;flex-basis:200px;background:var(--panel);padding:12px 8px;border-right:1px solid var(--border)}
+:root[data-console-theme=arco] .workspace-sidebar .logo{font-size:var(--font-size-body-3);margin:0 0 12px;display:flex;align-items:center;gap:8px;padding:8px}
+:root[data-console-theme=arco] .workspace-sidebar>nav{display:flex;flex-direction:column;gap:4px}
+:root[data-console-theme=arco] .workspace-sidebar>nav :is(a,button),:root[data-console-theme=arco] .workspace-sidebar .platform-nav button{display:flex;flex-direction:row;align-items:center;gap:10px;height:40px;min-height:40px;border:0;border-radius:4px;padding:8px 12px;width:100%;font-size:var(--font-size-body-3);background:transparent;color:var(--muted);text-decoration:none}
+:root[data-console-theme=arco] .workspace-sidebar :is(a,button).router-link-exact-active,:root[data-console-theme=arco] .workspace-sidebar button.active{background:var(--brand-soft);color:var(--brand)}
+:root[data-console-theme=arco] .workspace-sidebar i{font-style:normal}
 .platform-date-popper,.date-bounds-popover,.work-number-popover{max-width:calc(100vw - 24px);max-height:80dvh;overflow:auto}
+@media(max-width:760px){:root[data-console-theme=arco] :is(.layout,.research-layout):has(>.workspace-sidebar)>main{padding:12px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+
+
+.inbox-tabs.arco-tabs{min-width:0}.inbox-tabs .arco-tabs-content,.query-tabs.arco-tabs .arco-tabs-content{display:none}.inbox-tabs .arco-tabs-nav{margin-bottom:0}.query-tabs.arco-tabs{width:100%;min-width:0}.query-tabs.arco-tabs .arco-tabs-nav{margin:0}
+
+/* Keep official Menu hit areas and icons aligned with the collapsed rail. */
+.arco-menu.platform-navigation{padding:8px 0}
+.platform-navigation.arco-menu-collapsed .arco-menu-inner{padding:8px}
+.platform-navigation.arco-menu-collapsed .arco-menu-item,.platform-navigation.arco-menu-collapsed .arco-menu-pop-header{width:40px;height:40px;line-height:40px;padding:0;display:flex;align-items:center;justify-content:center}
+.platform-navigation.arco-menu-collapsed .arco-menu-has-icon > :not(.arco-menu-icon){display:none}
+.platform-navigation.arco-menu-collapsed .arco-menu-icon{margin:0;width:18px;height:18px;display:flex;align-items:center;justify-content:center}
+.platform-navigation.arco-menu-collapsed .arco-menu-icon .arco-icon{margin:0}
+
+/* Dark navigation: section labels and the current page must not read as the
+   same gray surface. Scope to platform menus, including their collapsed popups. */
+body[arco-theme=dark] :is(.platform-navigation,.platform-navigation-popup){--navigation-selected-text:rgb(var(--primary-8));--navigation-selected-bg:color-mix(in srgb,rgb(var(--primary-6)) 18%,var(--color-menu-light-bg));--navigation-marker:rgb(var(--primary-7))}
+body[arco-theme=dark] :is(.platform-navigation,.platform-navigation-popup) :is(.arco-menu-group-title,.arco-trigger-menu-group-title){color:var(--color-text-2);font-weight:600;font-size:var(--font-size-body-1)}
+body[arco-theme=dark] :is(.platform-navigation,.platform-navigation-popup) :is(.arco-menu-group,.arco-trigger-menu-group)+:is(.arco-menu-group,.arco-trigger-menu-group){border-top:1px solid var(--color-border-3);margin-top:8px;padding-top:8px}
+body[arco-theme=dark] :is(.platform-navigation,.platform-navigation-popup) :is(.arco-menu-item.arco-menu-selected,.arco-trigger-menu-item.arco-trigger-menu-selected){color:var(--navigation-selected-text);background-color:var(--navigation-selected-bg);box-shadow:inset 3px 0 var(--navigation-marker);font-weight:600}
+body[arco-theme=dark] :is(.platform-navigation,.platform-navigation-popup) :is(.arco-menu-inline-header.arco-menu-selected,.arco-menu-pop-header.arco-menu-selected,.arco-trigger-menu-pop-header.arco-trigger-menu-selected){color:var(--navigation-selected-text)}
+body[arco-theme=dark] :is(.platform-navigation,.platform-navigation-popup) :is(.arco-menu-selected,.arco-trigger-menu-selected) :is(.arco-menu-icon,.arco-icon){color:var(--navigation-selected-text)}
+
+/* Layout around official panels and navigation; component behavior stays Arco. */
+.platform-collapse{min-width:0;margin:10px 0;grid-column:var(--collapse-grid-column,auto)}
+.platform-collapse .arco-collapse-item-header-title{min-width:0;overflow-wrap:anywhere}
+.platform-collapse .arco-collapse-item-content-box{min-width:0}
+.section-tabs{min-width:0;max-width:100%}
+.section-tabs>.arco-tabs-content{display:none}
+.preparation-progress,.work-quick-filters{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
+.preparation-progress>.arco-steps{flex:1;min-width:260px}
+.column-options{display:grid;gap:10px;min-width:160px}
+.application-steps{margin:0 0 24px}
+.database-view-tools,.inbox-detail-navigation{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.database-view-tools>.section-tabs,.inbox-detail-navigation>.section-tabs{flex:1;min-width:180px}
+
+/* Business layout only: Arco owns table cells, borders, density and hover states. */
+/* Page tables let Arco own scrolling. Bounded pickers/query panes retain their vertical viewport. */
+:root :is(.table-scroll,.r-table,.work-table-scroll,.record-scroll,.records-scroll,.application-table-scroll,.evidence-scroll,.sync-table-scroll,.config-results):has(> .arco-table){min-width:0;max-width:100%;overflow:visible}
+.console-table{width:100%;min-width:0;max-width:100%}
+.console-table small{display:block;margin-top:4px;color:var(--color-text-3);font-size:var(--font-size-body-1);line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.console-table .cell-actions{display:flex;align-items:center;gap:4px;white-space:nowrap}
+.table-footer{display:flex;justify-content:flex-end;align-items:center;gap:16px;flex-wrap:wrap;margin-top:16px;color:var(--color-text-3);font-size:var(--font-size-body-1)}
+.table-footer>.table-summary{margin-right:auto}
+.table-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.table-toolbar>.arco-input-wrapper{width:280px;max-width:100%}
+@media(max-width:760px){.table-footer{gap:8px}.table-toolbar>.arco-input-wrapper{width:100%}}
+
+/* Suspend teleported business dialogs while the independent login view is active. */
+:root[data-console-auth-page] :is(.arco-modal-container,.arco-drawer-container,.arco-trigger-popup){display:none!important}
+
+/* The route host owns page padding; detail/chart subpages only arrange content. */
+.console-content{min-width:0}
+
+/* Search scope belongs to the host; its query row continues the same surface. */
+:root[data-console-theme=arco] .layout:has(>.workspace-sidebar)>main.log-query-host{padding:0}

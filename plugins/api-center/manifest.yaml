@@ -1,0 +1,5 @@
+name: api-center
+display: 接口中心
+version: 0.1.0
+backend: delivery-core
+ui_path: /ui/api-center

@@ -2,17 +2,20 @@ package platform
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
 const (
-	RoleAdmin  = "admin"
-	RoleMember = "member"
+	RoleAdmin             = "admin"
+	RoleMember            = "member"
+	minimumPasswordLength = 6
 )
 
 var usernameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$`)
@@ -21,18 +24,23 @@ var usernameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$`)
 // PasswordHash is carried by the database migration snapshot but never exposed
 // by JSON APIs.
 type User struct {
-	Username           string `json:"username"`
-	DisplayName        string `json:"display_name"`
-	Role               string `json:"role"`
-	PasswordHash       string `json:"-"`
-	Enabled            bool   `json:"enabled"`
-	CreatedAt          int64  `json:"created_at"`
-	UpdatedAt          int64  `json:"updated_at"`
-	Source             string `json:"source,omitempty"`
-	PasswordConfigured bool   `json:"password_configured"`
+	Duties             []string `json:"duties"`
+	Username           string   `json:"username"`
+	DisplayName        string   `json:"display_name"`
+	Role               string   `json:"role"`
+	PasswordHash       string   `json:"-"`
+	Enabled            bool     `json:"enabled"`
+	CreatedAt          int64    `json:"created_at"`
+	UpdatedAt          int64    `json:"updated_at"`
+	Source             string   `json:"source,omitempty"`
+	PasswordConfigured bool     `json:"password_configured"`
 }
 
 func normalizeUser(user User) (User, error) {
+	var err error
+	if user.Duties, err = normalizeDuties(user.Duties); err != nil {
+		return user, err
+	}
 	user.Username = strings.TrimSpace(user.Username)
 	user.DisplayName = strings.TrimSpace(user.DisplayName)
 	user.Role = strings.ToLower(strings.TrimSpace(user.Role))
@@ -63,7 +71,14 @@ func (r *Registry) usersLocked() ([]User, error) {
 		user.PasswordConfigured = user.PasswordHash != ""
 		users = append(users, user)
 	}
-	return users, rows.Err()
+	err = rows.Err()
+	rows.Close()
+	if err == nil {
+		for i := range users {
+			users[i].Duties = r.userDuties(users[i].Username)
+		}
+	}
+	return users, err
 }
 
 func (r *Registry) Users() ([]User, error) {
@@ -135,13 +150,13 @@ func (r *Registry) SaveUser(user User, password string) (*User, error) {
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	if err == sql.ErrNoRows && len(password) < 8 {
-		return nil, fmt.Errorf("新用户密码至少 8 位")
+	if err == sql.ErrNoRows && utf8.RuneCountInString(password) < minimumPasswordLength {
+		return nil, fmt.Errorf("新用户密码至少 6 位")
 	}
 	hash := existing.PasswordHash
 	if password != "" {
-		if len(password) < 8 {
-			return nil, fmt.Errorf("密码至少 8 位")
+		if utf8.RuneCountInString(password) < minimumPasswordLength {
+			return nil, fmt.Errorf("密码至少 6 位")
 		}
 		encoded, hashErr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		if hashErr != nil {
@@ -162,9 +177,27 @@ func (r *Registry) SaveUser(user User, password string) (*User, error) {
 		query = `INSERT INTO platform_users(username,display_name,role,password_hash,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?)
 			ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),role=VALUES(role),password_hash=VALUES(password_hash),enabled=VALUES(enabled),updated_at=VALUES(updated_at)`
 	}
-	if _, err := r.db.Exec(query, user.Username, user.DisplayName, user.Role, hash, user.Enabled, createdAt, now); err != nil {
+	tx, err := r.db.Begin()
+	if err != nil {
 		return nil, err
 	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(query, user.Username, user.DisplayName, user.Role, hash, user.Enabled, createdAt, now); err != nil {
+		return nil, err
+	}
+	if user.Duties != nil {
+		raw, _ := json.Marshal(user.Duties)
+		if _, err = tx.Exec(`DELETE FROM platform_user_duties WHERE username=?`, user.Username); err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec(`INSERT INTO platform_user_duties(username,document) VALUES(?,?)`, user.Username, string(raw)); err != nil {
+			return nil, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	user.Duties = r.userDuties(user.Username)
 	user.PasswordHash, user.CreatedAt, user.UpdatedAt = hash, createdAt, now
 	user.PasswordConfigured = hash != ""
 	return &user, nil

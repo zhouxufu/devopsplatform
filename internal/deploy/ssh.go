@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -120,11 +121,20 @@ func validateSSHPort(port string) error {
 
 // SSHExec 建立会话并执行命令，返回输出（合并 stdout/stderr）
 func SSHExec(h Host, cmd string, timeout time.Duration) (string, error) {
-	cli, err := sshClient(h, timeout)
+	return SSHExecContext(context.Background(), h, cmd, timeout)
+}
+
+func SSHExecContext(ctx context.Context, h Host, cmd string, timeout time.Duration) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	cli, err := sshClientContext(ctx, h, timeout)
 	if err != nil {
 		return "", err
 	}
 	defer cli.Close()
+	stop := context.AfterFunc(ctx, func() { cli.Close() })
+	defer stop()
 	sess, err := cli.NewSession()
 	if err != nil {
 		return "", err
@@ -136,16 +146,25 @@ func SSHExec(h Host, cmd string, timeout time.Duration) (string, error) {
 
 // SSHUpload 经 sftp 不可用时用 cat 兜底：通过 stdin 流写入远端文件（jar 上传足够）
 func SSHUpload(h Host, localPath, remotePath string) error {
+	return SSHUploadContext(context.Background(), h, localPath, remotePath)
+}
+
+func SSHUploadContext(ctx context.Context, h Host, localPath, remotePath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	cli, err := sshClient(h, 10*time.Minute)
+	cli, err := sshClientContext(ctx, h, 10*time.Minute)
 	if err != nil {
 		return err
 	}
 	defer cli.Close()
+	stop := context.AfterFunc(ctx, func() { cli.Close() })
+	defer stop()
 	sess, err := cli.NewSession()
 	if err != nil {
 		return err
@@ -155,7 +174,7 @@ func SSHUpload(h Host, localPath, remotePath string) error {
 	if err != nil {
 		return err
 	}
-	if err := sess.Start(fmt.Sprintf("cat > %s", strconv.Quote(remotePath))); err != nil {
+	if err := sess.Start("umask 077; cat > " + shellQuote(remotePath)); err != nil {
 		return err
 	}
 	if _, err := io.Copy(w, f); err != nil {
@@ -168,11 +187,20 @@ func SSHUpload(h Host, localPath, remotePath string) error {
 // SSHUploadContent writes generated deployment data without first persisting
 // secrets to a local temporary file.
 func SSHUploadContent(h Host, content []byte, remotePath string) error {
-	cli, err := sshClient(h, 10*time.Minute)
+	return SSHUploadContentContext(context.Background(), h, content, remotePath)
+}
+
+func SSHUploadContentContext(ctx context.Context, h Host, content []byte, remotePath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cli, err := sshClientContext(ctx, h, 10*time.Minute)
 	if err != nil {
 		return err
 	}
 	defer cli.Close()
+	stop := context.AfterFunc(ctx, func() { cli.Close() })
+	defer stop()
 	sess, err := cli.NewSession()
 	if err != nil {
 		return err
@@ -182,7 +210,7 @@ func SSHUploadContent(h Host, content []byte, remotePath string) error {
 	if err != nil {
 		return err
 	}
-	if err := sess.Start(fmt.Sprintf("cat > %s", strconv.Quote(remotePath))); err != nil {
+	if err := sess.Start("umask 077; cat > " + shellQuote(remotePath)); err != nil {
 		return err
 	}
 	if _, err := io.Copy(w, bytes.NewReader(content)); err != nil {
@@ -195,6 +223,10 @@ func SSHUploadContent(h Host, content []byte, remotePath string) error {
 }
 
 func sshClient(h Host, timeout time.Duration) (*ssh.Client, error) {
+	return sshClientContext(context.Background(), h, timeout)
+}
+
+func sshClientContext(ctx context.Context, h Host, timeout time.Duration) (*ssh.Client, error) {
 	hp, err := normalizeSSHAddress(h.Addr)
 	if err != nil {
 		return nil, err
@@ -226,7 +258,27 @@ func sshClient(h Host, timeout time.Duration) (*ssh.Client, error) {
 			cfg.Auth = []ssh.AuthMethod{ssh.PublicKeys(signer)}
 		}
 	}
-	return ssh.Dial("tcp", hp, cfg)
+	// ClientConfig.Timeout only bounds TCP dialing, not session commands or
+	// even a stalled SSH handshake. Bound the underlying connection as well.
+	if timeout <= 0 {
+		timeout = time.Minute
+	}
+	conn, err := net.DialTimeout("tcp", hp, cfg.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	if err = conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	cc, chans, reqs, err := ssh.NewClientConn(conn, hp, cfg)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return ssh.NewClient(cc, chans, reqs), nil
 }
 
 func secureHostKeyCallback(h Host) (ssh.HostKeyCallback, error) {

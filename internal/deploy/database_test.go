@@ -52,6 +52,24 @@ func TestRewriteDeploySQLFunctionsAndLogAppend(t *testing.T) {
 	}
 }
 
+func TestRewriteResourceGroupAndPreparationMetaQueries(t *testing.T) {
+	for _, q := range []string{
+		`SELECT value FROM deploy_meta WHERE key LIKE 'resource_group:%' ORDER BY key`,
+		`SELECT key,value FROM deploy_meta WHERE key LIKE 'application_resource_group:%'`,
+		`UPDATE deploy_meta SET value=? WHERE key=? AND value=?`,
+		`DELETE FROM deploy_meta WHERE key=? AND value=?`,
+	} {
+		got := rewriteDeploySQL("mysql", q)
+		if strings.Contains(got, "WHERE key") || strings.Contains(got, "ORDER BY key") || strings.Contains(got, "SELECT key") {
+			t.Fatal("reserved meta key remains", got)
+		}
+	}
+	q := rewriteDeploySQL("mysql", `SELECT id FROM pipeline_runs WHERE service=? AND trigger=? ORDER BY id DESC LIMIT 1`)
+	if !strings.Contains(q, "AND run_trigger=?") {
+		t.Fatal("preparation recovery lookup not translated", q)
+	}
+}
+
 func TestRewriteDeploySQLConditionalConflictAndJSON(t *testing.T) {
 	query := `INSERT INTO builds(service,pipeline_run_id) VALUES(?,?)
 		ON CONFLICT(pipeline_run_id) WHERE pipeline_run_id>0 DO UPDATE SET service=excluded.service`
@@ -72,5 +90,16 @@ func TestRewriteDeploySQLConditionalConflictAndJSON(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rewritten query %q does not contain %q", got, want)
 		}
+	}
+}
+
+func TestRewriteMySQLInstanceMigrationMetadataUnion(t *testing.T) {
+	query := `SELECT key,value FROM deploy_meta WHERE key LIKE 'resource_group:%' OR key LIKE 'application_resources_v2:%'`
+	want := `SELECT meta_key,value FROM deploy_meta WHERE meta_key LIKE 'resource_group:%' OR meta_key LIKE 'application_resources_v2:%'`
+	if got := rewriteDeploySQL("mysql", query); got != want {
+		t.Fatalf("migration query invalid for MySQL: %s", got)
+	}
+	if got := rewriteDeploySQL("sqlite", query); got != query {
+		t.Fatalf("SQLite query changed: %s", got)
 	}
 }

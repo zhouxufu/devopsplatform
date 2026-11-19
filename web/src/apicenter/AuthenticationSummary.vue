@@ -1,0 +1,4 @@
+<script setup>
+defineProps({authentication:Object})
+</script>
+<template><dl v-if="authentication" class="mb-4 grid gap-3 rounded-lg border p-4 text-sm sm:grid-cols-2"><div v-if="authentication.login_url" class="min-w-0"><dt class="text-muted-foreground">实际登录地址</dt><dd class="break-all">{{authentication.login_url}}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">认证注入</dt><dd class="break-all">{{({header:'请求头',query:'查询参数',cookie:'Cookie'})[authentication.injection]}} · {{authentication.name}}</dd></div><div><dt class="text-muted-foreground">登录响应身份</dt><dd>{{authentication.identity_verified?authentication.identity:'未验证：未配置身份字段或响应中没有可用身份'}}</dd></div><div><dt class="text-muted-foreground">刷新策略</dt><dd>{{authentication.mode==='bearer'?'每次读取绑定的 Token 变量，不自动刷新':'每次执行重新登录，不缓存 Token'}}<span v-if="authentication.expires_in_seconds">；配置有效期 {{authentication.expires_in_seconds}} 秒</span></dd></div></dl></template>

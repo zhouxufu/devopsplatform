@@ -1,0 +1,12 @@
+apiVersion: deploy.logplatform.io/v1
+id: package-java-bundle
+name: Java 整包归档
+description: 校验本次主 JAR，保留启动脚本、工具、配置与数据目录；归档不执行包内脚本。
+category: 打包
+kind: package
+driver: java-bundle
+produces: java-bundle
+params:
+  - {name: ROOT, type: input, label: 发布目录（相对源码根目录）, default: build/release}
+  - {name: MAIN_JAR, type: input, label: 包内主 JAR, default: lib/app.jar}
+  - {name: REQUIRED_PATHS, type: textarea, label: 必需文件或目录（每行一项）, default: ""}

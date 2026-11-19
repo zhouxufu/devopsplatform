@@ -27,6 +27,7 @@ await page.route('**/*',async route=>{
  if(!['GET','HEAD','OPTIONS'].includes(method)){
   const body=r.postDataJSON();writes.push({method,p,body})
   if(method==='PUT'&&p==='/api/release-versions/1/artifacts'){mapping={version_id:1,bindings:body.bindings.map(b=>({...candidates(b.service)[0],...b})),locked:false};return reply(mapping)}
+  if(p==='/api/delivery/draft-plan')return reply({strategy_kind:'custom',template:templateList.find(t=>t.id===body.template_id),scope:body.source_type==='fixed'?null:{type:'version',work_items:[],changes:version.changes},nodes:templateList.find(t=>t.id===body.template_id)?.nodes||[],blockers:[],warnings:[]})
   if(p==='/api/delivery/preview'){if(slowResolve){slowResolve=false;await new Promise(resolve=>{releaseResolve=resolve})}return reply(makePlan(body))}
   if(p==='/api/delivery/runs'){currentRun=makeRun(body);mapping.locked=true;return reply(currentRun)}
   if(p==='/api/delivery/templates'){const t={...body,id:2,owner:'alice'};templateList.push(t);return reply(t)}
@@ -42,6 +43,7 @@ await page.route('**/*',async route=>{
  if(p==='/api/environments')return reply([{name:'test',display_name:'测试'},{name:'prod',display_name:'生产'}])
  if(p==='/api/release-versions')return reply([version])
  if(p==='/api/release-versions/1/artifacts')return reply(mapping)
+ if(p==='/api/release-versions/page')return reply({items:[version],total:1,page:1})
  if(p==='/api/changes')return reply(version.changes)
  if(p==='/api/delivery/templates')return reply(templateList)
  if(p==='/api/delivery/runs/owners')return reply(['alice','bob'])
@@ -58,16 +60,25 @@ async function choose(label,option){const control=page.locator('.form label').fi
 async function chooseArtifact(name){const row=page.locator('.artifact-row').filter({hasText:name});await row.locator('.el-select').click();const id=await row.getByRole('combobox').getAttribute('aria-controls');await page.locator('#'+id).getByRole('option').first().click()}
 const button=name=>page.getByRole('button',{name,exact:true})
 try{
+ const initialList=page.waitForResponse(r=>r.url().includes('/api/delivery/runs/page'))
  await page.goto(base+'/api/plugins/deploy/ui#/orchestration')
- await button('发起交付').click();await choose('发布版本','v1 · 一次发布多个 BUG');await choose('目标环境','测试');await page.getByPlaceholder('说明本次交付目的，生产按策略必填').fill('continuous draft')
- await button('下一步：核对制品与步骤').click();await chooseArtifact('orders');await chooseArtifact('billing')
+ await initialList
+ await page.waitForFunction(()=>document.querySelector('[aria-label="执行单筛选"]'))
+ assert(!Object.hasOwn(listQueries.at(-1),'version_id'),'initial list must not send a version filter')
+ async function filterVersion(option,expected){const select=page.locator('[aria-label="执行单筛选"] .el-select').nth(2);await select.click();const id=await select.getByRole('combobox').getAttribute('aria-controls');const response=page.waitForResponse(r=>{const u=new URL(r.url());return u.pathname.endsWith('/api/delivery/runs/page')&&u.searchParams.get('version_id')===expected});await page.locator('#'+id).getByRole('option',{name:option,exact:true}).click();await response}
+ await filterVersion('v1','1')
+ await filterVersion('全部版本',null)
+ assert(!Object.hasOwn(listQueries.at(-1),'version_id'),'clearing version must remove the filter')
+
+ await button('发起交付').click();await choose('交付方式','自定义编排');await choose('自定义编排','多应用交付 · 按发布版本');await choose('交付来源','发布版本');await button('搜索并选择范围').click();await page.getByRole('radio',{name:'选择 一次发布多个 BUG'}).check();await button('确认选择').click();await choose('目标环境','测试');await page.getByPlaceholder('说明本次交付目的，按环境策略必填').fill('continuous draft')
+ await button('下一步：制品与步骤').click();await chooseArtifact('orders');await chooseArtifact('billing')
  assert.equal(await page.getByRole('dialog').count(),0,'prepare uses long modal')
- await button('← 返回列表').click();await button('发起交付').click();assert.equal(await page.getByPlaceholder('说明本次交付目的，生产按策略必填').inputValue(),'continuous draft')
- await button('下一步：核对制品与步骤').click();await page.locator('.checkbox input').check();await button('关联版本制品').click()
+ await button('← 返回列表').click();await button('发起交付').click();assert.equal(await page.getByPlaceholder('说明本次交付目的，按环境策略必填').inputValue(),'continuous draft')
+ await button('下一步：制品与步骤').click();await page.locator('.checkbox input').check();await button('关联版本制品').click()
  assert.equal(mapping.bindings.length,2);assert(mapping.bindings.every(b=>b.code_confirmed));assert.equal(writes.filter(w=>w.p.endsWith('/start')).length,0)
  slowResolve=true;const pending=page.waitForRequest(r=>r.url().endsWith('/delivery/preview'));await button('预检范围、制品与目标').click();await pending
- assert.equal(await page.getByPlaceholder('说明本次交付目的，生产按策略必填').isDisabled(),true)
- releaseResolve();await button('提交执行单，不立即部署').waitFor();await button('提交执行单，不立即部署').click()
+ assert.equal(await page.getByPlaceholder('说明本次交付目的，按环境策略必填').isDisabled(),true)
+ releaseResolve();await button('提交执行单，不立即执行').waitFor();await button('提交执行单，不立即执行').click()
  await page.getByRole('heading',{name:'多应用交付 待执行',exact:false}).waitFor()
  assert.equal(await page.getByRole('dialog').count(),0,'detail uses long modal')
  assert.equal(writes.filter(w=>w.p.endsWith('/start')).length,0,'submission starts deployment')
@@ -94,5 +105,5 @@ try{
  for(const theme of ['light','dark']){await page.evaluate(t=>{document.documentElement.dataset.theme=t;document.documentElement.classList.toggle('dark',t==='dark')},theme);for(const width of [1440,900,700,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'horizontal overflow '+theme+' '+width)}}
  await page.setViewportSize({width:1440,height:1000});await mkdir('/tmp/devops-orchestration-ui',{recursive:true});await page.screenshot({path:'/tmp/devops-orchestration-ui/continuous-prepare.png',fullPage:true})
  assert.deepEqual(errors,[]);assert.deepEqual(unexpected,[])
- console.log(JSON.stringify({ok:true,checks:['full-page prepare and detail','draft continuity','version artifact mapping','preflight loading and token','no start on submission','log drawer context','explicit auto start','batch observation','server pagination beyond 100','person filter','remaining-only recovery excludes successful SQL and failed Redis','responsive light/dark','no real writes'],mockedWrites:writes.length}))
+ console.log(JSON.stringify({ok:true,checks:['initial all-version filter','selected version ID','clear version filter','full-page prepare and detail','draft continuity','version artifact mapping','preflight loading and token','no start on submission','log drawer context','explicit auto start','batch observation','server pagination beyond 100','person filter','remaining-only recovery excludes successful SQL and failed Redis','responsive light/dark','no real writes'],mockedWrites:writes.length}))
 }finally{await browser.close()}

@@ -10,11 +10,35 @@ config_dir="$root_dir/config"
 config_file="$config_dir/devopsplatform.env"
 current_link="$root_dir/current"
 previous_link="$root_dir/previous"
-unit_file="/etc/systemd/system/${service_name}.service"
-installed_ctl="/usr/local/bin/devopsplatformctl"
+systemd_dir=${DEVOPSPLATFORM_SYSTEMD_DIR:-/etc/systemd/system}
+unit_file="$systemd_dir/${service_name}.service"
+installed_ctl=${DEVOPSPLATFORM_CTL_PATH:-/usr/local/bin/devopsplatformctl}
+if [ "$service_name" = devopsplatform ]; then vl_default_name=victorialogs; else vl_default_name="${service_name}-victorialogs"; fi
+vl_name=${DEVOPSPLATFORM_VICTORIALOGS_SERVICE:-$vl_default_name}
+vl_unit="$systemd_dir/${vl_name}.service"
+vl_config="$config_dir/victorialogs.env"
+vl_root="$root_dir/storage"
+vl_link="$vl_root/current"
+vl_mode=local
+vl_url=http://127.0.0.1:9428
+vl_days=7
+staging=""
+cleanup_staging() { if [ -n "$staging" ] && [ -d "$staging" ]; then rm -rf -- "$staging"; fi; }
+trap cleanup_staging EXIT
+
 
 die() { echo "错误: $*" >&2; exit 1; }
-need_root() { [ "$(id -u)" -eq 0 ] || die "该操作需要 root，请使用 sudo"; }
+need_root() {
+  [ "$(id -u)" -eq 0 ] || die "该操作需要 root，请使用 sudo"
+  [ "$(uname -s)" = Linux ] || die "devopsplatformctl 的服务管理仅支持 Linux/systemd"
+}
+lock_operation() {
+  need_root
+  command -v flock >/dev/null || die "需要 util-linux 的 flock"
+  mkdir -p "$root_dir/run"
+  exec 9>"$root_dir/run/devopsplatformctl.lock"
+  flock -n 9 || die "已有安装/启停操作正在执行"
+}
 
 machine_arch() {
   case "$(uname -m)" in
@@ -42,8 +66,8 @@ ensure_user() {
 
 ensure_layout() {
   mkdir -p "$releases_dir" "$data_dir" "$config_dir"
-  chown -R "$service_user:$service_user" "$releases_dir" "$data_dir"
-  chown root:"$service_user" "$config_dir"
+  chown "$service_user:$service_user" "$releases_dir" "$data_dir"
+  chown root:"$service_user" "$root_dir" "$config_dir"
   chmod 0750 "$root_dir" "$releases_dir" "$data_dir" "$config_dir"
 }
 
@@ -89,11 +113,16 @@ ensure_config() {
 }
 
 install_unit() {
+  mkdir -p "$systemd_dir"
+  local dependency=""
+  [ "$vl_mode" != local ] || dependency="After=${vl_name}.service
+Wants=${vl_name}.service"
   cat > "$unit_file" <<EOF
 [Unit]
 Description=DevOps Platform
 After=network-online.target
 Wants=network-online.target
+$dependency
 
 [Service]
 Type=simple
@@ -101,10 +130,16 @@ User=$service_user
 Group=$service_user
 WorkingDirectory=$current_link
 Environment=HOME=$root_dir
+Environment=DEVOPSPLATFORM_ROOT=$root_dir
+Environment=DEVOPSPLATFORM_SERVICE=$service_name
+Environment=DEVOPSPLATFORM_VICTORIALOGS_SERVICE=$vl_name
+Environment=DEVOPSPLATFORM_LOG_RETENTION_DAYS=$vl_days
 EnvironmentFile=$config_file
+ExecStartPre=$installed_ctl _wait-storage
 ExecStart=$current_link/bin/devopsplatform -plugins $current_link/plugins -data $data_dir/platform-data
 Restart=always
 RestartSec=5
+TimeoutStartSec=120
 LimitNOFILE=65535
 UMask=0027
 
@@ -132,7 +167,7 @@ verify_archive() {
       (cd "$(dirname "$archive")" && shasum -a 256 -c "$(basename "$checksum_file")")
     fi
   else
-    echo "警告：未找到 $checksum_file，跳过发布包外层校验" >&2
+    echo "警告：未找到 ${checksum_file}，跳过发布包外层校验" >&2
   fi
 
   if tar -tzf "$archive" | awk '$0 ~ /^\// || $0 ~ /(^|\/)\.\.(\/|$)/ { found=1 } END { exit !found }'; then
@@ -157,6 +192,8 @@ config_port() {
 }
 
 healthy() {
+  local no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost
+  export no_proxy NO_PROXY
   local port body i
   port=$(config_port)
   for i in $(seq 1 30); do
@@ -165,141 +202,427 @@ healthy() {
     else
       body=$(wget -qO- -T 2 "http://127.0.0.1:${port}/api/health" 2>/dev/null || true)
     fi
-    case "$body" in *'"ok":true'*) return 0 ;; esac
+    case "$body" in *'"ok":true'*) if systemctl is-active --quiet "$service_name"; then return 0; fi ;; esac
     sleep 1
   done
   return 1
 }
 
 install_control_command() {
-  local source=${BASH_SOURCE[0]}
+  local source=${1:-${BASH_SOURCE[0]}}
   if [ "$source" != "$installed_ctl" ]; then
-    install -m 0755 "$source" "$installed_ctl"
+    mkdir -p "$(dirname "$installed_ctl")"
+    install -m 0755 "$source" "$installed_ctl.new.$$"
+    mv -f "$installed_ctl.new.$$" "$installed_ctl"
   fi
 }
 
-apply_archive() {
-  local archive=$1 mode=$2 staging top_count source_dir version target old_target restart_ok
-  need_root
-  if [ "$mode" = "upgrade" ] && [ ! -L "$current_link" ]; then
-    die "尚未安装，请先使用 install"
+# Read literal EnvironmentFile values. Never source/eval a configuration file.
+config_value() {
+  local file=$1 key=$2 value
+  [ -f "$file" ] || return 0
+  value=$(awk -v key="$key" 'index($0,key "=")==1 {v=substr($0,length(key)+2)} END {print v}' "$file")
+  case "$value" in \"*\") value=${value#\"}; value=${value%\"} ;; \'*\') value=${value#\'}; value=${value%\'} ;; esac
+  printf '%s' "$value"
+}
+positive_days() { [[ "$1" =~ ^[1-9][0-9]{0,5}$ ]] || die "日志保留天数必须是正整数"; }
+legacy_log_days() {
+  local manifest="$current_link/plugins/logs/manifest.yaml" value
+  value=$(config_value "$config_file" DEVOPSPLATFORM_LOG_RETENTION_DAYS)
+  if [ -z "$value" ] && [ -f "$manifest" ]; then
+    value=$(awk '
+      /^[[:space:]]*-[[:space:]]+["\047]?-retention-days=/ {sub(/.*-retention-days=/,"");sub(/[[:space:]]*#.*/,"");gsub(/["\047[:space:]]/,"");print;exit}
+      /^[[:space:]]*-[[:space:]]+["\047]?-retention-days["\047]?[[:space:]]*$/ {getline;sub(/^[[:space:]]*-[[:space:]]*/,"");sub(/[[:space:]]*#.*/,"");gsub(/["\047[:space:]]/,"");print;exit}
+    ' "$manifest")
   fi
-  verify_archive "$archive"
-  ensure_user
-  ensure_layout
-  ensure_config
+  printf '%s' "${value:-7}"
+}
+load_storage() {
+  local configured managed explicit
+  configured=$(config_value "$config_file" DEVOPSPLATFORM_VICTORIALOGS_URL)
+  vl_url=${configured:-http://127.0.0.1:9428}; vl_url=${vl_url%/}
+  case "$vl_url" in http://*|https://*) ;; *) die "VictoriaLogs URL 必须为 HTTP/HTTPS 地址" ;; esac
+  case "$vl_url" in *'@'*|*'"'*|*'\'*|*' '*|*$'\n'*|*$'\r'*) die "VictoriaLogs URL 不能含账号密码或特殊空白" ;; esac
+  managed=$(config_value "$config_file" DEVOPSPLATFORM_VICTORIALOGS_MANAGED)
+  case "$managed" in
+    ''|auto) case "$vl_url" in http://127.0.0.1:9428|http://localhost:9428) vl_mode=local ;; *) vl_mode=external ;; esac ;;
+    1) vl_mode=local ;;
+    0) vl_mode=external ;;
+    *) die "DEVOPSPLATFORM_VICTORIALOGS_MANAGED 仅支持 auto/0/1" ;;
+  esac
+  if [ "$vl_mode" = local ]; then vl_days=$(config_value "$vl_config" VLOGS_RETENTION_DAYS); else vl_days=""; fi
+  if [ -z "$vl_days" ]; then vl_days=$(legacy_log_days); fi
+  positive_days "$vl_days"
+  explicit=$(config_value "$config_file" DEVOPSPLATFORM_LOG_RETENTION_DAYS)
+  if [ -n "$explicit" ]; then positive_days "$explicit"; fi
+  if [ "$vl_mode" = local ] && [ -n "$explicit" ] && [ "$explicit" != "$vl_days" ]; then
+    die "平台与 VictoriaLogs 保留天数不一致，请统一配置后重试"
+  fi
+}
+http_get() {
+  local url=$1 token=${2:-} escaped response status
+  case "$url" in http://127.0.0.1:*|http://localhost:*) local no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost; export no_proxy NO_PROXY ;; esac
+  if command -v curl >/dev/null 2>&1; then
+    if [ -n "$token" ]; then
+      case "$token" in *$'\n'*|*$'\r'*) return 1 ;; esac
+      escaped=${token//\\/\\\\}; escaped=${escaped//\"/\\\"}
+      response=$(printf 'header = "Authorization: Bearer %s"\n' "$escaped" | curl --config - -fsS --max-time 2 --max-filesize 65536 --write-out '\n%{http_code}' "$url" 2>/dev/null) || return 1
+    else response=$(curl -fsS --max-time 2 --max-filesize 65536 --write-out '\n%{http_code}' "$url" 2>/dev/null) || return 1; fi
+    status=${response##*$'\n'}
+    [ "$status" = 200 ] || return 1
+    printf '%s' "${response%$'\n'*}"
+  elif [ -z "$token" ]; then
+    local body_file headers_file result=1
+    body_file=$(mktemp) || return 1
+    headers_file=$(mktemp) || { rm -f "$body_file"; return 1; }
+    if wget -q -S -O "$body_file" -T 2 --max-redirect=0 "$url" 2>"$headers_file"; then
+      status=$(awk '/HTTP\/[0-9.]+[[:space:]]+[0-9]+/ {code=$2} END{print code}' "$headers_file")
+      if [ "$status" = 200 ] && [ "$(wc -c < "$body_file")" -le 65536 ]; then cat "$body_file"; result=0; fi
+    fi
+    rm -f "$body_file" "$headers_file"
+    return "$result"
+  else echo '带认证的外部 VictoriaLogs 健康检查需要 curl' >&2; return 1; fi
+}
 
-  staging="$releases_dir/.staging-$$"
-  mkdir -p "$staging"
-  tar -xzf "$archive" -C "$staging"
-  top_count=$(find "$staging" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-  [ "$top_count" = "1" ] || die "发布包必须只有一个顶层目录"
+wait_storage() {
+  local i token attempts=${DEVOPSPLATFORM_HEALTH_ATTEMPTS:-30}
+  [[ "$attempts" =~ ^[1-9][0-9]{0,2}$ ]] || die "健康检查次数无效"
+  token=$(config_value "$config_file" DEVOPSPLATFORM_VICTORIALOGS_TOKEN)
+  for ((i=0;i<attempts;i++)); do
+    if http_get "$vl_url/health" "$token" >/dev/null; then
+      if [ "$vl_mode" != local ] || storage_active; then return 0; fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+storage_active() { systemctl is-active --quiet "$vl_name"; }
+check_managed_unit() {
+  local unit=$1 expected=$2
+  if [ -f "$unit" ]; then
+    local command count
+    command=$(sed -n 's/^ExecStart=//p' "$unit"); count=$(grep -c '^ExecStart=' "$unit" || true)
+    [ "$count" = 1 ] && { [ "$command" = "$expected" ] || [[ "$command" == "$expected "* ]]; } || die "已有服务单元不属于此安装目录，拒绝覆盖: $unit"
+  fi
+}
+validate_storage_unit() {
+  [ "$vl_mode" = local ] || return 0
+  if [ -f "$vl_unit" ]; then
+    if grep -Fxq "# devopsplatformctl-victorialogs: $root_dir" "$vl_unit"; then
+      [ -f "$vl_config" ] || die "已有托管存储缺少 $vl_config"
+      local full command
+      full=$(systemctl cat "$vl_name" 2>/dev/null || cat "$vl_unit")
+      [ "$(printf '%s\n' "$full" | grep -c '^ExecStart=' || true)" = 1 ] || die "托管存储存在 ExecStart 覆盖，拒绝修改"
+      command=$(sed -n 's/^ExecStart=//p' "$vl_unit")
+      [[ "$command" == "$vl_link/victoria-logs-prod "* ]] || die "托管存储启动路径已修改，拒绝接管其他程序"
+      return 0
+    fi
+    # Adopt only the shipped direct, single-line ExecStart. Preserve all flags,
+    # users, data paths, environment files and systemd drop-ins verbatim.
+    local count command period full
+    full=$(systemctl cat "$vl_name" 2>/dev/null || cat "$vl_unit")
+    [ "$(printf '%s\n' "$full" | grep -c '^ExecStart=' || true)" = 1 ] || die "VictoriaLogs 存在 ExecStart 覆盖，请先归并配置，未修改单元"
+    grep -Fxq "User=$service_user" "$vl_unit" || die "VictoriaLogs 运行用户与平台不同，未接管其权限"
+    count=$(grep -c '^ExecStart=' "$vl_unit" || true)
+    command=$(sed -n 's/^ExecStart=//p' "$vl_unit")
+    [ "$count" = 1 ] && [[ "$command" == "$current_link/bin/victoria-logs-prod "* ]] && [[ "$command" != *\\ ]] || die "已有 VictoriaLogs 单元需先人工迁移参数，未覆盖: $vl_unit"
+    [ -x "$current_link/bin/victoria-logs-prod" ] || die "已有 VictoriaLogs 程序不存在"
+    period=$(printf '%s\n' "$command" | sed -n 's/.* -retentionPeriod=\([1-9][0-9]*\)d\( .*\)\{0,1\}$/\1/p')
+    [ -n "$period" ] || die "无法确认已有 VictoriaLogs 保留期，拒绝替换默认值"
+    vl_days=$period; positive_days "$vl_days"
+  elif storage_active || http_get "$vl_url/health" >/dev/null; then
+    die "检测到非本安装管理的 VictoriaLogs；请先停止或配置外部存储地址，未启动第二个实例"
+  fi
+}
+ensure_storage_config() {
+  [ "$vl_mode" = local ] || return 0
+  if [ ! -f "$vl_config" ]; then
+    local listen=${vl_url#http://}
+    case "$listen" in 127.0.0.1:[0-9]*|localhost:[0-9]*) ;; *) die "托管 VictoriaLogs 仅允许本机回环 HTTP 地址" ;; esac
+    umask 0027
+    printf 'VLOGS_LISTEN_ADDR=%s\nVLOGS_RETENTION_DAYS=%s\nVLOGS_DISK_LIMIT=20GiB\nVLOGS_MEMORY_LIMIT=256MiB\n' "$listen" "$vl_days" > "$vl_config"
+    chown root:"$service_user" "$vl_config"; chmod 0640 "$vl_config"
+  fi
+  local listen days disk memory
+  listen=$(config_value "$vl_config" VLOGS_LISTEN_ADDR); days=$(config_value "$vl_config" VLOGS_RETENTION_DAYS)
+  disk=$(config_value "$vl_config" VLOGS_DISK_LIMIT); memory=$(config_value "$vl_config" VLOGS_MEMORY_LIMIT)
+  [[ "$listen" =~ ^(127\.0\.0\.1|localhost):[0-9]{1,5}$ ]] || die "VLOGS_LISTEN_ADDR 必须为回环地址及端口"
+  local listen_port=${listen##*:}
+  ((10#$listen_port >= 1 && 10#$listen_port <= 65535)) || die "VLOGS_LISTEN_ADDR 端口必须为 1 至 65535"
+  [ "$vl_url" = "http://$listen" ] || die "存储监听地址与平台 URL 不一致"
+  positive_days "$days"; vl_days=$days
+  local explicit; explicit=$(config_value "$config_file" DEVOPSPLATFORM_LOG_RETENTION_DAYS)
+  [ -z "$explicit" ] || [ "$explicit" = "$vl_days" ] || die "平台与存储保留期不一致"
+  [[ "$disk" =~ ^[1-9][0-9]*(MiB|GiB|TiB)$ ]] || die "VLOGS_DISK_LIMIT 无效"
+  [[ "$memory" =~ ^[1-9][0-9]*(MiB|GiB)$ ]] || die "VLOGS_MEMORY_LIMIT 无效"
+}
+install_storage_unit() {
+  [ "$vl_mode" = local ] || return 0
+  if [ -f "$vl_unit" ]; then
+    if ! grep -Fxq "# devopsplatformctl-victorialogs: $root_dir" "$vl_unit"; then
+      mkdir -p "$root_dir/backups"
+      cp -p "$vl_unit" "$root_dir/backups/${vl_name}.service.$(date +%Y%m%d%H%M%S).$$"
+      { printf '# devopsplatformctl-victorialogs: %s\n' "$root_dir"; sed -e "s|^ExecStart=$current_link/bin/victoria-logs-prod |ExecStart=$vl_link/victoria-logs-prod |" -e 's/-retentionPeriod=[0-9][0-9]*d/-retentionPeriod=${VLOGS_RETENTION_DAYS}d/' -e "/^\[Install\]/i\\
+EnvironmentFile=$vl_config
+" "$vl_unit"; } > "$vl_unit.new"
+      mv "$vl_unit.new" "$vl_unit"
+    fi
+    return 0
+  fi
+  mkdir -p "$data_dir/victorialogs"
+  chown "$service_user:$service_user" "$data_dir/victorialogs"
+  cat > "$vl_unit" <<UNIT
+# devopsplatformctl-victorialogs: $root_dir
+[Unit]
+Description=DevOpsPlatform VictoriaLogs
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=$service_user
+Group=$service_user
+Environment=GOMAXPROCS=2
+Environment=GOMEMLIMIT=1GiB
+EnvironmentFile=$vl_config
+ExecStart=$vl_link/victoria-logs-prod -httpListenAddr=\${VLOGS_LISTEN_ADDR} -storageDataPath=$data_dir/victorialogs -retentionPeriod=\${VLOGS_RETENTION_DAYS}d -retention.maxDiskSpaceUsageBytes=\${VLOGS_DISK_LIMIT} -memory.allowedBytes=\${VLOGS_MEMORY_LIMIT} -inmemoryDataFlushInterval=1s -insert.maxLineSizeBytes=2MiB
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+LimitNOFILE=65535
+UMask=0027
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target
+UNIT
+  chmod 0644 "$vl_unit"
+}
+sha_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+valid_vl_version() { [[ "$1" =~ ^v?[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]]; }
+version_less() {
+  local a=${1#v} b=${2#v} i; local aa bb
+  IFS=. read -r -a aa <<< "$a"; IFS=. read -r -a bb <<< "$b"
+  for i in 0 1 2; do
+    if ((10#${aa[i]} < 10#${bb[i]})); then return 0; fi
+    if ((10#${aa[i]} > 10#${bb[i]})); then return 1; fi
+  done
+  return 1
+}
+verify_release() {
+  local source=$1 file
+  [ -f "$source/VERSION" ] && [ -f "$source/SHA256SUMS" ] || die "发布包缺少版本或校验清单"
+  for file in VERSION devopsplatformctl bin/devopsplatform bin/logserver bin/victoria-logs-prod support/VICTORIALOGS-VERSION; do
+    [ -f "$source/$file" ] || die "发布包缺少 $file"
+    grep -Eq "[[:space:]]\\*?(\\./)?${file}$" "$source/SHA256SUMS" || die "校验清单未覆盖 $file"
+  done
+  if ! awk '{p=$NF;sub(/^\*/,"",p);if(p ~ /^\// || p ~ /(^|\/)\.\.(\/|$)/)bad=1} END{exit bad}' "$source/SHA256SUMS"; then die "校验清单含不安全路径"; fi
+  [ -x "$source/bin/devopsplatform" ] && [ -x "$source/bin/victoria-logs-prod" ] || die "发布包二进制不可执行"
+  if command -v sha256sum >/dev/null 2>&1; then (cd "$source" && sha256sum -c SHA256SUMS); else (cd "$source" && shasum -a 256 -c SHA256SUMS); fi
+}
+prepare_storage() {
+  local target=$1 version hash destination old_version old_hash
+  [ "$vl_mode" = local ] || return 0
+  version=$(tr -d '\r\n' < "$target/support/VICTORIALOGS-VERSION")
+  valid_vl_version "$version" || die "VictoriaLogs 版本元数据无效"
+  hash=$(sha_file "$target/bin/victoria-logs-prod"); destination="$vl_root/releases/$hash"
+  if [ -L "$vl_link" ]; then
+    old_version=$(cat "$vl_link/VERSION"); valid_vl_version "$old_version" || die "已选存储版本元数据无效"
+    version_less "$version" "$old_version" && die "拒绝隐式降级 VictoriaLogs ($old_version -> $version)；平台回滚不会降低存储版本"
+  elif [ -f "$vl_unit" ] && ! grep -Fxq "# devopsplatformctl-victorialogs: $root_dir" "$vl_unit"; then
+    old_hash=$(sha_file "$current_link/bin/victoria-logs-prod")
+    [ "$old_hash" = "$hash" ] || die "已有非托管 VictoriaLogs 与包中版本不同，需先确认其升级兼容性；未停止原服务"
+  fi
+  if [ -e "$vl_link" ] && [ ! -L "$vl_link" ]; then die "存储版本链接被非链接文件占用"; fi
+  mkdir -p "$vl_root/releases"
+  if [ ! -d "$destination" ]; then
+    local tmp; tmp=$(mktemp -d "$vl_root/releases/.stage.XXXXXX")
+    cp "$target/bin/victoria-logs-prod" "$tmp/victoria-logs-prod"; chmod 0755 "$tmp/victoria-logs-prod"
+    printf '%s\n' "$version" > "$tmp/VERSION"
+    mv "$tmp" "$destination"
+  fi
+  [ "$(sha_file "$destination/victoria-logs-prod")" = "$hash" ] || die "已暂存存储程序校验失败"
+  [ "$(cat "$destination/VERSION")" = "$version" ] || die "存储版本和摘要元数据冲突"
+  selected_storage=$destination
+}
+storage_fingerprint() {
+  printf '%s\n%s\n%s\n' "$(sha_file "$vl_unit")" "$(sha_file "$vl_config")" "$(sha_file "$vl_link/victoria-logs-prod")" | if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'; else shasum -a 256 | awk '{print $1}'; fi
+}
+ensure_storage_running() {
+  local fingerprint applied=""
+  if [ "$vl_mode" = local ]; then
+    [ -L "$vl_link" ] && [ -f "$vl_unit" ] || return 1
+    fingerprint=$(storage_fingerprint) || return
+    if [ -f "$vl_root/applied.sha256" ]; then applied=$(cat "$vl_root/applied.sha256"); fi
+    if storage_active && [ "$fingerprint" != "$applied" ]; then
+      systemctl restart "$vl_name" || return
+    else systemctl start "$vl_name" || return; fi
+    storage_active || return 1
+  fi
+  wait_storage || return
+  if [ "$vl_mode" = local ]; then
+    printf '%s\n' "$fingerprint" > "$vl_root/applied.sha256.new" || return
+    mv "$vl_root/applied.sha256.new" "$vl_root/applied.sha256" || return
+  fi
+}
+
+healthy_stack() { wait_storage && healthy; }
+stop_platform() { if [ -f "$unit_file" ]; then systemctl stop "$service_name"; fi; }
+restore_platform() {
+  local old=$1
+  [ -n "$old" ] || return 1
+  systemctl stop "$service_name" || return 1
+  atomic_link "$old" "$current_link" || return 1
+  if ensure_storage_running && systemctl start "$service_name" && healthy; then
+    echo "已恢复平台到 $(basename "$old")；VictoriaLogs 保持当前已选版本，未回滚数据" >&2
+    return 0
+  fi
+  systemctl stop "$service_name" || true
+  echo "平台链接已恢复，但依赖仍不健康，平台保持停止，请检查 status/logs" >&2
+  return 1
+}
+apply_archive() {
+  local archive=$1 mode=$2 top_count source_dir version target old_target hash changed=false
+  lock_operation
+  if [ "$mode" = upgrade ] && [ ! -L "$current_link" ]; then die "尚未安装，请先使用 install"; fi
+  verify_archive "$archive"
+  # Symlinks and hard links are not part of the supported release format.
+  if tar -tvzf "$archive" | awk 'substr($1,1,1)!="-" && substr($1,1,1)!="d" {bad=1} END{exit !bad}'; then die "发布包不能含链接、设备或其他特殊文件"; fi
+  staging=$(mktemp -d "${TMPDIR:-/tmp}/devopsplatform-install.XXXXXX")
+  tar -xzf "$archive" -C "$staging" --no-same-owner --no-same-permissions
+  top_count=$(find "$staging" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+  [ "$top_count" = 1 ] || die "发布包必须只有一个顶层目录"
   source_dir=$(find "$staging" -mindepth 1 -maxdepth 1 -type d | head -n 1)
-  [ -f "$source_dir/VERSION" ] || die "发布包缺少 VERSION"
+  verify_release "$source_dir"
   version=$(tr -d '\r\n' < "$source_dir/VERSION")
   case "$version" in *[!0-9A-Za-z._-]*|'') die "发布包版本无效" ;; esac
-
-  target="$releases_dir/$version"
-  [ ! -e "$target" ] || die "版本 $version 已存在；请使用新版本号重新打包"
-  [ -x "$source_dir/bin/devopsplatform" ] || die "发布包缺少主程序"
-  if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$source_dir" && sha256sum -c SHA256SUMS)
+  target="$releases_dir/$version"; hash=$(sha_file "$archive")
+  load_storage
+  check_managed_unit "$unit_file" "$current_link/bin/devopsplatform"
+  validate_storage_unit
+  prepare_storage "$source_dir"
+  ensure_user; ensure_layout; ensure_config
+  ensure_storage_config
+  if [ "$vl_mode" = local ]; then
+    chown -R root:"$service_user" "$selected_storage"
+    chown root:"$service_user" "$vl_root" "$vl_root/releases"
+    chmod 0644 "$selected_storage/VERSION"
+    chmod 0750 "$vl_root" "$vl_root/releases" "$selected_storage"
+  fi
+  if [ -e "$target" ]; then
+    [ -f "$target/.archive-sha256" ] && [ "$(cat "$target/.archive-sha256")" = "$hash" ] || die "版本目录已存在且不是同一发布包"
+    verify_release "$target"
   else
-    (cd "$source_dir" && shasum -a 256 -c SHA256SUMS)
+    mv "$source_dir" "$target"
+    printf '%s\n' "$hash" > "$target/.archive-sha256"
+    ln -s "$data_dir" "$target/runtime"
+    chown -R "$service_user:$service_user" "$target"
   fi
-
-  mv "$source_dir" "$target"
-  case "$staging" in
-    "$releases_dir"/.staging-*) rm -rf "$staging" ;;
-    *) die "拒绝清理异常临时目录: $staging" ;;
-  esac
-  ln -s "$data_dir" "$target/runtime"
-  chown -R "$service_user:$service_user" "$target"
-
-  old_target=""
-  if [ -L "$current_link" ]; then
-    old_target=$(readlink -f "$current_link")
-    atomic_link "$old_target" "$previous_link"
+  old_target=""; if [ -L "$current_link" ]; then old_target=$(readlink -f "$current_link"); fi
+  if [ "$vl_mode" = local ]; then
+    if [ ! -L "$vl_link" ] || [ "$(readlink -f "$vl_link")" != "$(readlink -f "$selected_storage")" ]; then changed=true; fi
   fi
-
-  atomic_link "$target" "$current_link"
+  stop_platform
+  if [ "$vl_mode" = local ]; then
+    if [ "$changed" = true ] && [ -f "$vl_unit" ]; then systemctl stop "$vl_name"; fi
+    atomic_link "$selected_storage" "$vl_link"
+    install_storage_unit
+  fi
+  install_control_command "$target/devopsplatformctl"
   install_unit
-  install_control_command
   systemctl enable "$service_name" >/dev/null
-  restart_ok=true
-  systemctl restart "$service_name" || restart_ok=false
-
-  if [ "$restart_ok" = "true" ] && healthy; then
-    echo "✅ DevOpsPlatform $version 已启动"
+  if [ "$vl_mode" = local ]; then systemctl enable "$vl_name" >/dev/null; fi
+  if ! ensure_storage_running; then
+    [ "$vl_mode" != local ] || systemctl stop "$vl_name" || true
+    echo "VictoriaLogs 未通过启动检查；平台未切到新版本。已选存储版本保留，不自动降级或回滚数据。修复后可重试同一发布包。" >&2
+    return 1
+  fi
+  atomic_link "$target" "$current_link"
+  if systemctl start "$service_name" && healthy_stack; then
+    if [ -n "$old_target" ] && [ "$old_target" != "$(readlink -f "$target")" ]; then atomic_link "$old_target" "$previous_link"; fi
+    echo "✅ DevOpsPlatform $version 已启动；VictoriaLogs $vl_mode 健康"
     echo "   控制台：http://服务器内网IP:$(config_port)"
-    echo "   配置：$config_file"
-    return
+    return 0
   fi
-
-  echo "新版本健康检查失败" >&2
-  if [ -n "$old_target" ]; then
-    echo "正在自动回滚到 $(basename "$old_target")" >&2
-    atomic_link "$old_target" "$current_link"
-    systemctl restart "$service_name" || true
-    healthy || true
-  fi
-  systemctl status "$service_name" --no-pager -l || true
-  journalctl -u "$service_name" -n 80 --no-pager || true
+  echo "新平台版本健康检查失败" >&2
+  systemctl stop "$service_name" || true
+  restore_platform "$old_target" || true
   return 1
 }
-
 rollback_release() {
-  local current_target previous_target restart_ok
-  need_root
-  [ -L "$current_link" ] || die "当前没有已安装版本"
-  [ -L "$previous_link" ] || die "没有可回滚的上一版本"
-  current_target=$(readlink -f "$current_link")
-  previous_target=$(readlink -f "$previous_link")
-  [ -d "$previous_target" ] || die "上一版本目录不存在"
-  atomic_link "$previous_target" "$current_link"
-  atomic_link "$current_target" "$previous_link"
-  restart_ok=true
-  systemctl restart "$service_name" || restart_ok=false
-  if [ "$restart_ok" = "true" ] && healthy; then
-    echo "✅ 已回滚到 $(basename "$previous_target")"
-    return
-  fi
-  echo "回滚版本健康检查失败，恢复原版本" >&2
-  atomic_link "$current_target" "$current_link"
-  atomic_link "$previous_target" "$previous_link"
-  systemctl restart "$service_name" || true
-  return 1
+  local old current
+  lock_operation
+  [ -L "$current_link" ] && [ -L "$previous_link" ] || die "没有可回滚的上一版本"
+  current=$(readlink -f "$current_link"); old=$(readlink -f "$previous_link")
+  [ -x "$old/bin/devopsplatform" ] || die "上一版本不存在或不可执行"
+  load_storage; check_managed_unit "$unit_file" "$current_link/bin/devopsplatform"; validate_storage_unit; ensure_storage_config
+  stop_platform
+  if ! ensure_storage_running; then echo '存储不健康，未执行平台回滚' >&2; return 1; fi
+  atomic_link "$old" "$current_link"
+  if systemctl start "$service_name" && healthy_stack; then
+    atomic_link "$current" "$previous_link"
+    echo "✅ 平台已回滚；VictoriaLogs 版本、配置和数据保持"
+  else restore_platform "$current" || true; return 1; fi
 }
-
+start_stack() {
+  lock_operation; [ -L "$current_link" ] || die "尚未安装"
+  load_storage; check_managed_unit "$unit_file" "$current_link/bin/devopsplatform"; validate_storage_unit; ensure_storage_config; install_unit
+  ensure_storage_running || return 1
+  systemctl start "$service_name" && healthy_stack
+}
+restart_stack() {
+  local component=${1:-platform}
+  lock_operation; [ -L "$current_link" ] || die "尚未安装"
+  load_storage; check_managed_unit "$unit_file" "$current_link/bin/devopsplatform"; validate_storage_unit; ensure_storage_config
+  if [ "$component" = victorialogs ]; then
+    [ "$vl_mode" = local ] || die "外部 VictoriaLogs 不由本机重启"
+    stop_platform; systemctl stop "$vl_name" || return
+  else stop_platform; fi
+  install_unit
+  ensure_storage_running && systemctl start "$service_name" && healthy_stack
+}
+stop_stack() { lock_operation; load_storage; check_managed_unit "$unit_file" "$current_link/bin/devopsplatform"; validate_storage_unit; stop_platform; [ "$vl_mode" != local ] || systemctl stop "$vl_name"; }
+status_stack() {
+  local failed=0
+  load_storage
+  systemctl status "$service_name" --no-pager -l || failed=1
+  if [ "$vl_mode" = local ]; then
+    systemctl status "$vl_name" --no-pager -l || failed=1
+    if [ -f "$vl_link/VERSION" ]; then printf 'VictoriaLogs 已选版本: '; cat "$vl_link/VERSION"; fi
+  else echo "VictoriaLogs: 外部存储（不管理远端进程）"; fi
+  if DEVOPSPLATFORM_HEALTH_ATTEMPTS=1 wait_storage; then echo 'VictoriaLogs 健康检查通过'; else echo 'VictoriaLogs 健康检查失败'; failed=1; fi
+  return "$failed"
+}
 usage() {
-  cat <<'EOF'
+  cat <<'USAGE'
 用法：
-  devopsplatformctl install  <发布包.tar.gz>   首次安装
-  devopsplatformctl upgrade  <发布包.tar.gz>   升级，失败自动回滚
-  devopsplatformctl apply    <发布包.tar.gz>   自动判断安装或升级
-  devopsplatformctl rollback                    回滚上一版本
-  devopsplatformctl restart                     重启
-  devopsplatformctl status                      查看状态
-  devopsplatformctl logs                        跟踪日志
-  devopsplatformctl version                     查看当前版本
-EOF
+  devopsplatformctl install|upgrade|apply <发布包.tar.gz>
+  devopsplatformctl start                       存储健康后启动平台
+  devopsplatformctl stop                        先停平台，再停本机存储
+  devopsplatformctl restart [victorialogs]       默认只重启平台；指定后重启本机存储与平台
+  devopsplatformctl status                      查看两项服务和存储健康
+  devopsplatformctl logs [platform|victorialogs] 默认跟踪两项服务
+  devopsplatformctl version [victorialogs]       查看平台或本机存储版本
+  devopsplatformctl rollback                    回滚平台；不降级存储或回滚数据
+USAGE
 }
-
+# Paths are embedded in systemd units; reject ambiguous/unsafe unit syntax.
+for value in "$root_dir" "$systemd_dir" "$installed_ctl"; do
+  [[ "$value" =~ ^/[A-Za-z0-9_./-]+$ ]] && [ "$value" != / ] && [[ "/$value/" != *'/../'* ]] || die "安装路径必须为无空白/特殊字符的绝对路径"
+done
+for value in "$service_user" "$service_name" "$vl_name"; do [[ "$value" =~ ^[A-Za-z0-9_][A-Za-z0-9_.@-]*$ ]] || die "服务名/用户名无效"; done
+[ "$service_name" != "$vl_name" ] || die "平台与日志存储不能使用相同服务名"
 command_name=${1:-help}
 case "$command_name" in
-  install) [ "$#" -eq 2 ] || die "install 需要发布包路径"; apply_archive "$2" install ;;
-  upgrade) [ "$#" -eq 2 ] || die "upgrade 需要发布包路径"; apply_archive "$2" upgrade ;;
-  apply)
-    [ "$#" -eq 2 ] || die "apply 需要发布包路径"
-    if [ -L "$current_link" ]; then apply_archive "$2" upgrade; else apply_archive "$2" install; fi
-    ;;
+  install|upgrade|apply) [ "$#" -eq 2 ] || die "需要发布包路径"; apply_archive "$2" "$command_name" ;;
   rollback) rollback_release ;;
-  restart) need_root; systemctl restart "$service_name"; healthy && echo "✅ 服务正常" ;;
-  status) systemctl status "$service_name" --no-pager -l ;;
-  logs) journalctl -u "$service_name" -f ;;
-  version)
-    if [ -f "$current_link/VERSION" ]; then cat "$current_link/VERSION"; else echo "未安装"; fi
-    ;;
+  start) start_stack ;;
+  stop) stop_stack ;;
+  restart) [ "$#" -le 2 ] && [[ "${2:-platform}" =~ ^(platform|victorialogs)$ ]] || die "restart 参数无效"; restart_stack "${2:-platform}" ;;
+  status) status_stack ;;
+  logs)
+    load_storage
+    case "${2:-all}" in platform) journalctl -u "$service_name" -f ;; victorialogs) [ "$vl_mode" = local ] || die "外部日志请到对应实例查看"; journalctl -u "$vl_name" -f ;; all) if [ "$vl_mode" = local ]; then journalctl -u "$service_name" -u "$vl_name" -f; else journalctl -u "$service_name" -f; fi ;; *) die "logs 参数无效" ;; esac ;;
+  version) if [ "${2:-platform}" = victorialogs ]; then if [ -f "$vl_link/VERSION" ]; then cat "$vl_link/VERSION"; else echo '未托管本机 VictoriaLogs'; fi; else if [ -f "$current_link/VERSION" ]; then cat "$current_link/VERSION"; else echo '未安装'; fi; fi ;;
+  _wait-storage) load_storage; wait_storage ;;
   help|-h|--help) usage ;;
   *) usage; exit 2 ;;
 esac

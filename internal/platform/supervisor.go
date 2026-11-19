@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -10,9 +11,10 @@ import (
 
 // Supervisor 插件进程守护：拉起、崩溃后指数退避重启、优雅停止
 type Supervisor struct {
-	mu      sync.Mutex
-	procs   map[string]*pluginProc
-	stopped bool
+	mu         sync.Mutex
+	procs      map[string]*pluginProc
+	stopped    bool
+	backendEnv map[string][]string
 }
 
 type pluginProc struct {
@@ -57,6 +59,10 @@ func (s *Supervisor) run(ctx context.Context, m *Manifest) {
 		started := time.Now()
 		cmd := exec.CommandContext(ctx, m.Binary, m.Args...)
 		cmd.Dir = m.Dir
+		s.mu.Lock()
+		extraEnv := append([]string{}, s.backendEnv[m.Name]...)
+		s.mu.Unlock()
+		cmd.Env = append(os.Environ(), extraEnv...)
 		cmd.Stdout = logWriter{tag: m.Name}
 		cmd.Stderr = logWriter{tag: m.Name}
 		err := cmd.Run()
@@ -96,4 +102,14 @@ type logWriter struct{ tag string }
 func (w logWriter) Write(b []byte) (int, error) {
 	log.Printf("[%s] %s", w.tag, string(b))
 	return len(b), nil
+}
+
+// SetBackendEnvironment is configured before StartAll; values are never exposed in manifests.
+func (s *Supervisor) SetBackendEnvironment(name string, env []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.backendEnv == nil {
+		s.backendEnv = map[string][]string{}
+	}
+	s.backendEnv[name] = append([]string{}, env...)
 }

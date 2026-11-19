@@ -31,7 +31,7 @@ func (s *Store) zentaoUsers(ctx context.Context, name string) (*issueDirectory, 
 	if c == nil || c.Kind != "zentao" {
 		return nil, fmt.Errorf("请选择禅道连接")
 	}
-	z, err := newZentaoLegacy(ctx, c)
+	z, err := s.connectionZentao(ctx, c)
 	if err != nil {
 		return nil, err
 	}

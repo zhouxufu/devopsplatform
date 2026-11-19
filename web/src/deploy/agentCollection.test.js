@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { JAVA_MULTILINE, collectEditor, collectMultiline, selectCollectApplication } from './agentCollection.js'
+import { JAVA_MULTILINE, collectEditor, collectMultiline, selectCollectApplication, validateCollections } from './agentCollection.js'
 import { LOG_LEVELS } from '../logs/levels.js'
 
 test('only the four common log levels are selectable', () => {
@@ -61,4 +61,14 @@ test('collectEditor tolerates legacy null collection entries', () => {
     application_id: '', service: '', paths_text: '', multiline: '', multiline_mode: 'single',
   })
   assert.equal(collectEditor({ paths: null }).paths_text, '')
+})
+
+test('collection validation locates the first failing field without interpreting RE2 syntax', () => {
+  const valid=collectEditor({application_id:'orders',paths:['/var/log/orders/*.log']})
+  assert.equal(validateCollections([valid]),null)
+  assert.equal(validateCollections([]).index,0)
+  assert.deepEqual(validateCollections([valid,collectEditor()]),{index:1,field:'application_id',message:'采集项 2：请选择平台应用'})
+  assert.equal(validateCollections([{...valid,paths_text:' \n '}]).field,'paths_text')
+  assert.equal(validateCollections([{...valid,multiline_mode:'custom',multiline:' '}]).field,'multiline')
+  assert.equal(validateCollections([{...valid,multiline_mode:'custom',multiline:'(?P<time>start)'}]),null)
 })

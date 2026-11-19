@@ -16,6 +16,11 @@ func managedJavaFixture() *Service {
 	return &Service{Name: "api", TargetType: "ssh-jar", RemoteDir: "/test/app", RuntimeEnvironment: "test", HealthURL: "http://127.0.0.1:19997/health", DeployConfig: map[string]string{"java_mode": "managed", "java_version": "21", "java_port": "19997", "java_jvm_options": "-Xms32m\n-Xmx64m"}, RuntimeEnv: map[string]string{"ENV_MARK": "release1"}}
 }
 
+type javaTestExit int
+
+func (e javaTestExit) Error() string   { return fmt.Sprintf("synthetic Java exit %d", e) }
+func (e javaTestExit) ExitStatus() int { return int(e) }
+
 func TestManagedJavaValidationAndQuoting(t *testing.T) {
 	sv := managedJavaFixture()
 	sv.HealthURL = "http://{host}:19997/health"
@@ -48,6 +53,118 @@ func TestManagedJavaValidationAndQuoting(t *testing.T) {
 	sv.DeployConfig["health_failure_action"] = "unsafe"
 	if validateManagedJava(sv) == nil {
 		t.Fatal("accepted invalid health failure action")
+	}
+}
+
+func TestManagedJavaLauncherEmptyArraysAndEarlyExitDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, jvm, args   string
+		wantJVM, wantArgs []string
+	}{
+		{"empty", "", "", nil, nil},
+		{"empty-app-args", "-Xms32m\n-Dliteral=a value *", "", []string{"-Xms32m", "-Dliteral=a value *"}, nil},
+		{"empty-jvm", "", "--value=with spaces\n--literal=$(false)", nil, []string{"--value=with spaces", "--literal=$(false)"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			release := filepath.Join(root, "app/releases/deploy-1")
+			for _, dir := range []string{release, filepath.Join(root, "app/logs"), filepath.Join(root, "jre/bin")} {
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sv := managedJavaFixture()
+			sv.RemoteDir = filepath.Join(root, "app")
+			sv.HealthURL = ""
+			sv.DeployConfig["java_home"] = filepath.Join(root, "jre")
+			sv.DeployConfig["java_port"] = ""
+			sv.DeployConfig["java_jvm_options"] = tc.jvm
+			sv.DeployConfig["java_args"] = tc.args
+			// A synthetic executable records argv then exits. No JVM, port or
+			// business application is started; the generated launcher is exercised.
+			fakeJava := "#!/bin/bash\nprintf 'ARG[%s]\\n' \"$@\"\necho synthetic-java-exit >&2\nexit 17\n"
+			if err := os.WriteFile(filepath.Join(root, "jre/bin/java"), []byte(fakeJava), 0700); err != nil {
+				t.Fatal(err)
+			}
+			tr, err := exec.LookPath("tr")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Hold the first /proc read until the synthetic process exits. This
+			// exercises the start failure branch deterministically on Linux too,
+			// instead of occasionally observing the stub before its planned exit.
+			probe := "#!/bin/bash\nsleep .2\nexec " + shellQuote(tr) + " \"$@\"\n"
+			if err := os.WriteFile(filepath.Join(root, "jre/bin/tr"), []byte(probe), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(release, "runtime.env"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(release, "service.sh")
+			if err := os.WriteFile(file, []byte(managedJavaScript(sv, release)), 0700); err != nil {
+				t.Fatal(err)
+			}
+			// /bin/bash is 3.2 on macOS, which reproduces the pre-4.4 nounset
+			// behavior. The same fixture also runs with the Linux test host Bash.
+			cmd := exec.Command("/bin/bash", file, "start")
+			cmd.Env = append(os.Environ(), "LC_ALL=C", "PATH="+filepath.Join(root, "jre/bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "Java failed to start (exit status 17)") || !strings.Contains(string(out), "synthetic-java-exit") || strings.Contains(string(out), "unbound variable") || strings.Contains(string(out), "tr:") {
+				t.Fatalf("early exit lost its diagnostics: %v\n%s", err, out)
+			}
+			log, err := os.ReadFile(filepath.Join(sv.RemoteDir, "logs/application.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+			want := append([]string{}, tc.wantJVM...)
+			want = append(want, "-jar", filepath.Join(release, "app.jar"))
+			want = append(want, tc.wantArgs...)
+			wantLines := make([]string, 0, len(want)+1)
+			for _, arg := range want {
+				wantLines = append(wantLines, "ARG["+arg+"]")
+			}
+			wantLines = append(wantLines, "synthetic-java-exit")
+			if strings.Join(lines, "\n") != strings.Join(wantLines, "\n") {
+				t.Fatalf("arguments changed: got %q want %q", lines, wantLines)
+			}
+		})
+	}
+}
+
+func TestManagedJavaOptionalWorkingDirectoryPreservesRelativePaths(t *testing.T) {
+	sv := managedJavaFixture()
+	release := "/test/app/releases/deploy-2"
+	defaultScript := managedJavaScript(sv, release)
+	if !strings.Contains(defaultScript, "readonly workdir='/test/app/releases/deploy-2'") {
+		t.Fatal("default runtime directory changed")
+	}
+	for _, invalid := range []string{"relative/path", "../other", "/tmp/with\x00nul"} {
+		sv.DeployConfig["java_workdir"] = invalid
+		if validateManagedJava(sv) == nil {
+			t.Fatalf("invalid workdir accepted: %q", invalid)
+		}
+	}
+	dir := filepath.Join(t.TempDir(), "old app ' $(false)")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sv.DeployConfig["java_workdir"] = dir
+	if err := validateManagedJava(sv); err != nil {
+		t.Fatal(err)
+	}
+	script := managedJavaScript(sv, release)
+	if !strings.Contains(script, `(cd "$workdir";`) || !strings.Contains(script, `[[ -d "$workdir" && -x "$workdir" ]]`) || !strings.Contains(script, `-jar "$jar"`) {
+		t.Fatal("working directory changed launcher ownership, JAR identity or preflight")
+	}
+	// Execute only generated constant declarations and cd, never a JVM or a
+	// lifecycle action. Spaces, quotes and shell syntax must remain literal.
+	preamble := script[:strings.Index(script, "owned_pid()")]
+	cmd := exec.Command("bash", "-c", preamble+"\ncd \"$workdir\"\npwd -P\n")
+	out, err := cmd.CombinedOutput()
+	resolved, _ := filepath.EvalSymlinks(dir)
+	if err != nil || strings.TrimSpace(string(out)) != resolved {
+		t.Fatalf("working directory not preserved literally: %q, %v", out, err)
 	}
 }
 
@@ -165,11 +282,11 @@ func TestManagedJavaReleaseRollbackStates(t *testing.T) {
 						return "", fmt.Errorf("JDK mismatch")
 					}
 					if (tc.fail == "ready" || tc.fail == "rollback") && strings.HasSuffix(cmd, "'deploy-2/service.sh' ready") {
-						return "", fmt.Errorf("not ready")
+						return "", javaTestExit(20)
 					}
 					// Full path is shell quoted, not just its basename.
 					if (tc.fail == "ready" || tc.fail == "rollback") && strings.HasSuffix(cmd, "/deploy-2/service.sh' ready") {
-						return "", fmt.Errorf("not ready")
+						return "", javaTestExit(20)
 					}
 					if tc.fail == "rollback" && strings.Contains(cmd, "/deploy-1/service.sh' start") {
 						return "", fmt.Errorf("rollback start failed")

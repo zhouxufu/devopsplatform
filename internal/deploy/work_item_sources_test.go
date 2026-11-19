@@ -24,13 +24,13 @@ func TestWorkItemSourcesRoutesAndAdapter(t *testing.T) {
 	for _, prefix := range []string{"/api/work-item-sync/", "/api/issue-sync/"} {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest("POST", prefix+name, strings.NewReader(`{"baseline":"2026-09-30","status":"closed"}`)))
-		if w.Code != 200 {
+		if w.Code != 400 {
 			t.Fatalf("%s: %d %s", prefix, w.Code, w.Body.String())
 		}
 	}
 	items := st.WorkItems("", "", 100)
-	if len(items) != 1 || items[0].Source != "zentao:"+name {
-		t.Fatalf("source identity/dedup changed: %+v", items)
+	if len(items) != 0 {
+		t.Fatalf("live source unexpectedly re-imported bugs: %+v", items)
 	}
 	if err := st.UpsertConnection(ResourceConnection{Name: "git-only", Kind: "git", Endpoint: "https://example.invalid"}); err != nil {
 		t.Fatal(err)

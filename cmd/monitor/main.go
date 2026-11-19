@@ -18,6 +18,7 @@ func main() {
 	dbDriver := flag.String("db-driver", envOr("DEVOPSPLATFORM_MONITOR_DB_DRIVER", "sqlite"), "monitor database driver: sqlite or mysql")
 	dbDSN := flag.String("db-dsn", os.Getenv("DEVOPSPLATFORM_MONITOR_DB_DSN"), "monitor database DSN (prefer DEVOPSPLATFORM_MONITOR_DB_DSN for secrets)")
 	bus := flag.String("bus", "http://127.0.0.1:9800", "platform base url (event bus)")
+	deploy := flag.String("deploy", envOr("DEVOPSPLATFORM_DEPLOY_INTERNAL", "http://127.0.0.1:19803"), "trusted deployment backend for managed Arthas instances")
 	token := flag.String("token", os.Getenv("DEVOPSPLATFORM_DATA_TOKEN"), "data-plane shared token (or env DEVOPSPLATFORM_DATA_TOKEN)")
 	spanAttrs := flag.Bool("span-attrs", true, "store span attributes & exception events (512B value truncation)")
 	flag.Parse()
@@ -27,6 +28,7 @@ func main() {
 		log.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
+	st.ConfigureArthasDeploy(*deploy)
 
 	traceStore, err := monitor.NewTraceStore(st.DB(), *spanAttrs)
 	if err != nil {

@@ -112,6 +112,23 @@ func (s *Store) RebindApplicationID(service, applicationID string) error {
 		return err
 	}
 	defer tx.Rollback()
+	var previousApplicationID string
+	if err := tx.QueryRow(`SELECT application_id FROM services WHERE name=?`, service).Scan(&previousApplicationID); err != nil {
+		return err
+	}
+	if previousApplicationID != "" && previousApplicationID != applicationID {
+		for _, table := range []string{"api_test_layouts", "api_test_document_reviews", "api_test_suites", "api_test_run_index", "api_test_profiles", "api_test_cases", "api_test_runs", "api_document_environment_sources", "api_document_versions"} {
+			if _, err := tx.Exec(`UPDATE `+table+` SET application_id=? WHERE application_id=?`, applicationID, previousApplicationID); err != nil {
+				return fmt.Errorf("接口测试应用身份迁移冲突：%w", err)
+			}
+		}
+		if _, err := tx.Exec(`UPDATE api_document_sources SET application_id=? WHERE application_id=?`, applicationID, previousApplicationID); err != nil {
+			return fmt.Errorf("文档来源身份合并冲突：%w", err)
+		}
+		if _, err := tx.Exec(`UPDATE api_document_snapshots SET application_id=? WHERE application_id=?`, applicationID, previousApplicationID); err != nil {
+			return err
+		}
+	}
 	if _, err = tx.Exec(`UPDATE services SET application_id=? WHERE name=?`, applicationID, service); err != nil {
 		return err
 	}

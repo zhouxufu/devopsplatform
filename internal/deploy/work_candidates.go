@@ -9,6 +9,8 @@ import (
 )
 
 type WorkCandidate struct {
+	ResearchIssueFields
+	ReleaseRequired    *bool  `json:"release_required"`
 	ID                 int64  `json:"id"`
 	Source             string `json:"source"`
 	ExternalID         string `json:"external_id"`
@@ -23,6 +25,7 @@ type WorkCandidate struct {
 	ChangeCount        int    `json:"change_count"`
 	ReadyCount         int    `json:"ready_count"`
 	PlannedCount       int    `json:"planned_count"`
+	PartialDelivery    bool   `json:"partial_delivery"`
 	SuccessfulDelivery bool   `json:"successful_delivery"`
 }
 type WorkCandidateFilter struct {
@@ -30,6 +33,7 @@ type WorkCandidateFilter struct {
 	Source, Environment, Delivery, Planning, Numbers string
 	Start, End, VersionID                            int64
 	IDs                                              []int64
+	ProductionOnly                                   bool
 }
 type WorkCandidatePage struct {
 	Items    []WorkCandidate `json:"items"`
@@ -90,7 +94,7 @@ func (s *Store) WorkCandidates(f WorkCandidateFilter) (WorkCandidatePage, error)
 	if f.Environment != "" && s.GetEnvironment(f.Environment) == nil {
 		return out, fmt.Errorf("上线环境不存在")
 	}
-	if f.Delivery != "" && f.Environment == "" {
+	if f.Delivery != "" && f.Environment == "" && !f.ProductionOnly {
 		return out, fmt.Errorf("请指定上线环境")
 	}
 	out.Page = f.Page
@@ -98,32 +102,97 @@ func (s *Store) WorkCandidates(f WorkCandidateFilter) (WorkCandidatePage, error)
 	if f.IDs != nil && len(f.IDs) == 0 {
 		return out, nil
 	}
-	workJSON := `json_each(dr.plan,'$.version.work_items') wi`
+	workJSON := `json_each(COALESCE(json_extract(dr.plan,'$.scope.work_items'),json_extract(dr.plan,'$.version.work_items'),'[]')) wi`
+	changesJSON := `json_each(COALESCE(json_extract(dr.plan,'$.scope.changes'),json_extract(dr.plan,'$.version.changes'),'[]')) dc`
+	changeID := `json_extract(dc.value,'$.id')`
 	workID := `json_extract(wi.value,'$.id')`
 	env := `json_extract(dr.plan,'$.environment.name')`
+	workbench := `COALESCE(json_extract(dr.plan,'$.template.workbench'),'')`
 	scopeJSON := `json_each(vs.document,'$.work_item_ids') ws`
 	scopeID := "ws.value"
 	if s.Driver() == "mysql" {
-		workJSON = `JSON_TABLE(dr.plan,'$.version.work_items[*]' COLUMNS (work_id BIGINT PATH '$.id')) wi`
+		workJSON = `JSON_TABLE(COALESCE(JSON_EXTRACT(dr.plan,'$.scope.work_items'),JSON_EXTRACT(dr.plan,'$.version.work_items'),JSON_ARRAY()),'$[*]' COLUMNS (work_id BIGINT PATH '$.id')) wi`
+		changesJSON = `JSON_TABLE(COALESCE(JSON_EXTRACT(dr.plan,'$.scope.changes'),JSON_EXTRACT(dr.plan,'$.version.changes'),JSON_ARRAY()),'$[*]' COLUMNS (change_id BIGINT PATH '$.id')) dc`
+		changeID = "dc.change_id"
 		workID = "wi.work_id"
 		env = `JSON_UNQUOTE(JSON_EXTRACT(dr.plan,'$.environment.name'))`
+		workbench = `COALESCE(JSON_UNQUOTE(JSON_EXTRACT(dr.plan,'$.template.workbench')),'')`
+		// MySQL can evaluate a nested lateral JSON_TABLE before its correlated
+		// delivery row is available (notably the single-item partial-proof path).
+		// Guard the input, not just the extracted value: COALESCE outside
+		// JSON_EXTRACT is too late to prevent Error 3141. Valid immutable plans
+		// retain their exact interpretation; absent inputs cannot prove delivery.
+		for _, expression := range []*string{&workJSON, &changesJSON, &env, &workbench} {
+			*expression = strings.ReplaceAll(*expression, "dr.plan", mysqlDeliveryEvidenceDocument("dr.plan"))
+		}
 		scopeJSON = `JSON_TABLE(vs.document,'$.work_item_ids[*]' COLUMNS (work_id BIGINT PATH '$')) ws`
 		scopeID = "ws.work_id"
 	}
 	// Environment is bound even when not filtering; an empty environment never
 	// invents a production success signal.
-	success := `EXISTS(SELECT 1 FROM delivery_runs dr JOIN ` + workJSON + ` ON ` + workID + `=w.id WHERE dr.status='success' AND ` + env + `=?)`
-	planned := `(SELECT COUNT(*) FROM release_versions rv JOIN release_version_scope vs ON vs.release_version_id=rv.id JOIN ` + scopeJSON + ` ON ` + scopeID + `=w.id WHERE rv.status IN ('draft','ready') AND rv.id<>?)`
-	changeCount := `(SELECT COUNT(*) FROM work_item_changes wc JOIN changes c ON c.id=wc.change_id WHERE wc.work_item_id=w.id)`
-	readyCount := `(SELECT COUNT(*) FROM work_item_changes wc JOIN changes c ON c.id=wc.change_id WHERE wc.work_item_id=w.id AND c.status='ready')`
-	where, args := []string{"1=1"}, []any{}
-	if f.Status != "" {
-		column := "w.status"
-		if f.Status == "active" || f.Status == "resolved" {
-			column = "w.external_status"
+	owned := ` AND wc.change_id IN (` + deliveryOwnedChanges("w.id") + `)`
+	coverage := `NOT EXISTS(SELECT 1 FROM work_item_changes wc WHERE wc.work_item_id=w.id` + owned + ` AND NOT EXISTS(SELECT 1 FROM ` + changesJSON + ` WHERE ` + changeID + `=wc.change_id))`
+	envClause, envArgs := env+`=?`, []any{f.Environment}
+	if f.ProductionOnly {
+		names := []any{}
+		for _, e := range s.Environments() {
+			if e.Purpose == "production" {
+				names = append(names, e.Name)
+			}
 		}
-		where = append(where, column+"=?")
-		args = append(args, f.Status)
+		if len(names) == 0 {
+			return out, fmt.Errorf("尚未配置生产用途的环境，请管理员在环境管理中指定用途")
+		}
+		envClause, envArgs = env+` IN (`+placeholders(len(names))+`)`, names
+	}
+	baseRecord := `SELECT 1 FROM delivery_runs dr JOIN ` + workJSON + ` ON ` + workID + `=w.id WHERE dr.status='success' AND ` + workbench + `<>'research' AND ` + envClause
+	success := `EXISTS(` + baseRecord + ` AND ` + coverage + `)`
+	partial := `EXISTS(` + baseRecord + ` AND NOT ` + coverage + ` AND EXISTS(SELECT 1 FROM work_item_changes wc JOIN ` + changesJSON + ` ON ` + changeID + `=wc.change_id WHERE wc.work_item_id=w.id))`
+	planned := `(SELECT COUNT(*) FROM release_versions rv JOIN release_version_scope vs ON vs.release_version_id=rv.id JOIN ` + scopeJSON + ` ON ` + scopeID + `=w.id WHERE rv.status IN ('draft','ready') AND rv.id<>?)`
+	changeCount := `(SELECT COUNT(*) FROM work_item_changes wc JOIN changes c ON c.id=wc.change_id WHERE wc.work_item_id=w.id` + owned + `)`
+	readyCount := `(SELECT COUNT(*) FROM work_item_changes wc JOIN changes c ON c.id=wc.change_id WHERE wc.work_item_id=w.id` + owned + ` AND c.status='ready')`
+	where, args := []string{"1=1"}, []any{}
+	if f.Relation != "" {
+		where = append(where, researchRelationClause("w", f.Relation))
+		args = append(args, f.RelationActor)
+	}
+	fieldExpr := func(field string) string {
+		expr := `json_extract(document,'$.` + field + `')`
+		if s.Driver() == "mysql" {
+			expr = "JSON_UNQUOTE(" + expr + ")"
+		}
+		return `COALESCE((SELECT ` + expr + ` FROM research_issue_fields WHERE work_item_id=w.id),'')`
+	}
+	for _, filter := range []struct{ field, value string }{{"severity", f.Severity}, {"priority", f.Priority}, {"resolution", f.Resolution}} {
+		if filter.value != "" {
+			where = append(where, fieldExpr(filter.field)+"=?")
+			args = append(args, filter.value)
+		}
+	}
+	order := "w.updated_at DESC,w.id DESC"
+	switch f.Order {
+	case "updated_asc":
+		order = "w.updated_at ASC,w.id ASC"
+	case "severity_asc", "severity_desc", "priority_asc", "priority_desc", "resolution_asc", "resolution_desc":
+		parts := strings.Split(f.Order, "_")
+		direction := "ASC"
+		if parts[1] == "desc" {
+			direction = "DESC"
+		}
+		expr := fieldExpr(parts[0])
+		order = "CASE WHEN " + expr + "='' THEN 1 ELSE 0 END," + expr + " " + direction + ",w.id DESC"
+	}
+	if f.ReleaseRequired != "" {
+		where = append(where, s.researchIntentFilter("w", f.ReleaseRequired))
+	}
+	if f.Status != "" {
+		if f.Status == WorkItemActive || f.Status == WorkItemResolved {
+			where = append(where, `((w.source='manual' AND w.status=?) OR (w.source<>'manual' AND w.external_status=?))`)
+			args = append(args, f.Status, f.Status)
+		} else {
+			where = append(where, "w.status=?")
+			args = append(args, f.Status)
+		}
 	}
 	if f.Kind != "" {
 		where = append(where, "w.kind=?")
@@ -145,7 +214,10 @@ func (s *Store) WorkCandidates(f WorkCandidateFilter) (WorkCandidatePage, error)
 		id, _ := strconv.ParseInt(strings.TrimPrefix(f.Query, "#"), 10, 64)
 		args = append(args, term, term, id)
 	}
-	if f.Person != "" {
+	if len(f.PersonAccounts) > 0 {
+		clause, values := workMineClause("w", f.WorkItemFilter)
+		where, args = append(where, clause), append(args, values...)
+	} else if f.Person != "" {
 		switch f.PersonRole {
 		case "", "related":
 			where = append(where, `(w.assigned_to=? OR w.resolved_by=? OR w.opened_by=? OR w.closed_by=? OR (w.source='manual' AND w.owner=?))`)
@@ -158,6 +230,21 @@ func (s *Store) WorkCandidates(f WorkCandidateFilter) (WorkCandidatePage, error)
 		default:
 			where = append(where, "w."+f.PersonRole+"=?")
 			args = append(args, f.Person)
+		}
+	}
+	if f.TimeField == "closed" && (f.Start > 0 || f.End > 0) {
+		return out, fmt.Errorf("关闭时间请使用 source_start / source_end 日期，不使用平台时间戳")
+	}
+	if f.TimeField == "closed" && (f.SourceStart != "" || f.SourceEnd != "") {
+		expr := fieldExpr("source_closed_at")
+		where = append(where, "w.kind='bug'", expr+">='0001-01-01 00:00:00'")
+		if f.SourceStart != "" {
+			where = append(where, expr+">=?")
+			args = append(args, f.SourceStart+" 00:00:00")
+		}
+		if f.SourceEnd != "" {
+			where = append(where, expr+"<=?")
+			args = append(args, f.SourceEnd+" 23:59:59")
 		}
 	}
 	if f.Start > 0 {
@@ -174,7 +261,7 @@ func (s *Store) WorkCandidates(f WorkCandidateFilter) (WorkCandidatePage, error)
 			clause = "NOT " + success
 		}
 		where = append(where, clause)
-		args = append(args, f.Environment)
+		args = append(args, envArgs...)
 	}
 	if f.Planning != "" {
 		clause := planned + ">0"
@@ -211,21 +298,30 @@ func (s *Store) WorkCandidates(f WorkCandidateFilter) (WorkCandidatePage, error)
 		out.Page = 1
 		out.PageSize = limit
 	}
-	fields := `SELECT w.id,w.source,COALESCE(w.external_id,''),w.kind,w.title,w.status,COALESCE(w.external_status,''),COALESCE(w.owner,''),COALESCE(w.assigned_to,''),COALESCE(w.resolved_by,''),w.updated_at,` + changeCount + "," + readyCount + "," + planned + "," + success
-	params := append([]any{f.VersionID, f.Environment}, args...)
+	fields := `SELECT w.id,w.source,COALESCE(w.external_id,''),w.kind,w.title,w.status,COALESCE(w.external_status,''),COALESCE(w.owner,''),COALESCE(w.assigned_to,''),COALESCE(w.resolved_by,''),w.updated_at,` + changeCount + "," + readyCount + "," + planned + "," + success + "," + partial + "," + s.researchIntentExpr("w")
+	fields += `,COALESCE((SELECT document FROM research_issue_fields WHERE work_item_id=w.id),'{}')`
+	params := append([]any{f.VersionID}, envArgs...)
+	params = append(params, envArgs...)
+	params = append(params, args...)
 	params = append(params, limit, offset)
-	rows, e := tx.Query(fields+suffix+" ORDER BY w.updated_at DESC,w.id DESC LIMIT ? OFFSET ?", params...)
+	rows, e := tx.Query(fields+suffix+" ORDER BY "+order+" LIMIT ? OFFSET ?", params...)
 	if e != nil {
 		return out, e
 	}
 	for rows.Next() {
 		var v WorkCandidate
-		var recorded int
-		if e = rows.Scan(&v.ID, &v.Source, &v.ExternalID, &v.Kind, &v.Title, &v.Status, &v.ExternalStatus, &v.Owner, &v.AssignedTo, &v.ResolvedBy, &v.UpdatedAt, &v.ChangeCount, &v.ReadyCount, &v.PlannedCount, &recorded); e != nil {
+		var recorded, partially int
+		var sourceFields string
+		if e = rows.Scan(&v.ID, &v.Source, &v.ExternalID, &v.Kind, &v.Title, &v.Status, &v.ExternalStatus, &v.Owner, &v.AssignedTo, &v.ResolvedBy, &v.UpdatedAt, &v.ChangeCount, &v.ReadyCount, &v.PlannedCount, &recorded, &partially, &v.ReleaseRequired, &sourceFields); e != nil {
+			rows.Close()
+			return out, e
+		}
+		if e = json.Unmarshal([]byte(sourceFields), &v.ResearchIssueFields); e != nil {
 			rows.Close()
 			return out, e
 		}
 		v.SuccessfulDelivery = recorded != 0
+		v.PartialDelivery = partially != 0 && !v.SuccessfulDelivery
 		out.Items = append(out.Items, v)
 	}
 	e = rows.Err()
@@ -236,11 +332,24 @@ func (s *Store) WorkCandidates(f WorkCandidateFilter) (WorkCandidatePage, error)
 	return out, tx.Commit()
 }
 
+func mysqlDeliveryEvidenceDocument(column string) string {
+	return "(CASE WHEN JSON_VALID(" + column + ") THEN " + column + " ELSE '{}' END)"
+}
+
 func registerWorkCandidateRoutes(mux *http.ServeMux, s *Store) {
+	registerDeliveryWorkList(mux, s)
 	read := func(selected bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			q := r.URL.Query()
-			f := WorkCandidateFilter{WorkItemFilter: WorkItemFilter{Query: q.Get("q"), Kind: q.Get("kind"), Status: q.Get("status"), Person: q.Get("person"), PersonRole: q.Get("person_role")}, Source: q.Get("source"), Environment: q.Get("environment"), Delivery: q.Get("delivery"), Planning: q.Get("planning"), Numbers: q.Get("numbers")}
+			f := WorkCandidateFilter{WorkItemFilter: WorkItemFilter{Query: q.Get("q"), Kind: q.Get("kind"), Status: q.Get("status"), Person: q.Get("person"), PersonRole: q.Get("person_role"), ReleaseRequired: q.Get("release_required"), Severity: q.Get("severity"), Priority: q.Get("priority"), Resolution: q.Get("resolution"), Order: q.Get("order")}, Source: q.Get("source"), Environment: q.Get("environment"), Delivery: q.Get("delivery"), Planning: q.Get("planning"), Numbers: q.Get("numbers")}
+			f.TimeField, f.SourceStart, f.SourceEnd = q.Get("time_field"), q.Get("source_start"), q.Get("source_end")
+			if q.Get("mine") == "1" {
+				if deliveryActor(r) == "local" {
+					deliveryWriteError(w, 403, "请先登录后使用本人筛选")
+					return
+				}
+				f.PersonAccounts = s.workActorAccounts(deliveryActor(r))
+			}
 			for key, dst := range map[string]*int{"page": &f.Page, "page_size": &f.PageSize} {
 				if q.Get(key) != "" {
 					v, e := strconv.Atoi(q.Get(key))
@@ -317,7 +426,7 @@ func registerWorkCandidateRoutes(mux *http.ServeMux, s *Store) {
 			}
 		}
 		if len(scope.WorkItemIDs) > 0 {
-			ids = append(ids, "c.id IN (SELECT change_id FROM work_item_changes WHERE work_item_id IN ("+placeholders(len(scope.WorkItemIDs))+"))")
+			ids = append(ids, "c.id IN (SELECT wc.change_id FROM work_item_changes wc LEFT JOIN change_delivery_ownership co ON co.change_id=wc.change_id WHERE wc.work_item_id IN ("+placeholders(len(scope.WorkItemIDs))+") AND (co.change_id IS NULL OR (co.mode='draft' AND co.origin_work_item_id=wc.work_item_id) OR co.delivery_work_item_id=wc.work_item_id))")
 			for _, id := range scope.WorkItemIDs {
 				args = append(args, id)
 			}

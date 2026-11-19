@@ -101,3 +101,46 @@ func TestTailerDrainsRenamedFDBeforeOpeningReplacement(t *testing.T) {
 		t.Fatalf("replacement event = %q", got.Ev.Message)
 	}
 }
+
+func TestTailerColoredJavaUsesRawOffsetsAndIdentity(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "colored.log")
+	first := "\x1b[32m2026-11-18 08:21:59 943\x1b[0;39m  \x1b[31mERROR\x1b[0m [main] failed\njava.io.IOException: failed\n\tat Example.run(Example.java:7)"
+	second := "\x1b[32m2026-11-18 08:22:00 001\x1b[0m \x1b[34mINFO\x1b[0m [main] recovered"
+	content := first + "\n" + second + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := make(chan PendingEvent, 8)
+	cfg := CollectCfg{Service: "orders", Environment: "test", Paths: []string{path}, Multiline: `^\s*\[?(\d{4}[-/]\d{2}[-/]\d{2}[ T]|\d{2}:\d{2}:\d{2})`}
+	tailer, err := NewTailer(cfg, "node-a", LoadRegistry(filepath.Join(dir, "registry.json")), out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); tailer.tailFile(ctx, path) }()
+	a := receivePending(t, out, 3*time.Second)
+	b := receivePending(t, out, 5*time.Second)
+	if a.Ev.Message != first || a.Offset != int64(len(first)+1) || b.Ev.Message != second || b.Offset != int64(len(content)) {
+		t.Fatalf("raw boundaries changed: %+v %+v", a, b)
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := eventID("node-a", "test", "orders", path, a.Generation, stDevice(stat), stInode(stat), 0, a.Offset, first)
+	if a.Ev.ID != want {
+		t.Fatal("colored input identity changed", a.Ev.ID, want)
+	}
+	if len(out) != 0 {
+		t.Fatal("stack split or consecutive headers merged")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tailer did not exit")
+	}
+}

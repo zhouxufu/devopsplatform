@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -13,9 +14,77 @@ var (
 	mavenParamNameRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 	sensitiveParamRE  = regexp.MustCompile(`(?i)(password|passwd|secret|token|credential)`)
 	mavenEnvRefRE     = regexp.MustCompile(`^\$\{env\.([A-Za-z_][A-Za-z0-9_]*)\}$`)
+	mavenThreadsRE    = regexp.MustCompile(`^(?:[1-9][0-9]*|[0-9]+(?:\.[0-9]+)?C)$`)
 )
 
+type MavenExecutionOptions struct {
+	Threads         string `json:"threads,omitempty"`
+	UpdateSnapshots bool   `json:"update_snapshots,omitempty"`
+}
+
+// Additional arguments are CLI options, not shell or an alternate source of
+// profiles/properties/settings. Keep build provenance in the structured fields.
+func parseMavenArguments(raw string) ([]string, error) {
+	if len(raw) > 4096 {
+		return nil, fmt.Errorf("Maven 附加参数不能超过 4096 字节")
+	}
+	args := strings.Fields(raw)
+	if len(args) > 64 {
+		return nil, fmt.Errorf("Maven 附加参数过多")
+	}
+	flags := map[string]bool{
+		"-e": true, "--errors": true, "-X": true, "--debug": true,
+		"-q": true, "--quiet": true, "-o": true, "--offline": true,
+		"-fae": true, "--fail-at-end": true, "-ff": true, "--fail-fast": true,
+		"-B": true, "--batch-mode": true, "-ntp": true, "--no-transfer-progress": true,
+		"-V": true, "--show-version": true, "-C": true, "--strict-checksums": true,
+		"-c": true, "--lax-checksums": true, "-nsu": true, "--no-snapshot-updates": true,
+		"-am": true, "--also-make": true, "-amd": true, "--also-make-dependents": true,
+	}
+	selectors := map[string]bool{"-pl": true, "--projects": true, "-rf": true, "--resume-from": true}
+	for i := 0; i < len(args); i++ {
+		if flags[args[i]] {
+			continue
+		}
+		option, value, inline := strings.Cut(args[i], "=")
+		if !selectors[option] {
+			return nil, fmt.Errorf("Maven 附加参数不支持该选项；Profiles、-D、-T、-U 和 settings 请使用对应字段，仅填写执行选项（如 -e -X -o -fae、-pl 模块 -am）")
+		}
+		if !inline {
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("Maven 模块选择参数缺少模块")
+			}
+			value = args[i]
+		}
+		if value == "" || strings.HasPrefix(value, "-") || !regexp.MustCompile(`^[A-Za-z0-9_./:!,?*\-]+$`).MatchString(value) {
+			return nil, fmt.Errorf("Maven 模块选择参数无效，请使用模块路径或 :artifactId，多个模块以逗号分隔")
+		}
+	}
+	return args, nil
+}
+
+func (o *MavenExecutionOptions) arguments() ([]string, error) {
+	args := []string{}
+	if o == nil {
+		return args, nil
+	}
+	threads := strings.TrimSpace(o.Threads)
+	if threads != "" {
+		number, err := strconv.ParseFloat(strings.TrimSuffix(threads, "C"), 64)
+		if len(threads) > 32 || !mavenThreadsRE.MatchString(threads) || err != nil || number <= 0 {
+			return nil, fmt.Errorf("Maven 并行线程须为正整数或 CPU 倍数，如 4、1C、2.5C")
+		}
+		args = append(args, "-T", threads)
+	}
+	if o.UpdateSnapshots {
+		args = append(args, "-U")
+	}
+	return args, nil
+}
+
 type PipelineRunOptions struct {
+	BuildEnvironment        string
 	ReplayDelivery          *ServiceDelivery
 	Branch                  string
 	DeployEnvironment       string
@@ -93,6 +162,26 @@ func parseMavenProperties(raw string) ([]mavenProperty, error) {
 // prepareBuildConfig 校验结构化构建参数并生成实际执行命令。命令中的每个参数都
 // 单独 shell quote，避免配置值改变命令结构。
 func prepareBuildConfig(sv *Service) error {
+	if sv.ArtifactType == ArtifactJavaBundle {
+		if err := validateBundlePackageParams(bundlePackageParams(sv)); err != nil {
+			return err
+		}
+		if len(sv.Steps) > 0 {
+			count := 0
+			for i := range sv.Steps {
+				if sv.Steps[i].Step == javaBundleStep {
+					count++
+					if sv.Steps[i].Params == nil {
+						sv.Steps[i].Params = map[string]string{}
+					}
+					sv.Steps[i].Params["ROOT"] = sv.ArtifactGlob
+				}
+			}
+			if count != 1 {
+				return fmt.Errorf("Java 整包流水线必须包含一个完整归档步骤")
+			}
+		}
+	}
 	sv.BuildTool = strings.TrimSpace(sv.BuildTool)
 	if sv.BuildTool == "" {
 		sv.BuildTool = "command"
@@ -109,8 +198,8 @@ func prepareBuildConfig(sv *Service) error {
 	if sv.BuildTool != "maven" {
 		return fmt.Errorf("build_tool 仅支持 command、maven 或 gradle")
 	}
-	if sv.ArtifactType != "jar" {
-		return fmt.Errorf("结构化 Maven 构建目前只支持 jar 服务")
+	if sv.ArtifactType != "jar" && sv.ArtifactType != "image" && sv.ArtifactType != ArtifactJavaBundle {
+		return fmt.Errorf("结构化 Maven 构建仅支持 Java JAR 或 Java 镜像应用")
 	}
 	sv.MavenExecutable = strings.TrimSpace(sv.MavenExecutable)
 	if sv.MavenExecutable == "" {
@@ -142,6 +231,19 @@ func prepareBuildConfig(sv *Service) error {
 		return fmt.Errorf("Maven settings.xml 路径必须是绝对路径")
 	}
 	args := []string{"--batch-mode", "--no-transfer-progress"}
+	sv.MavenThreads = strings.TrimSpace(sv.MavenThreads)
+	execution := &MavenExecutionOptions{Threads: sv.MavenThreads, UpdateSnapshots: sv.MavenUpdateSnapshots}
+	executionArgs, err := execution.arguments()
+	if err != nil {
+		return err
+	}
+	args = append(args, executionArgs...)
+	sv.MavenArguments = strings.TrimSpace(sv.MavenArguments)
+	additional, err := parseMavenArguments(sv.MavenArguments)
+	if err != nil {
+		return err
+	}
+	args = append(args, additional...)
 	if sv.MavenSettingsPath != "" {
 		args = append(args, "--settings", sv.MavenSettingsPath)
 	}
@@ -205,10 +307,18 @@ func serviceForPipelineRun(sv *Service, opts PipelineRunOptions) (*Service, erro
 			copyService.Steps[i].Params["GIT_URL"] = copyService.GitURL
 			copyService.Steps[i].Params["BRANCH"] = copyService.Branch
 		case "java-build":
-			copyService.Steps[i].Params["COMMAND"] = copyService.BuildCmd
-			copyService.Steps[i].Params["PRE"] = copyService.PreCmd
+			if copyService.ArtifactType != "image" || copyService.BuildCmd != "" {
+				copyService.Steps[i].Params["COMMAND"] = copyService.BuildCmd
+			}
+			if copyService.ArtifactType != "image" || copyService.PreCmd != "" {
+				copyService.Steps[i].Params["PRE"] = copyService.PreCmd
+			}
 		case "npm-build":
-			copyService.Steps[i].Params["COMMAND"] = copyService.BuildCmd
+			if copyService.ArtifactType != "image" || copyService.BuildCmd != "" {
+				copyService.Steps[i].Params["COMMAND"] = copyService.BuildCmd
+			}
+		case javaBundleStep:
+			copyService.Steps[i].Params["ROOT"] = copyService.ArtifactGlob
 		case "package-jar", "package-static":
 			copyService.Steps[i].Params["GLOB"] = copyService.ArtifactGlob
 		case "docker-build":

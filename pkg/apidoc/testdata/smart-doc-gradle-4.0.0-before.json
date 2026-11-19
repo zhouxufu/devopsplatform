@@ -1,0 +1,114 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gradle fixture dev",
+    "version": "v1.0.0"
+  },
+  "servers": [
+    {
+      "url": ""
+    }
+  ],
+  "tags": [
+    {
+      "name": "OrderController",
+      "description": "订单示例"
+    }
+  ],
+  "paths": {
+    "/api/orders/{id}": {
+      "get": {
+        "summary": "查询订单",
+        "deprecated": false,
+        "tags": [
+          "OrderController"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/842ef08f7a35ad3f64ecdf1af5149e1f"
+                },
+                "examples": {
+                  "json": {
+                    "summary": "test data",
+                    "value": "{\n  \"id\": \"\",\n  \"amount\": 0\n}"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "find",
+        "parameters": [
+          {
+            "schema": {
+              "format": "string",
+              "type": "string"
+            },
+            "in": "path",
+            "description": "订单编号",
+            "required": true,
+            "name": "id"
+          }
+        ]
+      }
+    },
+    "/api/events": {
+      "get": {
+        "summary": "订单事件流",
+        "deprecated": false,
+        "tags": [
+          "OrderController"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "json": {
+                    "summary": "test data",
+                    "value": ""
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "events",
+        "parameters": []
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "defaultPrimitive": {
+        "format": "string",
+        "type": "string"
+      },
+      "842ef08f7a35ad3f64ecdf1af5149e1f": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "format": "string",
+            "description": "订单编号",
+            "type": "string"
+          },
+          "amount": {
+            "format": "int32",
+            "description": "订金金额",
+            "type": "integer",
+            "example": 0
+          }
+        }
+      },
+      "d751713988987e9331980363e24189ce": {}
+    }
+  }
+}

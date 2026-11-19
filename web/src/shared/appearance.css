@@ -1,0 +1,162 @@
+/* Coordinated layout geometry; shared official components retain their interaction contracts. */
+:root[data-console-design]:where(:not([data-console-design="default"])) .console-home-body{max-width:1500px}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="shell-header"]{height:3rem;background:var(--background);padding-inline:22px}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="workspace-tabs"]{height:2.625rem;background:var(--background);padding-inline:16px}
+/* The rail owns its height; tabs scale inside it instead of overflowing at large type sizes. */
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="workspace-tabs"]>[data-slot=tabs]{height:calc(100% - 2px)}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="workspace-tabs"] :is([data-slot=tabs-list],[data-workspace-tab],[role=tab]){height:100%;min-height:0}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="personal-home"] [data-slot=page-header] h1{font-size:1.5rem;line-height:1.3;letter-spacing:-.7px}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="personal-home"] [data-slot=card-title]{font-weight:600;font-size:.875rem}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="personal-home"] aside{border:0;padding:0}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot=sidebar-menu-button]{height:2.25rem;gap:12px}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page [data-slot=page-header]{margin-bottom:20px}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page [data-slot=page-header] h2{font-size:1.5rem;letter-spacing:-.7px}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page .filter-panel{margin-bottom:0}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page .application-table-scroll{min-width:0}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page .data-table>div:first-child{padding:10px 12px;border-bottom:1px solid var(--border)}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page .data-table{gap:0}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page .data-table table{margin:0}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page .tag-filters{border-top:1px solid var(--border);padding-top:12px;margin-top:12px}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page .tag-filters button[aria-pressed=true]{box-shadow:0 0 0 1px var(--primary)}
+:root[data-console-design]:where(:not([data-console-design="default"])) .services-page [data-slot=table-row]:hover{background:var(--muted)}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot=sidebar-header]{min-height:64px;justify-content:center;padding:16px}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot=sidebar-footer]{padding:12px}
+:root[data-console-design="compact"] [data-slot=sidebar-menu-button][data-active=true]{background:var(--sidebar-accent);color:var(--sidebar-accent-foreground);font-weight:600;border-radius:5px}
+:root[data-console-design="compact"] [data-slot=sidebar-header]{border-bottom:1px solid var(--sidebar-border);color:var(--sidebar-accent-foreground)}
+:root[data-console-design="compact"] [data-slot=sidebar-group-label]{color:var(--sidebar-foreground)}
+:root[data-console-design="compact"] [data-slot="shell-header"]{height:2.625rem}
+:root[data-console-design="compact"] [data-slot="workspace-tabs"]{height:2.375rem;background:var(--muted)}
+:root[data-console-design="compact"] [data-slot="workspace-tabs"] [aria-selected=true]{background:var(--card);font-weight:600}
+:root[data-console-design="compact"] [data-slot="personal-home"]{padding:22px 28px;background:var(--card)}
+:root[data-console-design="compact"] .console-home-body{display:flex;flex-direction:column;gap:20px}
+:root[data-console-design="compact"] .console-home-body>*{margin:0}
+:root[data-console-design="compact"] [aria-label="我的待办概览"]{gap:0;border:1px solid var(--border);border-radius:5px;background:var(--muted)}
+:root[data-console-design="compact"] [aria-label="我的待办概览"]>[data-slot=card]{padding:14px 0;border:0;border-radius:0;box-shadow:none;background:transparent;gap:0}
+:root[data-console-design="compact"] [aria-label="我的待办概览"]>[data-slot=card]+[data-slot=card]{border-left:1px solid var(--border)}
+:root[data-console-design="compact"] [aria-label="我的待办概览"] [data-slot=card-content]{padding-inline:18px}
+:root[data-console-design="compact"] [aria-label="我的待办概览"] [data-slot=card-content]>div{display:grid;grid-template-columns:auto auto;align-items:center;gap:0 16px}
+:root[data-console-design="compact"] [aria-label="我的待办概览"] .text-3xl{font-size:1.875rem;grid-row:1/3;grid-column:1;margin:0}
+:root[data-console-design="compact"] [aria-label="我的待办概览"] p.text-sm{grid-column:2;grid-row:1}
+:root[data-console-design="compact"] [aria-label="我的待办概览"] p.text-xs{grid-column:2;grid-row:2;font-size:.75rem}
+:root[data-console-design="compact"] .console-home-grid{grid-template-columns:1fr;gap:20px}
+:root[data-console-design="compact"] .console-home-lists{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}
+:root[data-console-design="compact"] .console-home-lists>[data-slot=card]{border-radius:0;box-shadow:none;padding:0;gap:12px;margin:0;overflow:visible}
+:root[data-console-design="compact"] .console-home-lists [data-slot=card-header]{padding:12px 0 10px;border-top:2px solid var(--foreground);border-bottom:1px solid var(--border)}
+:root[data-console-design="compact"] .console-home-lists [data-slot=card-content]{padding:0}
+:root[data-console-design="compact"] .console-home-lists article{padding:12px 0;gap:10px;min-height:62px}
+:root[data-console-design="compact"] .console-home-lists article .space-y-2>*+*{margin-top:5px}
+:root[data-console-design="compact"] [data-home-list=delivery]{grid-column:1/-1}
+:root[data-console-design="compact"] [data-home-list=delivery] [aria-busy]{display:grid;grid-template-columns:1fr 1fr;gap:0 30px}
+:root[data-console-design="compact"] .console-home-grid>aside{grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:24px;border-top:1px solid var(--border);padding-top:16px}
+:root[data-console-design="compact"] .console-home-grid>aside [data-slot=card]{padding:0;box-shadow:none;background:transparent}
+:root[data-console-design="compact"] .services-page{max-width:1600px;margin:auto}
+:root[data-console-design="compact"] .services-page .filter-panel{padding:12px 0;border-top:1px solid var(--border)}
+:root[data-console-design="compact"] .services-page .tag-filters{border:0;margin-top:8px;padding-top:0}
+:root[data-console-design="compact"] .services-page .application-table{border-radius:4px}
+:root[data-console-design="compact"] .services-page .data-table>div:first-child{padding:5px 8px;background:var(--muted)}
+:root[data-console-design="layered"] [data-slot=sidebar-inner]{border-right:1px solid var(--border)}
+:root[data-console-design="layered"] [data-slot=sidebar-menu-button][data-active=true]{font-weight:600;box-shadow:inset 3px 0 var(--primary);border-radius:5px}
+:root[data-console-design="layered"] [data-slot="personal-home"]{padding:26px 30px;background:var(--console-canvas)}
+:root[data-console-design="layered"] .console-home-body{display:flex;flex-direction:column;gap:22px}
+:root[data-console-design="layered"] .console-home-body>*{margin:0}
+:root[data-console-design="layered"] [aria-label="我的待办概览"]{gap:18px}
+:root[data-console-design="layered"] [aria-label="我的待办概览"]>[data-slot=card]{background:var(--card);box-shadow:0 1px 3px color-mix(in srgb,var(--foreground) 4%,transparent);border:1px solid var(--border);border-left:3px solid var(--primary);gap:0;padding-block:18px}
+:root[data-console-design="layered"] [aria-label="我的待办概览"]>[data-slot=card]+[data-slot=card]{border-left-color:var(--border)}
+:root[data-console-design="layered"] [aria-label="我的待办概览"] .text-3xl{font-size:2.125rem}
+:root[data-console-design="layered"] .console-home-grid{grid-template-columns:minmax(0,1fr) 252px;gap:22px}
+:root[data-console-design="layered"] .console-home-lists{display:flex;flex-direction:column;gap:18px}
+:root[data-console-design="layered"] .console-home-lists>[data-slot=card]{margin:0;border-radius:10px;box-shadow:0 1px 3px color-mix(in srgb,var(--foreground) 4%,transparent);border:1px solid var(--border);padding:0;gap:0}
+:root[data-console-design="layered"] .console-home-lists [data-slot=card-header]{padding:14px 20px;border-bottom:1px solid var(--border)}
+:root[data-console-design="layered"] .console-home-lists [data-slot=card-content]{padding:4px 20px 10px}
+:root[data-console-design="layered"] .console-home-lists article{padding:12px 0}
+:root[data-console-design="layered"] .console-home-lists article .space-y-2>*+*{margin-top:5px}
+:root[data-console-design="layered"] .console-home-lists form{padding-top:0}
+:root[data-console-design="layered"] .console-home-grid>aside{gap:18px;display:flex;flex-direction:column}
+:root[data-console-design="layered"] .console-home-grid>aside [data-slot=card]{border:1px solid var(--border);border-radius:10px;padding:16px;box-shadow:0 1px 3px color-mix(in srgb,var(--foreground) 4%,transparent);gap:12px}
+:root[data-console-design="layered"] [data-slot=sidebar-inset]{background:var(--console-canvas)}
+:root[data-console-design="layered"] .services-page{max-width:1500px;margin:auto}
+:root[data-console-design="layered"] .services-page .filter-panel{padding:16px 20px;background:var(--card);border:1px solid var(--border);border-radius:10px 10px 0 0}
+:root[data-console-design="layered"] .services-page .application-table{border:1px solid var(--border);border-top:0;background:var(--card);border-radius:0 0 10px 10px;box-shadow:0 2px 4px color-mix(in srgb,var(--foreground) 3%,transparent)}
+:root[data-console-design="layered"] .services-page .data-table>div:first-child{background:var(--card)}
+:root[data-console-design="layered"] .services-page [data-slot=table-header] th{background:var(--muted)}
+:root[data-console-design="soft"] [data-slot=sidebar-container]{padding:12px 0 12px 12px;border:0}
+:root[data-console-design="soft"] [data-slot=sidebar-inner]{border-radius:18px;box-shadow:inset 0 0 0 1px var(--border)}
+:root[data-console-design="soft"] [data-slot=sidebar-menu-button]{height:2.4375rem;border-radius:9px;gap:12px}
+:root[data-console-design="soft"] [data-slot=sidebar-menu-button][data-active=true]{font-weight:600}
+:root[data-console-design="soft"] [data-slot=sidebar-inset]{background:var(--console-canvas)}
+:root[data-console-design="soft"] [data-slot="shell-header"]{height:3.375rem;border:0;background:transparent}
+:root[data-console-design="soft"] [data-slot="workspace-tabs"]{height:2.625rem;background:transparent;border-color:var(--border)}
+:root[data-console-design="soft"] [data-slot="workspace-tabs"] [aria-selected=true]{background:var(--card);border-radius:8px 8px 0 0;color:var(--primary)}
+:root[data-console-design="soft"] [data-slot="workspace-tabs"] [data-workspace-tab]{border-color:transparent!important}
+:root[data-console-design="soft"] [data-slot="personal-home"]{padding:30px 32px;background:var(--console-canvas)}
+:root[data-console-design="soft"] .console-home-body{display:flex;flex-direction:column;gap:26px;max-width:1440px}
+:root[data-console-design="soft"] .console-home-body>*{margin:0}
+:root[data-console-design="soft"] [data-slot="personal-home"] [data-slot=page-header] h1{font-size:1.75rem;letter-spacing:-1px;font-weight:600}
+:root[data-console-design="soft"] [aria-label="我的待办概览"]{grid-template-columns:1.3fr 1fr;gap:20px}
+:root[data-console-design="soft"] [aria-label="我的待办概览"]>[data-slot=card]{padding:22px 2px;border-radius:17px;box-shadow:none;gap:0;border:1px solid var(--border);background:var(--muted)}
+:root[data-console-design="soft"] [aria-label="我的待办概览"]>[data-slot=card]:first-child{background:var(--primary);color:var(--primary-foreground);border-color:transparent}
+:root[data-console-design="soft"] [aria-label="我的待办概览"]>[data-slot=card]:first-child .text-muted-foreground{color:var(--primary-foreground)}
+:root[data-console-design="soft"] [aria-label="我的待办概览"]>[data-slot=card]:first-child button{background:var(--card);color:var(--foreground)}
+:root[data-console-design="soft"] [aria-label="我的待办概览"] .text-3xl{font-size:2.625rem;line-height:1.2;margin-top:10px;letter-spacing:-1px}
+:root[data-console-design="soft"] .console-home-grid{grid-template-columns:1fr;gap:22px}
+:root[data-console-design="soft"] .console-home-lists{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:22px;align-items:start}
+:root[data-console-design="soft"] .console-home-lists>[data-slot=card]{margin:0;box-shadow:0 3px 12px color-mix(in srgb,var(--foreground) 3%,transparent);border:1px solid var(--border);border-radius:16px;gap:0;padding:0}
+:root[data-console-design="soft"] .console-home-lists [data-slot=card-header]{padding:20px 22px 14px}
+:root[data-console-design="soft"] .console-home-lists [data-slot=card-title]{font-size:1rem}
+:root[data-console-design="soft"] .console-home-lists [data-slot=card-content]{padding:0 22px 16px}
+:root[data-console-design="soft"] .console-home-lists article{padding:15px 0}
+:root[data-console-design="soft"] .console-home-lists article button[data-slot=button][data-variant=link]{font-size:.8125rem}
+:root[data-console-design="soft"] [data-home-list=delivery]{grid-column:1/-1}
+:root[data-console-design="soft"] [data-home-list=delivery] [aria-busy]{display:grid;grid-template-columns:1fr 1fr;gap:0 24px}
+:root[data-console-design="soft"] .console-home-grid>aside{grid-template-columns:1fr 1fr 1fr}
+:root[data-console-design="soft"] .console-home-grid>aside [data-slot=card]{border-radius:16px;border:1px solid var(--border);padding:18px;gap:12px;background:var(--card);box-shadow:none}
+:root[data-console-design="soft"] .services-page{max-width:1440px;margin:auto}
+:root[data-console-design="soft"] .services-page [data-slot=page-header] h2{font-size:1.75rem}
+:root[data-console-design="soft"] .services-page .filter-panel{background:var(--card);padding:20px 22px;border:1px solid var(--border);border-radius:16px;margin-bottom:20px}
+:root[data-console-design="soft"] .services-page .application-table{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:0 3px 12px color-mix(in srgb,var(--foreground) 3%,transparent)}
+:root[data-console-design="soft"] .services-page .data-table>div:first-child{padding:12px 16px;border-bottom:0}
+:root[data-console-design="soft"] .services-page [data-slot=table-header] th{background:var(--muted)}
+
+:root[data-console-design]:where(:not([data-console-design="default"])) {--console-sidebar-width:14rem}
+:root[data-console-design="compact"] {--console-sidebar-width:13rem}
+:root[data-console-design="soft"] {--console-sidebar-width:14.5rem}
+:root[data-console-density] {--console-table-cell-y:.75rem}
+:root[data-console-density="compact"] {--console-table-cell-y:.4rem}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="page-surface"] {background:var(--console-canvas)}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="page-surface"] [data-slot=card] {background:var(--card)}
+:root[data-console-density] .console-density-table [data-slot=table-cell] {padding-block:var(--console-table-cell-y)}
+:root[data-console-design]:where(:not([data-console-design="default"])) .data-table {border-radius:var(--radius);background:var(--card)}
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="shell-header"],:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="workspace-tabs"] {background:var(--background)}
+:root[data-console-design="soft"] [data-slot="shell-header"],:root[data-console-design="soft"] [data-slot="workspace-tabs"] {background:var(--console-canvas)}
+/* Keep the icon rail centered after collapsing a padded/floating navigation. */
+:root[data-console-design]:where(:not([data-console-design="default"])) [data-slot=sidebar][data-collapsible=icon] :is([data-slot=sidebar-header],[data-slot=sidebar-footer]){padding:.5rem}
+:root[data-console-design="soft"] [data-slot=sidebar][data-collapsible=icon] :is([data-slot=sidebar-gap],[data-slot=sidebar-container]){width:calc(var(--sidebar-width-icon) + .75rem)}
+:root[data-console-design="soft"] [data-slot=sidebar][data-collapsible=icon] [data-slot=sidebar-container]{padding:.75rem .375rem}
+@media(min-width:1200px){
+ :root[data-console-design="layered"] [data-home-list=work] [aria-busy]{display:grid;grid-template-columns:1fr 1fr;gap:0 24px;align-content:start}
+ :root[data-console-design="layered"] [data-home-list=work] [aria-busy]>div:last-child{grid-column:1/-1}
+ :root[data-console-design="layered"] [data-home-list=work] article{min-height:74px;border-bottom:1px solid var(--border);border-top:0}
+}
+@media(max-width:1100px){
+ :root[data-console-design="layered"] .console-home-grid{grid-template-columns:1fr}
+ :root[data-console-design="layered"] .console-home-grid>aside{display:grid;grid-template-columns:1fr 1fr}
+ :root[data-console-design]:where(:not([data-console-design="default"])) .console-home-lists{grid-template-columns:1fr}
+ :root[data-console-design]:where(:not([data-console-design="default"])) [data-home-list=delivery]{grid-column:auto}
+ :root[data-console-design]:where(:not([data-console-design="default"])) .console-home-grid>aside{grid-template-columns:1fr 1fr}
+}
+@media(max-width:767px){
+ :root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="personal-home"]{padding:20px 16px}
+ :root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="shell-header"]{padding-inline:12px}
+ :root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="workspace-tabs"]{padding-inline:8px}
+ :root[data-console-design]:where(:not([data-console-design="default"])) [aria-label="我的待办概览"]{grid-template-columns:1fr;gap:12px}
+ :root[data-console-design]:where(:not([data-console-design="default"])) .console-home-lists{display:flex;flex-direction:column}
+ :root[data-console-design]:where(:not([data-console-design="default"])) .console-home-lists>[data-slot=card]{width:100%}
+ :root[data-console-design]:where(:not([data-console-design="default"])) [data-home-list=delivery] [aria-busy]{display:block}
+ :root[data-console-design]:where(:not([data-console-design="default"])) .console-home-grid>aside{display:flex;flex-direction:column}
+ :root[data-console-design="compact"] [aria-label="我的待办概览"]>[data-slot=card]+[data-slot=card]{border:0;border-top:1px solid var(--border)}
+ :root[data-console-design]:where(:not([data-console-design="default"])) .services-page .filter-panel{padding:12px}
+ :root[data-console-design]:where(:not([data-console-design="default"])) .services-page .application-table{border-radius:8px}
+ :root[data-console-design]:where(:not([data-console-design="default"])) [data-slot=sidebar-container]{padding:0}
+ :root[data-console-design]:where(:not([data-console-design="default"])) [data-slot="personal-home"] article{flex-wrap:wrap}
+ :root[data-console-design]:where(:not([data-console-design="default"])) .console-home-lists [data-slot=card-content],:root[data-console-design]:where(:not([data-console-design="default"])) .console-home-lists [data-slot=card-header]{padding-inline:14px}
+}

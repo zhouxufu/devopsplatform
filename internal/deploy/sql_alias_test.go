@@ -51,11 +51,11 @@ func TestSQLChangeAliasNormalization(t *testing.T) {
 
 func TestSQLChangeQualifiedDatabaseRejectedBeforeConnecting(t *testing.T) {
 	st, _, _ := deliveryFixture(t)
-	c := ResourceConnection{Name: "offline", Kind: "mysql", Endpoint: "127.0.0.1:1", Username: "qa", Config: map[string]string{"database": "target_db", "tls": "false"}}
+	c := ResourceConnection{Name: "offline", Kind: "mysql", Endpoint: "127.0.0.1:1", Username: "qa", Config: map[string]string{"tls": "false"}}
 	if err := st.UpsertConnection(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveApplicationResources("orders", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: c.Name}}}); err != nil {
+	if err := st.SaveApplicationResources("orders", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: c.Name, Config: map[string]string{"database": "target_db"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	change := sqlChangeFixture(t, st, "UPDATE other_db.menus t SET t.name='new' WHERE t.id=1")

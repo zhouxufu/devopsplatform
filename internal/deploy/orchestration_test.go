@@ -256,7 +256,7 @@ func TestDeliveryFailureStopsLaterNodes(t *testing.T) {
 	}
 	st.SetReleaseStatus(run.Steps[0].ReleaseID, "failed", "", true)
 	run, err = st.advanceDeliveryRun(run.ID, "alice", false, m, func(int64) { t.Fatal("launched after failure") })
-	if err != nil || run.Status != "failed" || run.Steps[1].Status != "pending" {
+	if err != nil || run.Status != "running" || run.Steps[1].Status != "pending" {
 		t.Fatalf("failure propagation: %#v %v", run, err)
 	}
 	if _, err := st.AdvanceDeliveryRun(run.ID, "alice", true, m); err == nil {

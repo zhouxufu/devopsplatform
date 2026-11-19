@@ -1,11 +1,11 @@
 apiVersion: deploy.logplatform.io/v1
 id: docker-host-deploy
 name: 部署 Docker 容器（SSH）
-description: 按镜像 digest 拉取并替换远程容器，失败恢复旧镜像
+description: 拉取仓库镜像或上传并校验镜像文件；替换容器，失败恢复原容器配置
 category: 部署
 kind: deploy
 driver: docker-host
-accepts: [oci-image]
+accepts: [oci-image, docker-image-archive]
 params:
   - {name: HOST, type: input, label: 目标主机（主机名）}
   - {name: CONTAINER_NAME, type: input, label: 容器名，默认服务名, default: ""}

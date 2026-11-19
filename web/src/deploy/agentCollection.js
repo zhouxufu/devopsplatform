@@ -34,3 +34,15 @@ export function collectMultiline(c) {
   if (c.multiline_mode === 'custom') return (c.multiline || '').trim()
   return ''
 }
+
+// Return an editor location, not just a generic save error. Do not interpret
+// Agent's Go/RE2 expressions with the browser's different RegExp grammar.
+export function validateCollections(items = []) {
+  if (!items.length) return {index: 0, field: 'application_id', message: '请添加至少一个日志采集项'}
+  for (const [index, item] of items.entries()) {
+    if (!item?.application_id) return {index, field: 'application_id', message: `采集项 ${index + 1}：请选择平台应用`}
+    if (!item.paths_text?.split('\n').some(path => path.trim())) return {index, field: 'paths_text', message: `采集项 ${index + 1}：请填写日志绝对路径`}
+    if (item.multiline_mode === 'custom' && !collectMultiline(item)) return {index, field: 'multiline', message: `采集项 ${index + 1}：请填写首行正则，或改用单行日志`}
+  }
+  return null
+}

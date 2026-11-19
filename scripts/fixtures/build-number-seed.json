@@ -1,0 +1,14 @@
+{
+ "services":[
+  {"name":"estate-ai-seek","display_name":"AI 服务（模拟）","application_id":"fixture-ai","artifact_type":"image","branch":"test-release","tags":[]},
+  {"name":"estate-bus","display_name":"总平台（模拟）","application_id":"fixture-bus","artifact_type":"jar","branch":"master-dev-optimize","tags":[]}
+ ],
+ "buildRows":[
+  {"id":17,"number":5,"service":"estate-ai-seek","version":"671ed908","branch":"test-release","status":"success","actor":"designer","started_at":1793857200,"ended_at":1793857260,"stages":[{"name":"Java 构建","status":"success"}]},
+  {"id":18,"number":1,"service":"estate-bus","version":"5944f813647","branch":"master-dev-optimize","status":"failed","actor":"designer","started_at":1793857280,"ended_at":1793857300,"stages":[{"name":"Java 构建","status":"failed"}]}
+ ],
+ "serviceSummary":[
+  {"name":"estate-ai-seek","latest_run":{"id":17,"number":5,"service":"estate-ai-seek","status":"success","branch":"test-release","version":"671ed908","started_at":1793857200},"environments":[]},
+  {"name":"estate-bus","latest_run":{"id":18,"number":1,"service":"estate-bus","status":"failed","branch":"master-dev-optimize","version":"5944f813647","started_at":1793857280},"environments":[]}
+ ]
+}

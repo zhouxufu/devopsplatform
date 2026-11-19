@@ -1,7 +1,12 @@
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
+import {highlightSQL} from '../shared/sqlHighlight.js'
 
-const markdown = new Marked({ gfm: true, breaks: true, walkTokens(token) {
+const markdown = new Marked({ gfm: true, breaks: true, renderer: {code({text,lang}) {
+  const language=String(lang||'').trim().split(/\s/)[0].toLowerCase()
+  const escape=value=>value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+  return `<pre><code${['sql','mysql'].includes(language)?' data-code-language="sql"':''}>${escape(text)}\n</code></pre>`
+}}, walkTokens(token) {
   if (token.type === 'image' && /^attachment:[a-f0-9]{32}$/.test(token.href)) token.href = descriptionImageURL(token.href)
 } })
 
@@ -43,8 +48,8 @@ export function descriptionImageURL(value, sourceURL = '') {
 }
 
 // The list uses text, while details use this same sanitized, basic-HTML allowlist.
-// Images become text markers and explicit preview descriptors, never live <img>
-// nodes. Merely opening a list/detail must not load remote images or beacons.
+// Images become inert markers and preview descriptors. Consumers may render
+// thumbnails only through an authenticated same-origin attachment route.
 export function prepareDescription(value, sourceURL = '', format = '') {
   let raw = String(value ?? '')
   if (format === 'markdown') raw = markdown.parse(raw)
@@ -56,11 +61,16 @@ export function prepareDescription(value, sourceURL = '', format = '') {
   }
   const fragment = DOMPurify.sanitize(raw, {
     ALLOWED_TAGS: [...tags, 'img'],
-    ALLOWED_ATTR: ['href', 'title', 'colspan', 'rowspan', 'src', 'alt'],
+    ALLOWED_ATTR: ['href', 'title', 'colspan', 'rowspan', 'src', 'alt', 'data-code-language'],
     ALLOW_DATA_ATTR: false,
     ALLOW_ARIA_ATTR: false,
     RETURN_DOM_FRAGMENT: true,
   })
+  for (const node of fragment.querySelectorAll('[data-code-language]')) {
+    const sql=node.nodeName==='CODE'&&node.parentElement?.nodeName==='PRE'&&node.getAttribute('data-code-language')==='sql'
+    node.removeAttribute('data-code-language')
+    if(sql){node.classList.add('sql-highlight');node.innerHTML=highlightSQL(node.textContent)}
+  }
   const base = safeDescriptionURL(sourceURL)
   const images = []
   for (const img of fragment.querySelectorAll('img')) {
@@ -70,6 +80,7 @@ export function prepareDescription(value, sourceURL = '', format = '') {
     if (url) {
       const label = (img.getAttribute('alt') || '').trim().slice(0, 80)
       images.push({ url, label })
+      marker.dataset.descriptionImage=String(images.length-1)
       marker.textContent = `[图片 ${images.length}${label ? '：' + label : ''}]`
     } else marker.textContent = '[图片地址不可用]'
     img.replaceWith(marker)

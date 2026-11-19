@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -21,6 +22,25 @@ import (
 
 func integrationSchema(identity, doc string) []string {
 	return []string{
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_test_layouts (application_id VARCHAR(191) NOT NULL, case_id BIGINT NOT NULL, owner VARCHAR(191) NOT NULL, workspace VARCHAR(191) NOT NULL, document %s NOT NULL, revision BIGINT NOT NULL, PRIMARY KEY(application_id,case_id,owner,workspace))`, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_lineage (snapshot_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_work_item_events (work_item_id BIGINT NOT NULL, snapshot_id BIGINT NOT NULL, document %s NOT NULL, PRIMARY KEY(work_item_id,snapshot_id))`, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_maintainer_maps (snapshot_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_change_contexts (snapshot_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
+		`CREATE TABLE IF NOT EXISTS api_document_maintainers (snapshot_id BIGINT PRIMARY KEY, maintainer VARCHAR(191) NOT NULL)`,
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS bug_evidence (id %s, work_item_id BIGINT NOT NULL, owner VARCHAR(191) NOT NULL, request_key VARCHAR(64) NOT NULL, request_digest VARCHAR(64) NOT NULL, reference_key VARCHAR(64) NOT NULL, kind VARCHAR(16) NOT NULL, document %s NOT NULL, created_at BIGINT NOT NULL, UNIQUE(owner,request_key), UNIQUE(work_item_id,owner,reference_key))`, identity, doc),
+		`CREATE TABLE IF NOT EXISTS api_test_document_reviews (application_id VARCHAR(191) NOT NULL, case_id BIGINT NOT NULL, case_revision BIGINT NOT NULL, step_index BIGINT NOT NULL, snapshot_id BIGINT NOT NULL, actor VARCHAR(191) NOT NULL, reviewed_at BIGINT NOT NULL, note TEXT NOT NULL, PRIMARY KEY(application_id,case_id,case_revision,step_index,snapshot_id))`,
+		`CREATE TABLE IF NOT EXISTS api_test_run_cases (run_id BIGINT NOT NULL, case_id BIGINT NOT NULL, PRIMARY KEY(run_id,case_id))`,
+		`CREATE TABLE IF NOT EXISTS api_test_case_access (case_id BIGINT PRIMARY KEY, visibility VARCHAR(16) NOT NULL)`,
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_test_suites (id %s, application_id VARCHAR(191) NOT NULL, owner VARCHAR(191) NOT NULL, visibility VARCHAR(16) NOT NULL, document %s NOT NULL, revision BIGINT NOT NULL, deleted BIGINT NOT NULL, updated_at BIGINT NOT NULL)`, identity, doc),
+		`CREATE TABLE IF NOT EXISTS api_test_run_index (run_id BIGINT PRIMARY KEY, application_id VARCHAR(191) NOT NULL, owner VARCHAR(191) NOT NULL, source VARCHAR(16) NOT NULL, environment VARCHAR(191) NOT NULL, case_id BIGINT NOT NULL, suite_id BIGINT NOT NULL, name VARCHAR(200) NOT NULL)`,
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_test_profiles (application_id VARCHAR(191) NOT NULL, environment VARCHAR(191) NOT NULL, document %s NOT NULL, revision BIGINT NOT NULL, PRIMARY KEY(application_id,environment))`, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_test_cases (id %s, application_id VARCHAR(191) NOT NULL, owner VARCHAR(191) NOT NULL, document %s NOT NULL, revision BIGINT NOT NULL, deleted BIGINT NOT NULL, updated_at BIGINT NOT NULL)`, identity, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_test_runs (id %s, application_id VARCHAR(191) NOT NULL, service VARCHAR(191) NOT NULL, owner VARCHAR(191) NOT NULL, request_key VARCHAR(64) NOT NULL, request_digest VARCHAR(64) NOT NULL, document %s NOT NULL, status VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, UNIQUE(application_id,owner,request_key))`, identity, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_sources (application_id VARCHAR(191) PRIMARY KEY, document %s NOT NULL, actor VARCHAR(191) NOT NULL, updated_at BIGINT NOT NULL)`, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_snapshots (id %s, application_id VARCHAR(191) NOT NULL, service VARCHAR(191) NOT NULL, run_id BIGINT NOT NULL, artifact_id BIGINT NOT NULL, artifact_digest VARCHAR(191) NOT NULL, commit_ref VARCHAR(191) NOT NULL, provider VARCHAR(191) NOT NULL, provider_version VARCHAR(191) NOT NULL, digest VARCHAR(80) NOT NULL, document %s NOT NULL, created_at BIGINT NOT NULL, UNIQUE(application_id,run_id,artifact_id,digest))`, identity, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_environment_sources (application_id VARCHAR(191) NOT NULL, environment VARCHAR(191) NOT NULL, document %s NOT NULL, actor VARCHAR(191) NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY(application_id,environment))`, doc),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_versions (id %s, application_id VARCHAR(191) NOT NULL, environment VARCHAR(191) NOT NULL, service VARCHAR(191) NOT NULL, run_id BIGINT NOT NULL, artifact_id BIGINT NOT NULL, artifact_digest VARCHAR(191) NOT NULL, commit_ref VARCHAR(191) NOT NULL, provider VARCHAR(191) NOT NULL, provider_version VARCHAR(191) NOT NULL, digest VARCHAR(80) NOT NULL, document %s NOT NULL, created_at BIGINT NOT NULL, baseline_id BIGINT NOT NULL, comparison %s NOT NULL, UNIQUE(application_id,environment,run_id,artifact_id,digest,baseline_id))`, identity, doc, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS workbench_queries (id %s, kind VARCHAR(32) NOT NULL, document %s NOT NULL, status VARCHAR(32) NOT NULL, owner VARCHAR(191) NOT NULL, revision BIGINT NOT NULL)`, identity, doc),
 		`CREATE TABLE IF NOT EXISTS resource_applications (name VARCHAR(191) PRIMARY KEY)`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS redis_execution_ledger (target_key VARCHAR(80) NOT NULL, change_id BIGINT NOT NULL, command_index BIGINT NOT NULL, run_id BIGINT NOT NULL, node_id VARCHAR(191) NOT NULL, status VARCHAR(32) NOT NULL, result %s NOT NULL, PRIMARY KEY(target_key,change_id,command_index))`, doc),
@@ -47,8 +67,8 @@ func validateIntegrationConnection(c *ResourceConnection) error {
 		if err != nil || strings.TrimSpace(host) == "" || strings.ContainsAny(host, " /@?#") || portErr != nil || portNumber < 1 || portNumber > 65535 {
 			return fmt.Errorf("MySQL 地址请填写 host:port，例如 192.168.0.32:3306；不要填写带密码的 DSN")
 		}
-		if !sqlIdentifierRE.MatchString(c.Config["database"]) {
-			return fmt.Errorf("MySQL 必须指定数据库，名称仅支持字母、数字、下划线")
+		if database := c.Config["database"]; database != "" && !sqlIdentifierRE.MatchString(database) {
+			return fmt.Errorf("MySQL 数据库名称仅支持字母、数字、下划线，实例连接可不指定数据库")
 		}
 		if tls := c.Config["tls"]; tls != "" && tls != "true" && tls != "false" {
 			return fmt.Errorf("MySQL TLS 仅支持 true（校验证书）或 false（内网明文）")
@@ -147,6 +167,9 @@ func testIntegrationConnection(ctx context.Context, c *ResourceConnection) error
 			return err
 		}
 		defer db.Close()
+		if c.Config["database"] == "" {
+			return nil
+		}
 		_, err = readSQLCatalog(ctx, db, c.Config["database"])
 		return err
 	}
@@ -173,9 +196,21 @@ func testIntegrationConnection(ctx context.Context, c *ResourceConnection) error
 // The 16.0 provider uses documented legacy JSON sessions, not REST v1 tokens.
 // Cookies and passwords are never included in URLs, logs or the public config.
 type zentaoLegacy struct {
-	root     string
-	client   *http.Client
-	pathInfo bool
+	queryMu         sync.Mutex
+	root            string
+	client          *http.Client
+	pathInfo        bool
+	authExpired     atomic.Bool
+	authInvalidated func()
+	// Native search setup only, never Bug results. Guarded by queryMu.
+	searchProduct       int
+	searchGroupItems    int
+	searchInitializedAt time.Time
+	searchDigest        string
+	searchCompiledAt    time.Time
+	// Display dictionaries only, scoped to this connection/identity session.
+	// Guarded by queryMu; never cache Bug contents or configured overrides.
+	resolutionDictionaries map[string]researchResolutionDictionary
 }
 
 // Only the anonymous, read-only session request may probe another route.
@@ -229,6 +264,23 @@ func newZentaoLegacy(ctx context.Context, c *ResourceConnection) (*zentaoLegacy,
 }
 
 func (z *zentaoLegacy) requestURL(module, method string, args url.Values) (string, error) {
+	if module == "api" && method == "getModel" {
+		if args.Get("moduleName") == "file" && args.Get("methodName") == "getById" {
+			file := strings.TrimPrefix(args.Get("params"), "fileID=")
+			id, err := strconv.ParseInt(file, 10, 64)
+			if err != nil || id <= 0 || args.Get("params") != "fileID="+strconv.FormatInt(id, 10) || len(args) != 3 {
+				return "", fmt.Errorf("附件元数据参数无效")
+			}
+			if z.pathInfo {
+				return z.root + "/api-getmodel-file-getbyid-" + url.PathEscape(args.Get("params")) + ".json", nil
+			}
+		} else if err := validateBugListModelArgs(args); err != nil {
+			return "", err
+		}
+		if z.pathInfo {
+			return z.root + "/api-getmodel-bug-getbylist-" + url.PathEscape(args.Get("params")) + ".json", nil
+		}
+	}
 	if !z.pathInfo {
 		q := url.Values{"m": {module}, "f": {method}, "t": {"json"}}
 		for k, v := range args {
@@ -241,9 +293,22 @@ func (z *zentaoLegacy) requestURL(module, method string, args url.Values) (strin
 	var keys, defaults []string
 	switch module + "/" + method {
 	case "api/getSessionID", "user/login":
+	case "search/buildQuery":
+	case "search/buildForm":
+		keys = []string{"module"}
+		defaults = []string{"bug"}
+	case "bug/view", "bug/resolve", "bug/activate", "bug/close", "bug/assignTo", "bug/edit":
+		keys = []string{"bugID"}
+		defaults = []string{"0"}
+	case "story/view", "story/edit":
+		keys = []string{"storyID"}
+		defaults = []string{"0"}
 	case "bug/browse":
 		keys = []string{"productID", "branch", "browseType", "param", "orderBy", "recTotal", "recPerPage", "pageID"}
 		defaults = []string{"0", "0", "all", "0", "id_asc", "0", "100", "1"}
+	case "product/browse":
+		keys = []string{"productID", "branch", "browseType", "param", "storyType", "orderBy", "recTotal", "recPerPage", "pageID"}
+		defaults = []string{"0", "all", "all", "0", "story", "id_asc", "0", "100", "1"}
 	case "company/browse":
 		keys = []string{"browseType", "param", "type", "orderBy", "recTotal", "recPerPage", "pageID"}
 		defaults = []string{"inside", "0", "bydept", "id_asc", "0", "100", "1"}
@@ -284,6 +349,9 @@ func (z *zentaoLegacy) bugURL(id string) string {
 }
 
 func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, form url.Values, out any) error {
+	if z.authExpired.Load() {
+		return &zentaoAuthenticationError{"来源会话已失效，请重新验证本人来源账号；未自动重试操作"}
+	}
 	address, err := z.requestURL(module, method, args)
 	if err != nil {
 		return err
@@ -309,6 +377,9 @@ func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, fo
 		return fmt.Errorf("无法连接禅道服务")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || ((resp.StatusCode >= 300 && resp.StatusCode < 400) && zentaoLoginRedirect(resp.Header.Get("Location"))) {
+		return z.expireAuthentication()
+	}
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == 404 || resp.StatusCode == 405 || (resp.StatusCode >= 300 && resp.StatusCode < 400) {
 			return &zentaoRouteError{fmt.Sprintf("禅道 %s/%s 返回 HTTP %d，请检查安装路径或路由配置", module, method, resp.StatusCode)}
@@ -325,12 +396,31 @@ func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, fo
 		User   json.RawMessage `json:"user"`
 	}
 	raw = []byte(strings.TrimPrefix(strings.TrimSpace(string(raw)), "\ufeff"))
+	if module == "api" && method == "getModel" && !json.Valid(raw) && strings.Contains(string(raw), "apiGetModel") {
+		return &zentaoModelDisabledError{}
+	}
+	// Legacy search responds with JS navigation. Do not follow that URL.
+	if module == "search" && method == "buildQuery" && !json.Valid(raw) {
+		if strings.Contains(strings.ToLower(string(raw)), "user-login") {
+			return z.expireAuthentication()
+		}
+		if !strings.Contains(string(raw), "location") {
+			return fmt.Errorf("来源搜索条件未被接受，请检查搜索权限")
+		}
+		return nil
+	}
 	if json.Unmarshal(raw, &envelope) != nil {
+		if module != "user" && module != "api" && (strings.Contains(strings.ToLower(string(raw)), "user-login") || strings.Contains(string(raw), `id="loginForm"`)) {
+			return z.expireAuthentication()
+		}
 		return &zentaoRouteError{fmt.Sprintf("禅道 %s/%s 未返回 JSON（可能是登录页、代理拦截页或路由不匹配）", module, method)}
 	}
-	if envelope.Status != "success" {
+	// getByList returns status=fail with data=[] when all selected IDs have
+	// disappeared. This is an empty live result, not cached data or an error.
+	emptyBugList := module == "api" && method == "getModel" && envelope.Status == "fail" && (string(envelope.Data) == `"[]"` || string(envelope.Data) == `[]`)
+	if envelope.Status != "success" && !emptyBugList {
 		if module == "user" && method == "login" {
-			return fmt.Errorf("账号认证未通过，请检查用户名、密码、账号锁定或禁用状态；未自动重试登录")
+			return &zentaoAuthenticationError{"账号认证未通过，请检查用户名、密码、账号锁定或禁用状态；未自动重试登录"}
 		}
 		return fmt.Errorf("禅道接口拒绝请求，请检查账号权限和会话")
 	}
@@ -350,6 +440,14 @@ func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, fo
 	if len(data) == 0 || string(data) == "null" {
 		data = []byte("{}")
 	}
+	if module != "user" && module != "api" {
+		var redirect struct {
+			Locate string `json:"locate"`
+		}
+		if json.Unmarshal(data, &redirect) == nil && zentaoLoginRedirect(redirect.Locate) {
+			return z.expireAuthentication()
+		}
+	}
 	if err = json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("禅道接口数据格式不兼容，请检查 16.0 JSON 接口")
 	}
@@ -357,6 +455,9 @@ func (z *zentaoLegacy) call(ctx context.Context, module, method string, args, fo
 }
 
 type zentaoBug struct {
+	Severity       sourceCode  `json:"severity"`
+	Priority       sourceCode  `json:"pri"`
+	Resolution     sourceCode  `json:"resolution"`
 	ID             json.Number `json:"id"`
 	Title          string      `json:"title"`
 	Status         string      `json:"status"`
@@ -581,7 +682,7 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string, st
 		}
 		s.Audit(actor, "sync", "zentao", name, map[string]any{"status": state.Status, "detail": state.Detail})
 	}()
-	z, err := newZentaoLegacy(ctx, c)
+	z, err := s.connectionZentao(ctx, c)
 	if err != nil {
 		return state, err
 	}
@@ -624,6 +725,9 @@ func (s *Store) syncZentao(ctx context.Context, name, baseline, actor string, st
 			if _, e = tx.Exec(`UPDATE work_items SET title=?,url=?,external_status=?,description=?,status=?,updated_at=?,assigned_to=?,opened_by=?,resolved_by=?,closed_by=? WHERE id=?`, bug.Title, link, bug.Status, bug.Steps, status, state.LastAt, strings.TrimSpace(bug.AssignedTo), strings.TrimSpace(bug.OpenedBy), strings.TrimSpace(bug.ResolvedBy), strings.TrimSpace(bug.ClosedBy), itemID); e != nil {
 				return state, e
 			}
+		}
+		if err = saveIssueFields(tx, itemID, issueFields(c, string(bug.Severity), string(bug.Priority), string(bug.Resolution), bug.ClosedDate)); err != nil {
+			return state, err
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -702,6 +806,9 @@ func (s *Store) syncDueIssues(now time.Time) {
 		last[v.Connection] = v.LastAt
 	}
 	for _, public := range s.Connections() {
+		if public.Kind == "zentao" {
+			continue
+		} // Live list; never repopulate old snapshots.
 		minutes, _ := strconv.Atoi(public.Config["sync_minutes"])
 		if _, supported := workItemSources[public.Kind]; !supported || minutes < 1 || now.Unix()-last[public.Name] < int64(minutes*60) {
 			continue

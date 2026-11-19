@@ -45,6 +45,9 @@ func deliveryReviewRequired(p *DeliveryPlan) bool {
 	if p.Template.Workbench != "" {
 		return p.WorkbenchPolicy == nil || p.WorkbenchPolicy.ChangeApproval
 	}
+	if p.StrategyKind == "standard" && (p.Environment.Purpose == "development" || p.Environment.Purpose == "test") {
+		return false // Standard non-production delivery; explicit/custom gates remain intact.
+	}
 	for _, node := range p.Nodes {
 		if node.Kind == "mysql" || node.Kind == "redis" {
 			return true
@@ -54,9 +57,11 @@ func deliveryReviewRequired(p *DeliveryPlan) bool {
 }
 
 type WorkbenchQuery struct {
+	Database    string        `json:"database,omitempty"`
 	Service     string        `json:"service"`
 	Environment string        `json:"environment"`
 	Alias       string        `json:"resource_alias"`
+	Connection  string        `json:"connection,omitempty"`
 	SQL         string        `json:"sql,omitempty"`
 	Commands    string        `json:"commands,omitempty"`
 	TaskID      int64         `json:"task_id,omitempty"`
@@ -81,7 +86,49 @@ func queryHash(v any) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
+
+// Direct connections are query-only; changes and data sync still use bindings.
+func (s *Store) workbenchSQLConnection(q WorkbenchQuery) (*ResourceConnection, error) {
+	return s.workbenchConnection("dbms", q)
+}
+func (s *Store) workbenchConnection(kind string, q WorkbenchQuery) (*ResourceConnection, error) {
+	if q.Database != "" && (kind != "dbms" || q.Connection == "") {
+		return nil, fmt.Errorf("数据库仅能在直接连接查询时选择；应用资源沿用已绑定的数据库")
+	}
+	if q.Connection == "" {
+		if kind == "dbms" {
+			return s.sqlBinding(q.Service, q.Environment, q.Alias)
+		}
+		return s.redisBinding(q.Service, q.Environment, q.Alias)
+	}
+	if q.Service != "" || q.Alias != "" || q.TaskID != 0 {
+		return nil, fmt.Errorf("直接连接查询不能同时指定应用资源或数据同步任务")
+	}
+	if s.GetEnvironment(q.Environment) == nil {
+		return nil, fmt.Errorf("请选择有效环境")
+	}
+	c := s.GetConnection(q.Connection)
+	if c == nil || c.Kind != workbenchChangeKind(kind) {
+		return nil, fmt.Errorf("连接不存在或类型不匹配")
+	}
+	if kind == "dbms" {
+		var scope string
+		err := s.db.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, "mysql_direct_query_scope:"+c.Name).Scan(&scope)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, fmt.Errorf("无法验证直接查询范围")
+		}
+		if err == nil && scope != q.Database {
+			return nil, fmt.Errorf("请选择原查询范围内的数据库；其他数据库请使用应用资源绑定或新建实例连接")
+		}
+		return mysqlDatabaseTarget(c, map[string]string{"database": q.Database})
+	}
+	return c, nil
+}
+
 func (s *Store) queryTargets(kind string, q WorkbenchQuery) (map[string]string, string, error) {
+	if q.Connection != "" && q.TaskID != 0 {
+		return nil, "", fmt.Errorf("直接连接不支持数据同步任务")
+	}
 	approvers := map[string]string{}
 	connections := []*ResourceConnection{}
 	targets := []string{q.Environment}
@@ -119,9 +166,11 @@ func (s *Store) queryTargets(kind string, q WorkbenchQuery) (map[string]string, 
 		var c *ResourceConnection
 		var err error
 		if kind == "dbms" {
-			c, err = s.sqlBinding(q.Service, name, q.Alias)
+			q.Environment = name
+			c, err = s.workbenchSQLConnection(q)
 		} else {
-			c, err = s.redisBinding(q.Service, name, q.Alias)
+			q.Environment = name
+			c, err = s.workbenchConnection(kind, q)
 		}
 		if err != nil {
 			return nil, "", err
@@ -168,7 +217,7 @@ func (s *Store) executeWorkbenchQuery(ctx context.Context, kind string, q Workbe
 		if err != nil {
 			return nil, err
 		}
-		c, err := s.sqlBinding(q.Service, q.Environment, q.Alias)
+		c, err := s.workbenchSQLConnection(q)
 		if err != nil {
 			return nil, err
 		}
@@ -179,11 +228,13 @@ func (s *Store) executeWorkbenchQuery(ctx context.Context, kind string, q Workbe
 		s.Audit(actor, "query", "mysql", c.Name, map[string]any{"environment": q.Environment, "service": q.Service, "table": parsed.Table, "rows": len(result["rows"].([]map[string]any))})
 		return result, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	commands, err := parseRedisCommandText(q.Commands, redisReadKeys)
 	if err != nil {
 		return nil, err
 	}
-	c, err := s.redisBinding(q.Service, q.Environment, q.Alias)
+	c, err := s.workbenchConnection(kind, q)
 	if err != nil {
 		return nil, err
 	}
@@ -295,9 +346,9 @@ func (s *Store) handleWorkbenchQueries(w http.ResponseWriter, r *http.Request, k
 		var c *ResourceConnection
 		var err error
 		if kind == "dbms" {
-			c, err = s.sqlBinding(service, env, alias)
+			c, err = s.workbenchSQLConnection(WorkbenchQuery{Service: service, Environment: env, Alias: alias, Connection: r.URL.Query().Get("connection"), Database: r.URL.Query().Get("database")})
 		} else {
-			c, err = s.redisBinding(service, env, alias)
+			c, err = s.workbenchConnection(kind, WorkbenchQuery{Service: service, Environment: env, Alias: alias, Connection: r.URL.Query().Get("connection")})
 		}
 		if err != nil {
 			respond(nil, err)
@@ -442,6 +493,7 @@ func (s *Store) handleWorkbenchQueries(w http.ResponseWriter, r *http.Request, k
 			}
 		}
 		v.Status = "rejected"
+		v.Approver = actor
 		if parts[2] == "approve" {
 			v.Status = "approved"
 			v.Approver = actor

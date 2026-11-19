@@ -18,14 +18,39 @@ import (
 const tokenPrefix = "lp_dev_"
 
 var allowedScopes = map[string]bool{
-	"logs:read":     true,
-	"metrics:read":  true,
-	"traces:read":   true,
-	"builds:read":   true,
-	"releases:read": true,
+	"resources:read":   true,
+	"resources:write":  true,
+	"apitests:read":    true,
+	"apitests:write":   true,
+	"apitests:execute": true,
+	"apidocs:read":     true,
+	"apidocs:write":    true,
+	"arthas:read":      true,
+	"logs:read":        true,
+	"metrics:read":     true,
+	"traces:read":      true,
+	"builds:read":      true,
+	"releases:read":    true,
+	"workitems:read":   true,
+	"workitems:write":  true,
+	"changes:read":     true,
+	"changes:write":    true,
+	"builds:trigger":   true,
+	"delivery:read":    true,
+	"delivery:write":   true,
+	"delivery:prepare": true,
+	"delivery:execute": true,
 }
 
 type AccessToken struct {
+	Owner        string `json:"owner,omitempty"`
+	role         string
+	verified     bool
+	identities   string
+	displayNames string
+	reviewers    string
+	Revision     int64    `json:"revision"`
+	DeletedAt    int64    `json:"deleted_at,omitempty"`
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	Prefix       string   `json:"prefix"`
@@ -40,6 +65,7 @@ type AccessToken struct {
 }
 
 type AuditEvent struct {
+	Actor       string `json:"actor,omitempty"`
 	ID          int64  `json:"id"`
 	TokenID     string `json:"token_id"`
 	TokenName   string `json:"token_name"`
@@ -53,9 +79,10 @@ type AuditEvent struct {
 }
 
 type tokenFile struct {
-	Tokens []AccessToken `json:"tokens"`
-	Audit  []AuditEvent  `json:"audit"`
-	NextID int64         `json:"next_audit_id"`
+	Actions []PlatformAction `json:"actions,omitempty"`
+	Tokens  []AccessToken    `json:"tokens"`
+	Audit   []AuditEvent     `json:"audit"`
+	NextID  int64            `json:"next_audit_id"`
 }
 
 type TokenStore struct {
@@ -97,6 +124,7 @@ func (s *TokenStore) saveLocked() error {
 }
 
 type CreateTokenRequest struct {
+	Owner         string   `json:"-"`
 	Name          string   `json:"name"`
 	Scopes        []string `json:"scopes"`
 	Applications  []string `json:"applications"`
@@ -131,36 +159,53 @@ func validateScopeValues(label string, values []string) error {
 	return nil
 }
 
-func (s *TokenStore) Create(req CreateTokenRequest) (AccessToken, string, error) {
+func validateTokenRequest(req CreateTokenRequest) (CreateTokenRequest, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || len([]rune(req.Name)) > 64 {
-		return AccessToken{}, "", fmt.Errorf("令牌名称必填且不能超过 64 个字符")
+		return req, fmt.Errorf("令牌名称必填且不能超过 64 个字符")
 	}
 	req.Scopes = normalizeValues(req.Scopes, len(allowedScopes))
 	if len(req.Scopes) == 0 {
-		return AccessToken{}, "", fmt.Errorf("至少选择一个只读权限")
+		return req, fmt.Errorf("至少选择一个权限")
 	}
 	for _, scope := range req.Scopes {
 		if !allowedScopes[scope] {
-			return AccessToken{}, "", fmt.Errorf("不支持的权限 %s", scope)
+			return req, fmt.Errorf("不支持的权限 %s", scope)
+		}
+	}
+	if req.Owner == "local" {
+		req.Owner = ""
+	}
+	for _, scope := range req.Scopes {
+		if (isWriteScope(scope) || scope == "arthas:read") && (req.Owner == "" || req.Owner == "local") {
+			return req, fmt.Errorf("写权限令牌必须由已登录的实名平台账号创建")
 		}
 	}
 	req.Applications = normalizeValues(req.Applications, 100)
 	req.Environments = normalizeValues(req.Environments, 20)
 	if len(req.Applications) == 0 || len(req.Environments) == 0 {
-		return AccessToken{}, "", fmt.Errorf("应用和环境范围必填；需要全部范围时显式填写 *")
+		return req, fmt.Errorf("应用和环境范围必填；需要全部范围时显式填写 *")
 	}
 	if err := validateScopeValues("应用", req.Applications); err != nil {
-		return AccessToken{}, "", err
+		return req, err
 	}
 	if err := validateScopeValues("环境", req.Environments); err != nil {
-		return AccessToken{}, "", err
+		return req, err
 	}
 	if req.ExpiresInDays <= 0 {
 		req.ExpiresInDays = 30
 	}
 	if req.ExpiresInDays > 365 {
-		return AccessToken{}, "", fmt.Errorf("有效期不能超过 365 天")
+		return req, fmt.Errorf("有效期不能超过 365 天")
+	}
+	return req, nil
+}
+
+func (s *TokenStore) Create(req CreateTokenRequest) (AccessToken, string, error) {
+	var validationErr error
+	req, validationErr = validateTokenRequest(req)
+	if validationErr != nil {
+		return AccessToken{}, "", validationErr
 	}
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
@@ -174,7 +219,8 @@ func (s *TokenStore) Create(req CreateTokenRequest) (AccessToken, string, error)
 	}
 	now := time.Now()
 	token := AccessToken{
-		ID: hex.EncodeToString(idBytes), Name: req.Name, Prefix: rawToken[:15], Hash: hex.EncodeToString(hash[:]),
+		Owner: req.Owner,
+		ID:    hex.EncodeToString(idBytes), Name: req.Name, Prefix: rawToken[:15], Hash: hex.EncodeToString(hash[:]),
 		Scopes: req.Scopes, Applications: req.Applications, Environments: req.Environments,
 		CreatedAt: now.Unix(), ExpiresAt: now.Add(time.Duration(req.ExpiresInDays) * 24 * time.Hour).Unix(),
 	}
@@ -190,7 +236,12 @@ func (s *TokenStore) Create(req CreateTokenRequest) (AccessToken, string, error)
 func (s *TokenStore) List() []AccessToken {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := append([]AccessToken(nil), s.data.Tokens...)
+	out := []AccessToken{}
+	for _, t := range s.data.Tokens {
+		if t.DeletedAt == 0 {
+			out = append(out, t)
+		}
+	}
 	for i := range out {
 		out[i].Hash = ""
 	}
@@ -204,6 +255,7 @@ func (s *TokenStore) Revoke(id string) error {
 	for i := range s.data.Tokens {
 		if s.data.Tokens[i].ID == id {
 			s.data.Tokens[i].Revoked = true
+			s.data.Tokens[i].Revision++
 			return s.saveLocked()
 		}
 	}
@@ -224,7 +276,7 @@ func (s *TokenStore) Authenticate(raw string) (*AccessToken, error) {
 		if subtle.ConstantTimeCompare([]byte(token.Hash), []byte(want)) != 1 {
 			continue
 		}
-		if token.Revoked {
+		if token.Revoked || token.DeletedAt > 0 {
 			return nil, fmt.Errorf("开发工具令牌已撤销")
 		}
 		if token.ExpiresAt <= now {
@@ -266,8 +318,9 @@ func (t *AccessToken) Allows(service, environment string) error {
 
 func (s *TokenStore) Audit(token *AccessToken, tool, service, environment string, started time.Time, callErr error) {
 	e := AuditEvent{TokenID: token.ID, TokenName: token.Name, Tool: tool, Service: service, Environment: environment, Success: callErr == nil, DurationMS: time.Since(started).Milliseconds(), CreatedAt: time.Now().Unix()}
+	e.Actor = token.Owner
 	if callErr != nil {
-		e.Error = callErr.Error()
+		e.Error = scrubString(callErr.Error())
 		if len(e.Error) > 300 {
 			e.Error = e.Error[:300]
 		}
@@ -296,6 +349,102 @@ func (s *TokenStore) AuditEvents(limit int) []AuditEvent {
 	out := make([]AuditEvent, 0, count)
 	for i := len(s.data.Audit) - 1; i >= 0 && len(out) < count; i-- {
 		out = append(out, s.data.Audit[i])
+	}
+	return out
+}
+
+// Edits retain the original secret and owner. Old previews are invalidated on
+// authorization changes, even when the same key remains in the client.
+type UpdateTokenRequest struct {
+	Revision      *int64   `json:"revision"`
+	Name          string   `json:"name"`
+	Scopes        []string `json:"scopes"`
+	Applications  []string `json:"applications"`
+	Environments  []string `json:"environments"`
+	ExpiresInDays int      `json:"expires_in_days"` // zero preserves existing expiry
+}
+
+func (s *TokenStore) maintainToken(id, actor string, admin bool, req *UpdateTokenRequest, remove bool) (AccessToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Tokens {
+		old := s.data.Tokens[i]
+		if old.ID != id || old.DeletedAt > 0 {
+			continue
+		}
+		if actor == "" || actor == "local" || (!admin && old.Owner != actor) {
+			return AccessToken{}, fmt.Errorf("无权维护此令牌")
+		}
+		if req == nil || req.Revision == nil || *req.Revision != old.Revision {
+			return AccessToken{}, fmt.Errorf("令牌已变化，请刷新后重新编辑")
+		}
+		for _, a := range s.data.Actions {
+			if a.TokenID == id && a.State == "executing" {
+				return AccessToken{}, fmt.Errorf("令牌有执行中操作，先核对原操作结果")
+			}
+		}
+		next := old
+		if remove {
+			next.DeletedAt = time.Now().Unix()
+			next.Revoked = true
+		} else {
+			if old.Revoked || old.ExpiresAt <= time.Now().Unix() {
+				return AccessToken{}, fmt.Errorf("撤销/过期令牌不可恢复，请创建新令牌")
+			}
+			normalized, err := validateTokenRequest(CreateTokenRequest{Owner: old.Owner, Name: req.Name, Scopes: req.Scopes, Applications: req.Applications, Environments: req.Environments, ExpiresInDays: req.ExpiresInDays})
+			if err != nil {
+				return AccessToken{}, err
+			}
+			for _, scope := range normalized.Scopes {
+				if !admin && (scope == "resources:read" || scope == "resources:write" || scope == "apidocs:write" || scope == "arthas:read") && !contains(old.Scopes, scope) {
+					return AccessToken{}, fmt.Errorf("此权限仅管理员可授权")
+				}
+			}
+			next.Name, next.Scopes, next.Applications, next.Environments = normalized.Name, normalized.Scopes, normalized.Applications, normalized.Environments
+			if req.ExpiresInDays < 0 {
+				return AccessToken{}, fmt.Errorf("有效期无效")
+			}
+			if req.ExpiresInDays > 0 {
+				next.ExpiresAt = time.Now().Add(time.Duration(normalized.ExpiresInDays) * 24 * time.Hour).Unix()
+			}
+		}
+		next.Revision++
+		// Snapshot for an atomic persistence failure. Audit never contains secret/hash.
+		previous := s.data
+		previous.Tokens = append([]AccessToken(nil), s.data.Tokens...)
+		previous.Actions = append([]PlatformAction(nil), s.data.Actions...)
+		previous.Audit = append([]AuditEvent(nil), s.data.Audit...)
+		s.data.Tokens[i] = next
+		for j := range s.data.Actions {
+			if s.data.Actions[j].TokenID == id && s.data.Actions[j].State == "preview" {
+				s.data.Actions[j].State = "stale"
+				s.data.Actions[j].Error = "访问令牌已修改或删除，请重新预览"
+			}
+		}
+		action := "update_token"
+		if remove {
+			action = "delete_token"
+		}
+		s.data.NextID++
+		s.data.Audit = append(s.data.Audit, AuditEvent{ID: s.data.NextID, Actor: actor, TokenID: id, TokenName: next.Name, Tool: action, Success: true, CreatedAt: time.Now().Unix()})
+		if err := s.saveLocked(); err != nil {
+			s.data = previous
+			return AccessToken{}, err
+		}
+		next.Hash = ""
+		return next, nil
+	}
+	return AccessToken{}, fmt.Errorf("令牌不存在")
+}
+
+func (s *TokenStore) auditTokenIDs(actor string, admin bool) map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]bool{}
+	for _, t := range s.data.Tokens {
+		if admin || t.Owner == actor && actor != "" {
+			out[t.ID] = true
+		}
 	}
 	return out
 }

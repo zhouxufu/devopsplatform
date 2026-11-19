@@ -63,7 +63,7 @@ func (f *DeliveryRecordFilter) Validate() error {
 	if f.Page < 1 || f.Page > 1000000 || (f.PageSize != 20 && f.PageSize != 50 && f.PageSize != 100) {
 		return fmt.Errorf("页码必须为正整数，每页条数仅支持 20、50、100")
 	}
-	if f.Status != "" && f.Status != "draft" && f.Status != "ready" && !(f.Type == "versions" && (f.Status == "completed" || f.Status == "canceled")) {
+	if f.Status != "" && f.Status != "draft" && f.Status != "ready" && !(f.Type == "changes" && f.Status == "archived") && !(f.Type == "versions" && (f.Status == "completed" || f.Status == "canceled")) {
 		return fmt.Errorf("状态不支持")
 	}
 	if f.Kind != "" && f.Kind != "code" && f.Kind != "artifact" && f.Kind != "mysql" && f.Kind != "nacos" && f.Kind != "redis" && f.Kind != "manual" {

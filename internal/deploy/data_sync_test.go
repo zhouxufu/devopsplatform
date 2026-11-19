@@ -142,15 +142,19 @@ func TestDataSyncMySQLCompareFreezeExecuteApprovalAndDrift(t *testing.T) {
 	}
 	sourceConnection := *st.GetConnection("qa-mysql")
 	sourceConnection.Name = "qa-sync-source"
-	sourceConnection.Config = map[string]string{"database": "delivery_sync_source_qa", "tls": "false"}
+	sourceConnection.Config = map[string]string{"tls": "false"}
 	if err := st.UpsertConnection(sourceConnection); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SaveApplicationResources("orders", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: sourceConnection.Name}, {Alias: "db", Environment: "prod", Connection: "qa-mysql"}}}); err != nil {
+	if err := st.SaveApplicationResources("orders", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: sourceConnection.Name, Config: map[string]string{"database": "delivery_sync_source_qa"}}, {Alias: "db", Environment: "prod", Connection: "qa-mysql", Config: map[string]string{"database": "delivery_qa"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	sourceDB, err := openChangeMySQL(ctx, &sourceConnection)
+	resolvedSource, err := st.sqlBinding("orders", "test", "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDB, err := openChangeMySQL(ctx, resolvedSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,8 +253,8 @@ func TestDataSyncMySQLCompareFreezeExecuteApprovalAndDrift(t *testing.T) {
 	if count != 3 {
 		t.Fatal("target-only row lost")
 	}
-	if _, err = st.prepareSQLNode(ctx, "sql", []int64{c.ID}, "prod"); err == nil {
-		t.Fatal("repeat execution allowed")
+	if repeat, err := st.prepareSQLNode(ctx, "sql", []int64{c.ID}, "prod"); err != nil || repeat.Mode != "applied" || len(repeat.ChangeIDs) != 0 || len(repeat.Statements) != 0 || len(repeat.Applied) != 1 {
+		t.Fatal("successful sync must reuse its receipt without executable SQL", err)
 	}
 	old := *task
 	task.Name = "修改"

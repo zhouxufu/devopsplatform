@@ -44,9 +44,18 @@ func parseGradleProperties(raw, label string) ([]gradleProperty, error) {
 	return properties, nil
 }
 
-func parseGradleTasks(raw, label string) ([]string, error) {
+func parseGradleTasks(raw, label string, allowedOptions ...string) ([]string, error) {
 	items := strings.Fields(strings.ReplaceAll(raw, ",", " "))
 	for _, item := range items {
+		// Options must be explicitly allowed by the caller and match exactly.
+		// Never allow arbitrary CLI flags (e.g. init scripts or project paths).
+		allowed := false
+		for _, option := range allowedOptions {
+			allowed = allowed || item == option
+		}
+		if allowed {
+			continue
+		}
 		if strings.HasPrefix(item, "-") || !gradleTaskRE.MatchString(item) {
 			return nil, fmt.Errorf("Gradle %s含不支持的字符: %q", label, item)
 		}
@@ -66,8 +75,8 @@ func appendGradleProperties(args []string, prefix string, properties []gradlePro
 }
 
 func prepareGradleBuildConfig(sv *Service) error {
-	if sv.ArtifactType != "jar" {
-		return fmt.Errorf("结构化 Gradle 构建目前只支持 jar 服务")
+	if sv.ArtifactType != "jar" && sv.ArtifactType != "image" && sv.ArtifactType != ArtifactJavaBundle {
+		return fmt.Errorf("结构化 Gradle 构建仅支持 Java JAR 或 Java 镜像应用")
 	}
 	sv.GradleExecutable = strings.TrimSpace(sv.GradleExecutable)
 	if sv.GradleExecutable == "" {
@@ -80,7 +89,7 @@ func prepareGradleBuildConfig(sv *Service) error {
 	if sv.GradleTasks == "" {
 		sv.GradleTasks = "clean build"
 	}
-	tasks, err := parseGradleTasks(sv.GradleTasks, "任务")
+	tasks, err := parseGradleTasks(sv.GradleTasks, "任务", "--refresh-dependencies")
 	if err != nil {
 		return err
 	}

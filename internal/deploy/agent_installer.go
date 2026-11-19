@@ -34,6 +34,7 @@ type AgentInstallResult struct {
 }
 
 type AgentRemoteStatus struct {
+	AgentID   string `json:"agent_id,omitempty"`
 	Installed bool   `json:"installed"`
 	Active    bool   `json:"active"`
 	Status    string `json:"status"`
@@ -243,7 +244,11 @@ func InstallAgent(h Host, desired AgentDesiredConfig, token string) (*AgentInsta
 	if lines := strings.Split(version, "\n"); len(lines) > 0 {
 		version = strings.TrimSpace(lines[len(lines)-1])
 	}
-	return &AgentInstallResult{OK: true, AgentID: cfg.AgentID, Platform: platform, Version: version, SHA256: digest, Status: "active"}, nil
+	agentID := ""
+	if status, err := AgentStatus(h); err == nil {
+		agentID = status.AgentID
+	}
+	return &AgentInstallResult{OK: true, AgentID: agentID, Platform: platform, Version: version, SHA256: digest, Status: "active"}, nil
 }
 
 // ApplyAgentConfig updates desired runtime configuration without replacing the
@@ -276,7 +281,7 @@ func ApplyAgentConfig(h Host, desired AgentDesiredConfig, token string) error {
 }
 
 func AgentStatus(h Host) (*AgentRemoteStatus, error) {
-	out, err := SSHExec(h, `if [ ! -x /usr/local/bin/logagent ]; then echo not-installed; exit 0; fi; if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet logagent; then echo active; else echo inactive; fi; /usr/local/bin/logagent -version 2>/dev/null || true`, 15*time.Second)
+	out, err := SSHExec(h, `if [ ! -x /usr/local/bin/logagent ]; then echo not-installed; exit 0; fi; if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet logagent; then echo active; else echo inactive; fi; /usr/local/bin/logagent -version 2>/dev/null || true; /usr/local/bin/logagent -config /etc/logagent/agent.yaml -identity 2>/dev/null || true`, 15*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("查询 Agent 状态失败: %w: %s", err, strings.TrimSpace(out))
 	}
@@ -287,6 +292,9 @@ func AgentStatus(h Host) (*AgentRemoteStatus, error) {
 	status := &AgentRemoteStatus{Installed: true, Active: lines[0] == "active", Status: lines[0]}
 	if len(lines) > 1 {
 		status.Version = lines[1]
+	}
+	if len(lines) > 2 && strings.HasPrefix(lines[2], "agent_") {
+		status.AgentID = lines[2]
 	}
 	return status, nil
 }
@@ -334,9 +342,19 @@ cleanup() { rm -f %s %s %s; }
 trap cleanup EXIT
 %s
 $SUDO install -d -m 0755 /etc/logagent /var/lib/logagent
+if [ -f /usr/local/bin/logagent ]; then
+ backup_dir=/var/lib/logagent/backups/install-$(date +%%Y%%m%%d%%H%%M%%S)-$$
+ $SUDO install -d -m 0700 "$backup_dir"
+ $SUDO cp -p /usr/local/bin/logagent "$backup_dir/logagent"
+ if [ -f /etc/logagent/agent.yaml ]; then $SUDO cp -p /etc/logagent/agent.yaml "$backup_dir/agent.yaml"; fi
+ if [ -f /etc/systemd/system/logagent.service ]; then $SUDO cp -p /etc/systemd/system/logagent.service "$backup_dir/logagent.service"; fi
+fi
 $SUDO install -m 0755 %s /usr/local/bin/.logagent.new
 $SUDO mv -f /usr/local/bin/.logagent.new /usr/local/bin/logagent
 $SUDO install -m 0600 -o %s -g %s %s /etc/logagent/.agent.yaml.new
+if [ -f /etc/logagent/agent.yaml ] && /usr/local/bin/logagent -h 2>&1 | grep -q -- '-merge-collect-config'; then
+ $SUDO /usr/local/bin/logagent -config /etc/logagent/agent.yaml -merge-collect-config /etc/logagent/.agent.yaml.new -deployment-run-user "$(stat -c %%U /etc/logagent/.agent.yaml.new)"
+fi
 $SUDO mv -f /etc/logagent/.agent.yaml.new /etc/logagent/agent.yaml
 $SUDO install -m 0644 %s /etc/systemd/system/logagent.service
 $SUDO chown -R %s:%s /var/lib/logagent
@@ -364,6 +382,9 @@ getent group %s >/dev/null 2>&1 || { echo "运行用户组不存在" >&2; exit 1
 cleanup() { rm -f %s %s; }
 trap cleanup EXIT
 $SUDO install -m 0600 -o %s -g %s %s /etc/logagent/.agent.yaml.new
+if [ -f /etc/logagent/agent.yaml ] && /usr/local/bin/logagent -h 2>&1 | grep -q -- '-merge-collect-config'; then
+ $SUDO /usr/local/bin/logagent -config /etc/logagent/agent.yaml -merge-collect-config /etc/logagent/.agent.yaml.new -deployment-run-user "$(stat -c %%U /etc/logagent/.agent.yaml.new)"
+fi
 $SUDO mv -f /etc/logagent/.agent.yaml.new /etc/logagent/agent.yaml
 $SUDO install -m 0644 %s /etc/systemd/system/logagent.service
 $SUDO systemctl daemon-reload

@@ -1,14 +1,74 @@
 package deploy
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"net"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 )
+
+func TestSSHExecutionDeadlineAndCancellation(t *testing.T) {
+	for _, cancelEarly := range []bool{false, true} {
+		t.Run(fmt.Sprint(cancelEarly), func(t *testing.T) {
+			_, key, _ := ed25519.GenerateKey(rand.Reader)
+			signer, _ := ssh.NewSignerFromKey(key)
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				conn, e := listener.Accept()
+				if e != nil {
+					return
+				}
+				defer conn.Close()
+				cfg := &ssh.ServerConfig{NoClientAuth: true}
+				cfg.AddHostKey(signer)
+				server, channels, requests, e := ssh.NewServerConn(conn, cfg)
+				if e != nil {
+					return
+				}
+				defer server.Close()
+				go ssh.DiscardRequests(requests)
+				for c := range channels {
+					ch, reqs, e := c.Accept()
+					if e != nil {
+						continue
+					}
+					go func() {
+						defer ch.Close()
+						for r := range reqs {
+							r.Reply(true, nil)
+						}
+					}()
+				}
+			}()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if cancelEarly {
+				go func() { time.Sleep(40 * time.Millisecond); cancel() }()
+			}
+			start := time.Now()
+			_, err = SSHExecContext(ctx, Host{Addr: listener.Addr().String(), User: "fixture", Password: "fixture", HostKey: ssh.FingerprintSHA256(signer.PublicKey())}, "blocked", 150*time.Millisecond)
+			if err == nil || time.Since(start) > 2*time.Second {
+				t.Fatalf("SSH command not bounded: %v %s", err, time.Since(start))
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("SSH transport remained open")
+			}
+		})
+	}
+}
 
 func TestNormalizeSSHAddress(t *testing.T) {
 	tests := map[string]string{

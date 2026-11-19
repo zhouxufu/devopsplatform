@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -27,6 +28,11 @@ type Sender struct {
 	spool   *Spool
 	dropped *atomic.Int64
 	client  *http.Client
+	// A sender posts serially. Reuse the compression window and buffers instead
+	// of allocating a fresh flate encoder for every small batch.
+	rawBuffer  bytes.Buffer
+	gzipBuffer bytes.Buffer
+	gzipWriter *gzip.Writer
 
 	// 简单令牌窗口限速
 	mu          sync.Mutex
@@ -74,23 +80,39 @@ func (s *Sender) Run(ctx context.Context) {
 // persistLoop 与网络发送完全解耦。下游不可用时仍持续把内存事件写入磁盘；
 // 达到磁盘上限后不消费 channel，让背压最终停在日志文件 FD 上。
 func (s *Sender) persistLoop(ctx context.Context) {
-	tk := time.NewTicker(100 * time.Millisecond)
+	tk := time.NewTicker(500 * time.Millisecond)
 	defer tk.Stop()
-	batch := make([]PendingEvent, 0, 100)
+	batch := make([]PendingEvent, 0, batchCount)
+	payloadBytes := 0
 	flush := func(allowRetry bool) bool {
 		if len(batch) == 0 {
 			return true
 		}
+		size := len(batch)
 		for {
-			err := s.spool.EnqueueBatch(batch)
+			err := s.spool.EnqueueBatch(batch[:size])
 			if err == nil {
-				for i := range batch {
+				for i := range batch[:size] {
 					p := &batch[i]
 					s.reg.Commit(p.Key, p.Offset, p.Inode, p.Mtime, p.Head, p.Generation, p.Reset)
 				}
 				// spool 已是可靠事实源；registry 由 5s SaveLoop 合并写，崩溃时从 spool 修复。
-				batch = batch[:0]
-				return true
+				remaining := copy(batch, batch[size:])
+				clear(batch[remaining:]) // Release confirmed log bodies while idle.
+				batch = batch[:remaining]
+				if len(batch) == 0 {
+					payloadBytes = 0
+					return true
+				}
+				size = len(batch)
+				continue
+			}
+			// A larger persistence batch may exceed a small queue's capacity.
+			// Admit a prefix and let the independent sender drain it, rather than
+			// waiting forever for the entire batch to fit an empty queue.
+			if errors.Is(err, ErrSpoolFull) && size > 1 {
+				size = (size + 1) / 2
+				continue
 			}
 			if !allowRetry {
 				log.Printf("[agent] persist pending batch on shutdown: %v; source offset was not advanced", err)
@@ -111,7 +133,8 @@ func (s *Sender) persistLoop(ctx context.Context) {
 			return
 		case p := <-s.in:
 			batch = append(batch, p)
-			if len(batch) >= 100 {
+			payloadBytes += len(p.Ev.Message)
+			if len(batch) >= batchCount || payloadBytes >= batchBytes {
 				if !flush(true) {
 					return
 				}
@@ -183,26 +206,33 @@ func makeBatchID(events []types.Event) string {
 }
 
 func (s *Sender) post(ctx context.Context, req *types.IngestRequest) error {
-	var raw bytes.Buffer
-	if err := json.NewEncoder(&raw).Encode(req); err != nil {
+	req.AgentName = s.cfg.AgentName
+	req.AgentAliases = s.cfg.AgentAliases
+	s.rawBuffer.Reset()
+	if err := json.NewEncoder(&s.rawBuffer).Encode(req); err != nil {
 		return err
 	}
-	var gz bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&gz, flate.BestSpeed)
-	if err != nil {
+	s.gzipBuffer.Reset()
+	if s.gzipWriter == nil {
+		zw, err := gzip.NewWriterLevel(&s.gzipBuffer, flate.BestSpeed)
+		if err != nil {
+			return err
+		}
+		s.gzipWriter = zw
+	} else {
+		s.gzipWriter.Reset(&s.gzipBuffer)
+	}
+	if _, err := s.gzipWriter.Write(s.rawBuffer.Bytes()); err != nil {
 		return err
 	}
-	if _, err := zw.Write(raw.Bytes()); err != nil {
-		return err
-	}
-	if err := zw.Close(); err != nil {
+	if err := s.gzipWriter.Close(); err != nil {
 		return err
 	}
 
 	var attempts int
 	for {
-		s.throttle(int64(gz.Len()))
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", s.cfg.ServerURL+"/ingest", bytes.NewReader(gz.Bytes()))
+		s.throttle(int64(s.gzipBuffer.Len()))
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", s.cfg.ServerURL+"/ingest", bytes.NewReader(s.gzipBuffer.Bytes()))
 		if err != nil {
 			return err
 		}

@@ -2,11 +2,13 @@ package server
 
 import (
 	"compress/gzip"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,19 +34,22 @@ type APIServer struct {
 // AgentStat agent 心跳状态（由 ingest 更新）
 type AgentStat struct {
 	ID         string `json:"id"`
-	LastSeen   int64  `json:"last_seen"`
-	Events     int64  `json:"events"`
-	Dropped    int64  `json:"dropped"`
-	QueueDepth int    `json:"queue_depth"`
-	SpoolBytes int64  `json:"spool_bytes"`
-	Online     bool   `json:"online"`
+	Name       string `json:"name,omitempty"`
+	stable     bool
+	aliases    []string
+	LastSeen   int64 `json:"last_seen"`
+	Events     int64 `json:"events"`
+	Dropped    int64 `json:"dropped"`
+	QueueDepth int   `json:"queue_depth"`
+	SpoolBytes int64 `json:"spool_bytes"`
+	Online     bool  `json:"online"`
 }
 
 func NewAPI(st *Storage, token, busURL string) *APIServer {
 	a := &APIServer{st: st, token: token, hub: NewHub(), apps: appcatalog.NewObserver(busURL), agents: map[string]*AgentStat{}}
 	a.alerts = NewAlertEngine(st)
 	a.agg = NewMetricsAggregator(busURL)
-	go a.agg.Run(make(chan struct{}))
+	go a.agg.Run(st.stop)
 	return a
 }
 
@@ -64,6 +69,7 @@ func (a *APIServer) Routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/alerts/{id}/test", a.handleAlertsTest)
 	mux.HandleFunc("GET /api/alerts/status", a.handleAlertsStatus)
 	mux.HandleFunc("GET /api/alert-notifications", a.handleAlertNotifications)
+	a.registerQuarantine(mux)
 	a.registerUI(mux)
 	return mux
 }
@@ -98,18 +104,37 @@ func (a *APIServer) handleIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"bad json"}`, 400)
 		return
 	}
+	if len(req.BatchID) > 256 || strings.ContainsAny(req.BatchID, "\r\n\x00") {
+		http.Error(w, `{"error":"批次标识无效"}`, 400)
+		return
+	}
+	if len(req.AgentID) > 256 || len(req.AgentName) > 256 || len(req.AgentAliases) > 32 || strings.ContainsAny(req.AgentID+req.AgentName, "\r\n\x00") {
+		http.Error(w, `{"error":"invalid agent identity metadata"}`, http.StatusBadRequest)
+		return
+	}
+	for _, alias := range req.AgentAliases {
+		if len(alias) > 256 || strings.ContainsAny(alias, "\r\n\x00") {
+			http.Error(w, `{"error":"invalid agent alias"}`, http.StatusBadRequest)
+			return
+		}
+	}
 	if len(req.Events) > 2000 {
 		http.Error(w, `{"error":"too many events"}`, http.StatusRequestEntityTooLarge)
 		return
 	}
 	if len(req.Events) == 0 {
-		a.trackAgent(req.AgentID, 0, req.Dropped, req.QueueDepth, req.SpoolBytes)
+		a.trackAgent(req, 0)
 		writeJSON(w, types.IngestResponse{BatchID: req.BatchID, Accepted: 0, Acknowledged: 0})
+		return
+	}
+	if req.AgentID == "" || req.BatchID == "" {
+		http.Error(w, `{"error":"非空批次需要 agent_id 和 batch_id"}`, 400)
 		return
 	}
 	// Resolve the source-specific service name to the platform-wide stable ID.
 	// Catalog availability must never block ingestion: on a transient failure the
 	// event is accepted with its current ID and a later batch retries resolution.
+	sourceHash := hashLog(req.Events)
 	resolved := map[string]string{}
 	for i := range req.Events {
 		event := &req.Events[i]
@@ -123,12 +148,18 @@ func (a *APIServer) handleIngest(w http.ResponseWriter, r *http.Request) {
 			event.ApplicationID = id
 		}
 	}
-	accepted, err := a.st.InsertUnique(req.Events)
+	accepted, quarantined, err := a.st.AcceptBatch(req.AgentID, req.BatchID, sourceHash, req.Events)
 	if err != nil {
-		http.Error(w, `{"error":"insert: `+err.Error()+`"}`, 500)
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, ErrLogIdentityConflict) {
+			status = http.StatusConflict
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
-	a.trackAgent(req.AgentID, len(accepted), req.Dropped, req.QueueDepth, req.SpoolBytes)
+	a.trackAgent(req, len(accepted))
 	// 仅 fan-out 新写入事件；重试批次不会在实时流和指标中重复出现。
 	hits := make([]types.Hit, len(accepted))
 	for i := range accepted {
@@ -137,26 +168,68 @@ func (a *APIServer) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	a.hub.Publish(hits)
 	a.agg.Add(accepted)
-	writeJSON(w, types.IngestResponse{BatchID: req.BatchID, Accepted: len(accepted), Acknowledged: len(req.Events)})
+	writeJSON(w, types.IngestResponse{BatchID: req.BatchID, Accepted: len(accepted), Acknowledged: len(req.Events), Quarantined: quarantined})
 }
 
 // trackAgent 记录 agent 心跳与累计量
-func (a *APIServer) trackAgent(id string, events, dropped, queueDepth int, spoolBytes int64) {
-	if id == "" {
+func stableAgentID(id string) bool {
+	if !strings.HasPrefix(id, "agent_") || len(id) != 38 {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(id, "agent_"))
+	return err == nil
+}
+
+func (a *APIServer) trackAgent(req types.IngestRequest, events int) {
+	if req.AgentID == "" {
 		return
 	}
 	a.agentsMu.Lock()
 	defer a.agentsMu.Unlock()
-	s := a.agents[id]
+	s := a.agents[req.AgentID]
 	if s == nil {
-		s = &AgentStat{ID: id}
-		a.agents[id] = s
+		s = &AgentStat{ID: req.AgentID}
+		a.agents[req.AgentID] = s
 	}
 	s.LastSeen = time.Now().Unix()
 	s.Events += int64(events)
-	s.Dropped += int64(dropped)
-	s.QueueDepth = queueDepth
-	s.SpoolBytes = spoolBytes
+	s.Dropped += int64(req.Dropped)
+	s.QueueDepth, s.SpoolBytes = req.QueueDepth, req.SpoolBytes
+	if req.AgentName != "" && stableAgentID(req.AgentID) {
+		s.Name = req.AgentName
+		s.stable = true
+		s.aliases = append([]string(nil), req.AgentAliases...)
+		if len(s.aliases) == 0 {
+			s.aliases = []string{s.Name}
+		}
+	}
+	// Only explicit, uniquely claimed aliases of offline legacy senders migrate.
+	// Never merge live senders or two stable installations just by display name.
+	if !s.stable {
+		return
+	}
+	for _, alias := range s.aliases {
+		old := a.agents[alias]
+		if old == nil || old.stable || alias == s.ID || s.LastSeen-old.LastSeen < 30 {
+			continue
+		}
+		unique := true
+		for id, other := range a.agents {
+			if id != s.ID && other.stable {
+				for _, name := range other.aliases {
+					if name == alias {
+						unique = false
+					}
+				}
+			}
+		}
+		if !unique {
+			continue
+		}
+		s.Events += old.Events
+		s.Dropped += old.Dropped
+		delete(a.agents, alias)
+	}
 }
 
 // handleStats agent 在线状态 + 服务计数 + 磁盘
@@ -166,15 +239,37 @@ func (a *APIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	agents := make([]AgentStat, 0, len(a.agents))
 	for _, s := range a.agents {
 		online := now-s.LastSeen < 30
-		agents = append(agents, AgentStat{ID: s.ID, LastSeen: s.LastSeen, Events: s.Events, Dropped: s.Dropped, QueueDepth: s.QueueDepth, SpoolBytes: s.SpoolBytes})
+		agents = append(agents, AgentStat{ID: s.ID, Name: s.Name, LastSeen: s.LastSeen, Events: s.Events, Dropped: s.Dropped, QueueDepth: s.QueueDepth, SpoolBytes: s.SpoolBytes})
 		agents[len(agents)-1].Online = online
 	}
 	a.agentsMu.Unlock()
-	services, _ := a.st.ListServices()
+	sort.Slice(agents, func(i, j int) bool {
+		left, right := agents[i].Name, agents[j].Name
+		if left == "" {
+			left = agents[i].ID
+		}
+		if right == "" {
+			right = agents[j].ID
+		}
+		if left == right {
+			return agents[i].ID < agents[j].ID
+		}
+		return left < right
+	})
+	services, servicesErr := a.st.ListServices()
+	health := a.st.backendHealth()
+	storage := a.st.StorageStatus()
+	if servicesErr != nil {
+		storage.LastError = servicesErr.Error()
+	} else if health.Error != "" {
+		storage.LastError = health.Error
+	}
 	writeJSON(w, map[string]any{
-		"agents":    agents,
-		"services":  services,
-		"disk_used": a.st.DiskUsage(),
+		"agents":         agents,
+		"services":       services,
+		"disk_used":      health.Bytes,
+		"storage":        storage,
+		"retention_days": a.st.retentionDays,
 	})
 }
 
@@ -188,6 +283,19 @@ func (a *APIServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	start := end - 15*60*1000
+	if cursor := q.Get("cursor"); cursor != "" {
+		from, to, e := logCursorWindow(cursor)
+		if e != nil {
+			writeQueryError(w, e)
+			return
+		}
+		if q.Get("start") == "" {
+			start = from
+		}
+		if q.Get("end") == "" {
+			end = to
+		}
+	}
 	if v := q.Get("start"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			start = n

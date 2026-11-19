@@ -1,0 +1,10 @@
+interface:
+  display_name: "接口文档维护"
+  short_description: "按应用和环境读取、对比及上报接口文档，展示差异并处理重复快照"
+  default_prompt: "使用 $devops-api-docs 对比当前应用环境的接口文档，并预览需要上报的变化。"
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "devOps"
+      description: "用户已配置的研发效能平台 MCP，地址及令牌由客户端配置提供"

@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -28,6 +29,37 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	}
 	if err := st.UpsertService(Service{Name: "orders", ArtifactType: "jar", BuildTool: "maven", MavenGoals: "package"}); err != nil {
 		t.Fatal(err)
+	}
+	if err := st.UpsertConnection(ResourceConnection{Name: "resource-db", Kind: "mysql", Endpoint: "127.0.0.1:1", Username: "qa", Config: map[string]string{"tls": "false"}}); err != nil {
+		t.Fatal(err)
+	}
+	group := &ResourceGroup{Name: "mysql-group", Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: "resource-db", Config: map[string]string{"database": "orders"}}}}
+	if err := st.SaveResourceGroup(group); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveApplicationResources("orders", ApplicationResources{ResourceGroup: group.Name, GroupRevision: group.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := st.sqlBinding("orders", "test", "db"); err != nil || c.Name != "resource-db" {
+		t.Fatal("MySQL resource group binding lost", err)
+	}
+	group.Description = "CAS update"
+	if err := st.SaveResourceGroup(group); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.ResourceGroups()) != 1 || st.ResourceGroup(group.Name).Revision != 2 {
+		t.Fatal("MySQL resource group persistence missing")
+	}
+	if err := st.DeleteResourceGroup(group.Name); err == nil {
+		t.Fatal("MySQL referenced group deleted")
+	}
+	prep := &CodePreparation{ID: "mysql-prep", Owner: "local", State: "preview"}
+	if err := st.saveCodePreparation(prep); err != nil {
+		t.Fatal(err)
+	}
+	prep.Message = "CAS update"
+	if err := st.saveCodePreparation(prep); err != nil {
+		t.Fatal("MySQL preparation CAS failed", err)
 	}
 	batchWork := &WorkItem{Title: "MySQL 批量交付", Owner: "local"}
 	if err = st.CreateWorkItem(batchWork); err != nil {
@@ -70,6 +102,36 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	}
 	if target := st.GetServiceEnvironment("orders", "test"); target == nil || len(target.Hosts) != 1 {
 		t.Fatalf("deployment target was not persisted: %#v", target)
+	}
+	// Runtime-variable patches lock and merge the current encrypted map inside
+	// the same transaction as the environment configuration (including MySQL).
+	target := *st.GetServiceEnvironment("orders", "test")
+	target.RuntimeEnv = map[string]string{"ORIGINAL": "private-original"}
+	if err := st.UpsertServiceEnvironment(target); err != nil {
+		t.Fatal(err)
+	}
+	target.RuntimeEnv = nil
+	value := "private-new"
+	target.RuntimeEnvPatch = map[string]*string{"ADDED": &value}
+	if err := st.UpsertServiceEnvironment(target); err != nil {
+		t.Fatal(err)
+	}
+	values, err := st.decryptRuntimeEnvironment(st.GetServiceEnvironment("orders", "test").runtimeEnvEncrypted)
+	if err != nil || values["ORIGINAL"] != "private-original" || values["ADDED"] != value {
+		t.Fatal("MySQL runtime patch did not preserve saved keys")
+	}
+	for _, status := range []string{"success", "failed", "canceled", "timed_out"} {
+		d := &Deploy{Service: "orders", Host: "test-a", Environment: "test", StartedAt: time.Now().Unix()}
+		if err := st.CreateDeploy(d); err != nil {
+			t.Fatal(err)
+		}
+		st.AppendDeployLog(d.ID, "MySQL terminal update regression")
+		if err := st.FinishDeploy(d.ID, status); err != nil {
+			t.Fatalf("MySQL deploy terminal update: %v", err)
+		}
+		if got := st.GetDeploy(d.ID); got.Status != status || got.EndedAt == 0 {
+			t.Fatalf("MySQL instance still active: %+v", got)
+		}
 	}
 	if err := st.UpsertConnection(ResourceConnection{Name: "git-main", Kind: "git", Endpoint: "https://git.example.test", Username: "builder", Password: "token"}); err != nil {
 		t.Fatal(err)
@@ -165,5 +227,86 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	}
 	if ledger := st.SQLLedger(); len(ledger) != 1 || ledger[0]["status"] != "success" {
 		t.Fatalf("MySQL SQL ledger persistence failed: %+v", ledger)
+	}
+	resources := st.ApplicationResources("orders")
+	resources.ResourceGroup = ""
+	resources.GroupRevision = 0
+	if err := st.SaveApplicationResources("orders", resources); err != nil {
+		t.Fatal(err)
+	}
+	history, _ := json.Marshal(DeliveryPlan{ResourceTargets: []DeliveryResourceTarget{{GroupName: group.Name}}})
+	if _, err := st.db.Exec(`UPDATE delivery_runs SET plan=? WHERE id=?`, string(history), delivery.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteResourceGroup(group.Name); err == nil || !strings.Contains(err.Error(), "交付记录") {
+		t.Fatal("MySQL group history deletion guard failed", err)
+	}
+}
+
+func TestMySQLStandardDeliveryPolicyAndPartialScope(t *testing.T) {
+	dsn := os.Getenv("DEVOPS_TEST_STANDARD_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("requires empty disposable MySQL schema")
+	}
+	st, e := OpenDatabase(t.TempDir(), DatabaseConfig{Driver: "mysql", DSN: dsn})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer st.Close()
+	if e = st.InitializeEnvironments([]Environment{{Name: "test", DisplayName: "QA", Approvers: "reviewer"}}); e != nil {
+		t.Fatal(e)
+	}
+	w := &WorkItem{Kind: "bug", Title: "Partial work", Owner: "alice"}
+	if e = st.CreateWorkItem(w); e != nil {
+		t.Fatal(e)
+	}
+	ids := []int64{}
+	for _, title := range []string{"First", "Later"} {
+		c := &Change{Kind: "manual", Title: title, Reference: "Verify " + title, Owner: "alice"}
+		st.CreateChange(c)
+		if err := st.SetChangeWorkItems(c.ID, []int64{w.ID}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.SetChangeReady(c.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, c.ID)
+	}
+	m := NewReleaseManager(st, nil)
+	req := DeliveryRequest{StrategyKind: "standard", SourceType: "work_items", WorkItemIDs: []int64{w.ID}, SelectedChangeIDs: ids[:1], Environment: "test"}
+	req = standardSign(t, st, m, req)
+	run, e := st.CreateDeliveryRun(req, "alice", m)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = st.AdvanceDeliveryRun(run.ID, "alice", true, m); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = st.AdvanceDeliveryRun(run.ID, "alice", false, m); e != nil {
+		t.Fatal(e)
+	}
+	page, e := st.WorkCandidates(WorkCandidateFilter{Environment: "test", IDs: []int64{w.ID}})
+	if e != nil || len(page.Items) != 1 || !page.Items[0].PartialDelivery || page.Items[0].SuccessfulDelivery {
+		t.Fatal("partial scope falsely marked fully delivered", e, page)
+	}
+	policy := DeliveryPolicy{Stages: []DeliveryNode{{Name: "Review", Approvers: []string{"reviewer"}, ApprovalMode: "any"}}}
+	if e = st.saveDeliveryPolicy("test", policy); e != nil {
+		t.Fatal(e)
+	}
+	if e = st.saveDeliveryPolicy("test", policy); e == nil {
+		t.Fatal("stale policy revision accepted")
+	}
+	current, e := st.deliveryPolicy("test")
+	if e != nil || current.Revision != 1 {
+		t.Fatal(e, current)
+	}
+	if e = st.saveDeliveryPolicy("test", current); e != nil {
+		t.Fatal("MySQL policy CAS failed", e)
+	}
+	req.PreflightToken = ""
+	req.SelectedChangeIDs = ids
+	d, e := st.DraftDelivery(req)
+	if e != nil || len(d.Nodes) != 3 {
+		t.Fatal("mandatory policy not inherited", e, d)
 	}
 }

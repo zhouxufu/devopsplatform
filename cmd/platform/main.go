@@ -8,10 +8,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"logplatform/internal/extensions"
 	"logplatform/internal/platform"
+	"logplatform/pkg/apidoc"
+	"logplatform/pkg/extensionclient"
+	"logplatform/pkg/workflownode"
 )
 
 func main() {
@@ -49,11 +54,31 @@ func main() {
 	if err := registry.EnsureBootstrapAdmin(*auth); err != nil {
 		log.Fatalf("initialize platform admin: %v", err)
 	}
+	extensionManager, err := extensions.New(filepath.Join(*dataDir, "extensions"))
+	if err != nil {
+		log.Fatalf("initialize capability plugins: %v", err)
+	}
+	defer extensionManager.Close()
+	gw.SetExtensions(extensionManager)
+	go extensionManager.Restore()
 	bus := platform.NewBus()
 
+	brokerFile, closeBroker, err := extensionManager.StartBroker(filepath.Join(*dataDir, "extension-broker"), []string{apidoc.Capability, workflownode.Capability})
+	if err != nil {
+		log.Fatalf("initialize extension broker: %v", err)
+	}
+	defer closeBroker()
 	sup := platform.NewSupervisor()
+	for _, m := range ms {
+		if m.Name == "delivery-core" || m.Name == "deploy" && m.Backend == "" {
+			sup.SetBackendEnvironment(m.Name, []string{extensionclient.ConfigEnv + "=" + brokerFile, workflownode.SharedWorkspacesEnv + "=" + strings.Join(names(ms), ",")})
+		}
+	}
 	sup.StartAll(ms) // 拉起插件进程
 
+	loopContext, stopLoops := context.WithCancel(context.Background())
+	defer stopLoops()
+	go gw.RunWorkLoops(loopContext, registry)
 	srv := &http.Server{Addr: *addr, Handler: gw.Routes(registry, bus)}
 	go func() {
 		displayAddr := *addr
@@ -70,6 +95,7 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	log.Println("[platform] shutting down (stopping plugins...)")
+	stopLoops()
 	sup.StopAll()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

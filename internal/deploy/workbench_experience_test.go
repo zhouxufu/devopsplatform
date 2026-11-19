@@ -11,12 +11,12 @@ import (
 )
 
 func TestWorkbenchSQLIndependentGrammar(t *testing.T) {
-	for _, q := range []string{"SELECT * FROM menu", "SELECT id,name FROM menu ORDER BY id DESC LIMIT 20 OFFSET 40", "SELECT COUNT(*) AS total FROM menu WHERE id > 0", "SELECT kind,COUNT(id) AS total FROM menu GROUP BY kind ORDER BY total DESC LIMIT 10", "SELECT MAX(id) AS last_id FROM menu", "SHOW TABLES", "DESCRIBE menu"} {
+	for _, q := range []string{"SELECT * FROM menu", "SELECT id,name FROM menu ORDER BY id DESC LIMIT 20 OFFSET 40", "SELECT COUNT(*) AS total FROM menu WHERE id > 0", "SELECT kind,COUNT(id) AS total FROM menu GROUP BY kind ORDER BY total DESC LIMIT 10", "SELECT MAX(id) AS last_id FROM menu", "SELECT m.id,o.name FROM menu m JOIN other o ON m.id=o.id", "SELECT m.* FROM menu AS m LEFT JOIN other AS o USING (id)", "SELECT m.id,COUNT(o.id) AS total FROM menu m RIGHT JOIN other o ON m.id=o.id GROUP BY m.id ORDER BY total DESC LIMIT 10", "SELECT a.id,b.id AS parent_id FROM menu a JOIN menu b ON a.parent_id=b.id", "SELECT menu.id FROM menu", "SELECT m.id FROM (menu m JOIN other o ON m.id=o.id)", "SHOW TABLES", "DESCRIBE menu"} {
 		if _, e := parseWorkbenchSQL(q); e != nil {
 			t.Error(q, e)
 		}
 	}
-	for _, q := range []string{"SELECT SLEEP(1) FROM menu", "SELECT LOAD_FILE('/etc/passwd') FROM menu", "SELECT id FROM menu INTO OUTFILE '/tmp/out'", "SELECT id FROM menu FOR UPDATE", "SELECT @x FROM menu", "SELECT id FROM other.menu", "SELECT id FROM menu;DELETE FROM menu", "SELECT id FROM menu LIMIT 1001", "SELECT (SELECT id FROM secrets) FROM menu", "SELECT id FROM menu JOIN other ON menu.id=other.id", "SELECT id FROM menu /*! INTO OUTFILE '/tmp/out' */", "DELETE FROM menu", "SELECT next 1 values FROM sequence", "SELECT GROUP_CONCAT(name) FROM menu", "SELECT SUBSTR(name,1,2) FROM menu"} {
+	for _, q := range []string{"SELECT SLEEP(1) FROM menu", "SELECT m.id FROM menu m JOIN otherdb.other o ON m.id=o.id", "SELECT otherdb.m.id FROM menu m", "SELECT missing.* FROM menu m", "SELECT x.id FROM menu m", "SELECT m.id FROM menu m JOIN other m ON m.id=m.id", "SELECT m.id FROM menu m JOIN (SELECT id FROM other) o ON m.id=o.id", "SELECT m.id FROM menu m JOIN other o ON SLEEP(1)=0", "SELECT m.id FROM menu m JOIN other o ON m.id=o.id FOR UPDATE", "SELECT LOAD_FILE('/etc/passwd') FROM menu", "SELECT id FROM menu INTO OUTFILE '/tmp/out'", "SELECT id FROM menu FOR UPDATE", "SELECT @x FROM menu", "SELECT id FROM other.menu", "SELECT id FROM menu;DELETE FROM menu", "SELECT id FROM menu LIMIT 1001", "SELECT (SELECT id FROM secrets) FROM menu", "SELECT id FROM menu /*! INTO OUTFILE '/tmp/out' */", "DELETE FROM menu", "SELECT next 1 values FROM sequence", "SELECT GROUP_CONCAT(name) FROM menu"} {
 		if _, e := parseWorkbenchSQL(q); e == nil {
 			t.Error("accepted unsafe SQL", q)
 		}

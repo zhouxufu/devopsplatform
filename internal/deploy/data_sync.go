@@ -19,15 +19,17 @@ import (
 // Selected differences become immutable, environment-bound SQL changes and use
 // the existing approval/snapshot/transaction executor, not a second write path.
 type DataSyncTask struct {
-	ID            int64    `json:"id"`
-	Name          string   `json:"name"`
-	Service       string   `json:"service"`
-	ResourceAlias string   `json:"resource_alias"`
-	SourceSQL     string   `json:"source_sql"`
-	TargetSQL     string   `json:"target_sql"`
-	Keys          []string `json:"keys"`
-	Owner         string   `json:"owner"`
-	Revision      int64    `json:"revision"`
+	Mode          string              `json:"mode,omitempty"`
+	Tree          *DataSyncTreeConfig `json:"tree,omitempty"`
+	ID            int64               `json:"id"`
+	Name          string              `json:"name"`
+	Service       string              `json:"service"`
+	ResourceAlias string              `json:"resource_alias"`
+	SourceSQL     string              `json:"source_sql"`
+	TargetSQL     string              `json:"target_sql"`
+	Keys          []string            `json:"keys"`
+	Owner         string              `json:"owner"`
+	Revision      int64               `json:"revision"`
 }
 
 // Environment choices belong to one comparison, never to the reusable task.
@@ -36,6 +38,8 @@ type DataSyncScope struct {
 	TargetEnvironment string `json:"target_environment"`
 }
 type DataSyncSnapshot struct {
+	Tree              *DataSyncTreeConfig  `json:"tree,omitempty"`
+	TreeBaseline      []SyncRow            `json:"tree_baseline,omitempty"`
 	TaskID            int64                `json:"task_id"`
 	TaskRevision      int64                `json:"task_revision"`
 	SourceEnvironment string               `json:"source_environment"`
@@ -55,6 +59,8 @@ type DataSyncDifference struct {
 	After  SyncRow `json:"after"`
 }
 type DataSyncComparison struct {
+	TreeNodes         []DataSyncTreeNode   `json:"tree_nodes,omitempty"`
+	TreeBaseline      []SyncRow            `json:"tree_baseline,omitempty"`
 	Task              DataSyncTask         `json:"task"`
 	SourceEnvironment string               `json:"source_environment"`
 	TargetEnvironment string               `json:"target_environment"`
@@ -159,7 +165,7 @@ func normalizeSyncTask(t *DataSyncTask) error {
 		}
 		seen[key] = true
 	}
-	return nil
+	return normalizeSyncTree(t, target.Columns)
 }
 func (s *Store) DataSyncTasks() ([]DataSyncTask, error) {
 	out := []DataSyncTask{}
@@ -204,11 +210,14 @@ func (s *Store) SaveDataSyncTask(t *DataSyncTask) error {
 		return fmt.Errorf("应用不存在")
 	}
 	var kind string
-	if err := s.db.QueryRow(`SELECT kind FROM application_resource_requirements WHERE service=? AND alias=?`, t.Service, t.ResourceAlias).Scan(&kind); err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("应用未声明 MySQL 资源 %s", t.ResourceAlias)
+	resources := s.ApplicationResources(t.Service)
+	if resources.Error != "" {
+		return fmt.Errorf("%s", resources.Error)
+	}
+	for _, r := range resources.Requirements {
+		if r.Alias == t.ResourceAlias {
+			kind = r.Kind
 		}
-		return err
 	}
 	if kind != "mysql" {
 		return fmt.Errorf("数据同步任务仅支持 MySQL 资源")
@@ -257,7 +266,14 @@ func readSyncRows(ctx context.Context, c *ResourceConnection, q *syncQuery) ([]S
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, q.SQL)
+	return querySyncRows(ctx, tx, q, false)
+}
+func querySyncRows(ctx context.Context, db sqlQueryer, q *syncQuery, lock bool) ([]SyncRow, error) {
+	query := q.SQL
+	if lock {
+		query += " FOR UPDATE"
+	}
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("查询失败（请核对表结构、字段及权限）：%w", err)
 	}
@@ -385,8 +401,8 @@ func (s *Store) CompareDataSync(ctx context.Context, t *DataSyncTask, scope Data
 	if err != nil {
 		return nil, err
 	}
+	defer db.Close()
 	catalog, err := readSQLCatalog(ctx, db, target.Config["database"])
-	db.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -396,12 +412,12 @@ func (s *Store) CompareDataSync(ctx context.Context, t *DataSyncTask, scope Data
 	}
 	unique := false
 	for _, idx := range table.Indexes {
-		if idx.Unique && strings.Join(idx.Columns, "\x00") == strings.Join(t.Keys, "\x00") {
+		if idx.Unique && strings.Join(idx.Columns, "\x00") == strings.Join(syncExecutionKeys(t.Keys, t.Tree), "\x00") {
 			unique = true
 		}
 	}
 	if !unique {
-		return nil, fmt.Errorf("匹配键必须完整对应目标表主键或唯一索引，字段顺序也须一致")
+		return nil, fmt.Errorf("执行定位字段 %s 必须完整对应目标表主键或唯一索引，字段顺序也须一致", strings.Join(syncExecutionKeys(t.Keys, t.Tree), ","))
 	}
 	for _, col := range dst.Columns {
 		c, ok := table.Columns[col]
@@ -420,7 +436,16 @@ func (s *Store) CompareDataSync(ctx context.Context, t *DataSyncTask, scope Data
 	if err != nil {
 		return nil, err
 	}
-	out, err := compareSyncRows(t, scope, a, b)
+	var out *DataSyncComparison
+	if t.Tree != nil {
+		base, e := treeIDBase(ctx, db, dst.Table, t.Tree, table)
+		if e != nil {
+			return nil, e
+		}
+		out, err = compareSyncTreeRows(t, scope, a, b, base, table)
+	} else {
+		out, err = compareSyncRows(t, scope, a, b)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -464,6 +489,13 @@ func syncSelectionSQL(c *DataSyncComparison, selected []DataSyncSelection) (stri
 	if len(selected) == 0 || len(selected) > 50 {
 		return "", fmt.Errorf("请选择 1–50 行差异")
 	}
+	if c.Task.Tree != nil {
+		var err error
+		selected, err = orderSyncTreeSelection(c, selected)
+		if err != nil {
+			return "", err
+		}
+	}
 	q, _ := parseSyncQuery(c.Task.TargetSQL)
 	known := map[string]DataSyncDifference{}
 	for _, d := range c.Differences {
@@ -483,6 +515,13 @@ func syncSelectionSQL(c *DataSyncComparison, selected []DataSyncSelection) (stri
 		key, err := syncKey(pick.After, c.Task.Keys)
 		if err != nil || key != pick.Key {
 			return "", fmt.Errorf("不允许修改匹配键")
+		}
+		if c.Task.Tree != nil {
+			for _, col := range []string{c.Task.Tree.IDField, c.Task.Tree.ParentField} {
+				if digestJSON(pick.After[col]) != digestJSON(diff.After[col]) {
+					return "", fmt.Errorf("ID 和父 ID 由层级映射生成，不允许手动修改")
+				}
+			}
 		}
 		for _, col := range c.Columns {
 			v, exists := pick.After[col]
@@ -507,6 +546,9 @@ func syncSelectionSQL(c *DataSyncComparison, selected []DataSyncSelection) (stri
 						isKey = true
 					}
 				}
+				if c.Task.Tree != nil && col == c.Task.Tree.IDField {
+					isKey = true
+				}
 				if !isKey {
 					set = append(set, "`"+col+"`="+syncLiteral(pick.After[col]))
 				}
@@ -514,7 +556,7 @@ func syncSelectionSQL(c *DataSyncComparison, selected []DataSyncSelection) (stri
 			if len(set) == 0 {
 				return "", fmt.Errorf("无可更新的非键字段")
 			}
-			for _, key := range c.Task.Keys {
+			for _, key := range syncExecutionKeys(c.Task.Keys, c.Task.Tree) {
 				where = append(where, "`"+key+"`="+syncLiteral(diff.Before[key]))
 			}
 			pieces = append(pieces, "UPDATE `"+q.Table+"` SET "+strings.Join(set, ",")+" WHERE "+strings.Join(where, " AND "))
@@ -551,7 +593,14 @@ func validateSyncScript(c *Change) error {
 		}
 		seenKeys[key] = true
 	}
-	comp := &DataSyncComparison{Task: DataSyncTask{TargetSQL: snap.TargetSQL, Keys: snap.Keys}, Columns: query.Columns, Differences: snap.Differences}
+	task := DataSyncTask{TargetSQL: snap.TargetSQL, Keys: snap.Keys, Tree: snap.Tree}
+	if snap.Tree != nil {
+		task.Mode = "tree"
+	}
+	if err := normalizeSyncTree(&task, query.Columns); err != nil {
+		return err
+	}
+	comp := &DataSyncComparison{Task: task, Columns: query.Columns, Differences: snap.Differences, TreeBaseline: snap.TreeBaseline}
 	selection := []DataSyncSelection{}
 	for _, d := range snap.Differences {
 		if d.Kind != "update" && d.Kind != "insert" {
@@ -691,6 +740,8 @@ func registerDataSyncRoutes(mux *http.ServeMux, s *Store) {
 		}
 		c := Change{Kind: "mysql", Title: t.Name + " · 数据同步 " + comp.SourceEnvironment + " → " + comp.TargetEnvironment, Service: t.Service, RiskLevel: "medium", Owner: actorOf(r), Summary: fmt.Sprintf("数据同步任务 #%d · 修订 %d · %d 行；目标独有数据保留", t.ID, t.Revision, len(req.Rows)), SQL: &SQLChange{ResourceAlias: t.ResourceAlias, Content: script, MaxAffectedRows: len(req.Rows), DataSync: &DataSyncSnapshot{TaskID: t.ID, TaskRevision: t.Revision, SourceEnvironment: comp.SourceEnvironment, TargetEnvironment: comp.TargetEnvironment, TargetSQL: t.TargetSQL, TargetDigest: comp.TargetDigest, TargetDestination: comp.TargetDestination, ComparisonDigest: comp.Digest}}}
 		c.SQL.DataSync.Keys = t.Keys
+		c.SQL.DataSync.Tree = t.Tree
+		c.SQL.DataSync.TreeBaseline = comp.TreeBaseline
 		for _, pick := range req.Rows {
 			for _, d := range comp.Differences {
 				if d.Key == pick.Key {

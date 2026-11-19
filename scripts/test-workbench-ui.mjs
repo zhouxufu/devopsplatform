@@ -26,7 +26,7 @@ try {
     if(p.endsWith('/api/me'))return reply({username:'reviewer',role:'admin',auth_enabled:authEnabled})
     if(p.endsWith('/api/services')||p.endsWith('/api/registry/applications')){serviceReads++;return reply([{name:'resource-only'}])}
     if(p.endsWith('/api/environments'))return reply([env,{...env,name:'prod',display_name:'生产',protected:true}])
-    if(p.endsWith('/api/query-target'))return reply({connection:'QA resource',database:kind==='dbms'?'qa':'',db:'0',key_prefix:kind==='redis'?'menu:':''})
+    if(p.endsWith('/api/query-target'))return reply({connection:u.searchParams.get('connection')||'QA resource',database:kind==='dbms'?'qa':'',db:'0',key_prefix:kind==='redis'?'menu:':''})
     if(p.endsWith('/api/policy'))return reply(policies[u.searchParams.get('environment')])
     if(p.endsWith('/api/changes'))return reply([change])
     if(p.endsWith('/api/delivery/runs'))return reply(run?[run]:[])
@@ -55,7 +55,9 @@ try {
   })
   await page.goto(base+(process.env.WORKBENCH_GATEWAY==='1'?`/api/plugins/${kind}/ui`:`/ui/${kind}`))
   const nav=page.getByRole('navigation',{name:'工作台导航'})
-  const choose=async(label,option)=>{const field=page.locator('label:visible').filter({hasText:new RegExp('^'+label)}).first(),control=field.locator('.el-select');await control.click();const id=await control.getByRole('combobox').getAttribute('aria-controls');await page.locator('#'+id).getByRole('option',{name:option,exact:true}).click();await page.locator('h2').click()}
+  const choose=async(label,option)=>{const field=page.locator('label:visible').filter({hasText:new RegExp('^'+label)}).first(),control=field.locator('.el-select');await control.click();const id=await control.getByRole('combobox').getAttribute('aria-controls');await page.locator('#'+id).getByRole('option',{name:option,exact:true}).click();await page.getByRole('heading',{name:kind==='dbms'?'数据库工作台':'Redis 工作台',exact:true}).click()}
+  await choose('查询方式','应用资源')
+  await page.getByRole('button',{name:kind==='dbms'?'SQL 查询':'命令控制台',exact:true}).click()
   await page.getByRole('heading',{name:kind==='dbms'?'数据库工作台':'Redis 工作台',exact:true}).waitFor()
   await page.locator('.el-notification').filter({hasText:'未启用登录'}).waitFor()
   assert.equal(await page.locator('main>.notice,main>.error').count(),0,'global alerts still occupy content')
@@ -93,6 +95,7 @@ try {
   assert.equal(await page.locator('.query textarea').inputValue(),initialQuery)
   await page.getByText('QA <script>not executed</script>',{exact:true}).waitFor()
   assert.equal(queries,initialCount+1,'switch tab executed query or lost previous result')
+  await page.waitForFunction(()=>[...document.querySelectorAll('.query button')].some(b=>b.textContent.includes('执行只读查询')&&!b.disabled))
   await page.locator('.query textarea').fill(initialQuery+'\nignored selection');await page.locator('.query textarea').evaluate((el,length)=>el.setSelectionRange(0,length),initialQuery.length);await page.locator('.query textarea').press('Control+Enter');await page.getByText('QA <script>not executed</script>',{exact:true}).waitFor();assert.equal(lastRead[kind==='dbms'?'sql':'commands'],initialQuery,'keyboard executed unselected text');await page.locator('.query textarea').fill(initialQuery)
   await page.getByRole('button',{name:'以此新建变更',exact:true}).click()
   assert.equal(await page.locator('.editor textarea').first().inputValue(),'','read copied into write editor')
@@ -107,7 +110,7 @@ try {
   await page.getByRole('button',{name:'返回核对查询',exact:true}).click()
   assert.equal(await page.locator('.query textarea').inputValue(),initialQuery)
   if(kind==='dbms'){
-   await page.getByRole('button',{name:'载入查表语句',exact:true}).click()
+   await page.getByRole('textbox',{name:'查询 SQL',exact:true}).fill('SHOW TABLES')
    await page.getByRole('button',{name:'执行只读查询',exact:true}).click()
    await page.getByRole('button',{name:'表结构',exact:true}).click()
    assert.equal(await page.locator('.query textarea').inputValue(),'DESCRIBE `sys_menu`')
@@ -119,19 +122,18 @@ try {
    assert((await page.locator('.query textarea').inputValue()).includes("'where limit'"),'formatter rewrote string')
    await page.locator('.query textarea').fill(initialQuery)
   } else {
-   await page.locator('.redis-browser summary').click()
-   await page.getByRole('button',{name:'载入 SCAN 命令',exact:true}).click()
-   assert.equal(await page.locator('.query textarea').inputValue(),'SCAN 0 MATCH "menu:*" COUNT 50')
-   await page.getByRole('button',{name:'执行只读查询',exact:true}).click();await page.getByText('Key 查找结果 · 1 项',{exact:true}).waitFor();const scanCount=queries;await page.getByRole('button',{name:'载入下一页命令（不执行）',exact:true}).click();assert.equal(await page.locator('.query textarea').inputValue(),'"SCAN" "7" "MATCH" "menu:*" "COUNT" "50"');assert.equal(queries,scanCount)
-   await page.getByRole('button',{name:'载入 SCAN 命令',exact:true}).click();await page.getByRole('button',{name:'执行只读查询',exact:true}).click();await page.getByRole('button',{name:'查看类型 / TTL',exact:true}).click();assert.equal(await page.locator('.query textarea').inputValue(),'TYPE "menu:tree"\nTTL "menu:tree"')
-   await page.getByRole('textbox',{name:'准确 Key',exact:true}).fill('menu:tree')
-   await page.getByRole('button',{name:'载入查看命令',exact:true}).click()
-   assert.equal(await page.locator('.query textarea').inputValue(),'TYPE "menu:tree"\nTTL "menu:tree"\nGET "menu:tree"')
-   await page.getByRole('button',{name:'新建清理草稿',exact:true}).click()
+   // Commands remain editable in their own pane; browsing no longer overwrites
+   // the command draft when a Key is inspected.
+   await page.getByRole('button',{name:'Key 浏览',exact:true}).click()
+   const browserPanel=page.getByRole('region',{name:'Redis Key 浏览'})
+   await browserPanel.getByRole('textbox',{name:'直接查看 Key'}).fill('menu:tree')
+   await browserPanel.getByRole('button',{name:'查看 Key',exact:true}).click()
+   await browserPanel.getByRole('button',{name:'新建清理草稿',exact:true}).click()
    assert.equal(await page.locator('.editor textarea').first().inputValue(),'UNLINK "menu:tree"')
    assert.equal(executions,0,'key helper executed write')
    await nav.getByRole('button',{name:'查询',exact:true}).click()
-   await page.locator('.query textarea').fill(initialQuery)
+   await page.getByRole('button',{name:'命令控制台',exact:true}).click()
+   await page.getByRole('textbox',{name:'查询命令（每行一条）',exact:true}).fill(initialQuery)
   }
   await nav.getByRole('button',{name:'变更提交',exact:true}).click()
   await page.getByRole('button',{name:'已有变更',exact:true}).click()
@@ -152,10 +154,34 @@ try {
   await page.locator('.editor details').getByText('资源设置',{exact:true}).click();await page.getByRole('button',{name:'配置资源绑定',exact:true}).click();const bindings=page.getByRole('dialog',{name:'应用环境资源绑定',exact:true});await bindings.waitFor();await bindings.locator('.el-dialog__headerbtn').click();await bindings.waitFor({state:'hidden'});assert.equal(await page.locator('.editor textarea').first().inputValue(),draft)
   for(const [name,title] of [['应用','应用中心'],['资源','资源中心']]){await page.locator('.platform-nav').getByRole('button',{name:new RegExp(name)}).click();const resourcePanel=page.getByRole('dialog',{name:title,exact:true});await resourcePanel.waitFor();await resourcePanel.getByRole('button',{name:'关闭并返回原页面',exact:true}).click();assert.equal(await page.locator('.editor textarea').first().inputValue(),draft)}
   await Promise.all([page.waitForResponse(r=>r.request().method()==='GET'&&r.url().includes('/policy')),page.getByRole('button',{name:'保存草稿',exact:true}).click()]);assert.equal(saved.service,'resource-only');assert(!saved.environment)
+  if(kind==='dbms'){
+   await nav.getByRole('button',{name:'查询',exact:true}).click()
+   await page.getByRole('button',{name:'＋ 新查询',exact:true}).click()
+   await choose('查询方式','数据库连接')
+   assert.equal(await page.locator('.query-context>label:visible').filter({hasText:/^应用/}).count(),0)
+   const beforeDirect=queries
+   await page.getByRole('button',{name:'执行只读查询',exact:true}).click()
+   const missing=page.locator('.el-notification').filter({hasText:'请选择数据库连接和环境'})
+   await missing.waitFor();await missing.locator('.el-notification__closeBtn').click()
+   assert.equal(queries,beforeDirect)
+   await choose('数据库连接','qa-dbms')
+   await page.locator('.actual-target').filter({hasText:'qa-dbms'}).waitFor()
+   const join='SELECT m.id,o.name FROM menu m LEFT JOIN other o ON m.id=o.id'
+   await page.locator('.query textarea').fill(join)
+   await page.getByRole('button',{name:'执行只读查询',exact:true}).click()
+   await page.getByText('QA <script>not executed</script>',{exact:true}).waitFor()
+   assert.equal(lastRead.connection,'qa-dbms');assert.equal(lastRead.service,'');assert.equal(lastRead.resource_alias,'');assert.equal(lastRead.sql,join)
+   assert.equal(await page.getByRole('button',{name:'以此新建变更',exact:true}).isDisabled(),true)
+   await page.getByRole('button',{name:'＋ 新查询',exact:true}).click()
+   assert((await page.locator('.query-context>label').first().innerText()).includes('数据库连接'),'direct query mode was not restored')
+   await page.locator('.query textarea').fill(join)
+   await page.getByRole('button',{name:'执行只读查询',exact:true}).click()
+   await page.getByText('QA <script>not executed</script>',{exact:true}).waitFor()
+  }
   await page.locator('.workbench-settings summary').click();await page.getByRole('button',{name:'审批设置',exact:true}).click();const switches=page.locator('.policy-row input[type=checkbox]');assert.equal(await switches.nth(0).isChecked(),false);assert.equal(await switches.nth(1).isChecked(),true)
   await switches.nth(0).check();await switches.nth(1).uncheck();await Promise.all([page.waitForResponse(r=>r.request().method()==='PUT'&&r.url().includes('/policy')),page.getByRole('button',{name:'保存审批设置',exact:true}).click()]);assert.deepEqual(policies.test,{query_approval:true,change_approval:false})
-  await nav.getByRole('button',{name:'查询',exact:true}).click();const before=queries;await page.getByRole('button',{name:'提交查询申请',exact:true}).click();await page.getByRole('heading',{name:'查询申请 #910004',exact:true}).waitFor();assert.equal(queries,before);assert.equal(await page.getByRole('button',{name:'批准查询',exact:true}).count(),0,'self approval shown')
-  ticket={...ticket,status:'approved',approver:'second-reviewer'};await nav.getByRole('button',{name:'查询',exact:true}).click();await nav.getByRole('button',{name:'执行记录',exact:true}).click();await page.mouse.move(1000,100);await page.waitForFunction(()=>document.querySelector('.workspace-sidebar').getBoundingClientRect().width<=65);await page.getByRole('button',{name:'执行已批准查询',exact:true}).click();await page.getByText('approved snapshot',{exact:true}).waitFor()
+  await nav.getByRole('button',{name:'查询',exact:true}).click();const before=queries;await page.getByRole('button',{name:'提交查询申请',exact:true}).click();await page.getByRole('heading',{name:'查询申请 #910004',exact:true}).waitFor();assert.equal(queries,before);if(kind==='dbms'){assert.equal(ticket.query.connection,'qa-dbms');assert.equal(ticket.query.service,'')}assert.equal(await page.getByRole('button',{name:'批准查询',exact:true}).count(),0,'self approval shown')
+  ticket={...ticket,status:'approved',approver:'second-reviewer'};await nav.getByRole('button',{name:'查询',exact:true}).click();await nav.getByRole('button',{name:'执行记录',exact:true}).click();await page.mouse.move(1000,100);await page.waitForFunction(()=>document.querySelector('.workspace-sidebar').getBoundingClientRect().width<=65);await page.getByRole('button',{name:'执行已批准查询',exact:true}).click();await page.getByText('approved snapshot',{exact:true}).waitFor();if(kind==='dbms')assert((await page.locator('.query-context>label').first().innerText()).includes('数据库连接'),'direct query mode was not restored')
   if(kind==='dbms'){await nav.getByRole('button',{name:'数据对比同步',exact:true}).click();assert.equal(await page.locator('.sync-page label').filter({hasText:/^任务名称/}).locator('input').inputValue(),'continuous sync draft')}
   for(const width of [1440,900,700,390]){await page.setViewportSize({width,height:960});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page overflow')}
   if(process.env.WORKBENCH_SCREENSHOT){await page.setViewportSize({width:1440,height:960});await nav.getByRole('button',{name:'查询',exact:true}).click();await page.screenshot({path:process.env.WORKBENCH_SCREENSHOT+'-'+kind+'.png'})}

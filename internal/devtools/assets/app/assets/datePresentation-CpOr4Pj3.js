@@ -1,0 +1,1 @@
+function i(e,r={}){if(typeof e!="number"&&typeof e!="string")return"—";const t=Number(e);if(!Number.isFinite(t)||t<=0)return"—";const n=new Date(t*1e3);return Number.isFinite(n.getTime())?n.toLocaleString("zh-CN",{hour12:!1,...r}):"—"}export{i as f};

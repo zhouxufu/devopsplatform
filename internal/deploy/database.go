@@ -60,9 +60,11 @@ func (tx *deployTx) QueryRow(query string, args ...any) *sql.Row {
 }
 
 var (
-	conflictUpdateRE = regexp.MustCompile(`(?is)ON\s+CONFLICT\s*\([^)]*\)\s*(?:WHERE\s+.*?\s+)?DO\s+UPDATE\s+SET`)
-	excludedColumnRE = regexp.MustCompile(`(?i)excluded\.([a-z_][a-z0-9_]*)`)
-	appendLogRE      = regexp.MustCompile(`(?is)substr\(COALESCE\(log,''\)\s*\|\|\s*char\(10\)\s*\|\|\s*(.*?),\s*-(20000|40000)\)`)
+	conflictUpdateRE  = regexp.MustCompile(`(?is)ON\s+CONFLICT\s*\([^)]*\)\s*(?:WHERE\s+.*?\s+)?DO\s+UPDATE\s+SET`)
+	excludedColumnRE  = regexp.MustCompile(`(?i)excluded\.([a-z_][a-z0-9_]*)`)
+	metaKeyRE         = regexp.MustCompile(`(?i)\b(WHERE|AND|OR|ORDER BY|SELECT)\s+key\b`)
+	pipelineTriggerRE = regexp.MustCompile(`(?i)\btrigger\s*=`)
+	appendLogRE       = regexp.MustCompile(`(?is)substr\(COALESCE\(log,''\)\s*\|\|\s*char\(10\)\s*\|\|\s*(.*?),\s*-(20000|40000)\)`)
 )
 
 func rewriteDeploySQL(dialect, query string) string {
@@ -72,6 +74,12 @@ func rewriteDeploySQL(dialect, query string) string {
 	// key and trigger are accepted by SQLite but reserved by MySQL. Keep the
 	// public/store model unchanged and map only the two owning tables here.
 	query = strings.ReplaceAll(query, "deploy_meta(key,value)", "deploy_meta(meta_key,value)")
+	if strings.Contains(query, "deploy_meta") {
+		query = metaKeyRE.ReplaceAllString(query, "$1 meta_key")
+	}
+	if strings.Contains(query, "pipeline_runs") {
+		query = pipelineTriggerRE.ReplaceAllString(query, "run_trigger=")
+	}
 	query = strings.ReplaceAll(query, "FROM deploy_meta WHERE key=", "FROM deploy_meta WHERE meta_key=")
 	query = strings.ReplaceAll(query, "pipeline_runs(service,trigger,", "pipeline_runs(service,run_trigger,")
 	query = strings.ReplaceAll(query, "id,service,trigger,branch", "id,service,run_trigger,branch")
@@ -137,6 +145,30 @@ func migrateMySQLDeploySchema(db *deployDB) error {
 			}
 		}
 	}
+	for _, column := range []struct{ name, ddl string }{
+		{"maven_arguments", "ALTER TABLE services ADD COLUMN maven_arguments TEXT"},
+		{"maven_threads", "ALTER TABLE services ADD COLUMN maven_threads VARCHAR(32) NOT NULL DEFAULT ''"},
+		{"maven_update_snapshots", "ALTER TABLE services ADD COLUMN maven_update_snapshots TINYINT(1) NOT NULL DEFAULT 0"},
+	} {
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='services' AND COLUMN_NAME=?`, column.name).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			if _, err := db.Exec(column.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	var purposeColumn int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='environments' AND COLUMN_NAME='purpose'`).Scan(&purposeColumn); err != nil {
+		return err
+	}
+	if purposeColumn == 0 {
+		if _, err := db.Exec(`ALTER TABLE environments ADD COLUMN purpose VARCHAR(32) NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
 	return (&Store{db: db}).migrateWorkContent()
 }
 
@@ -150,7 +182,7 @@ var mysqlDeploySchema = []string{
 		artifact_type VARCHAR(32) NOT NULL DEFAULT 'jar', tags TEXT,
 		build_mode VARCHAR(32) NOT NULL DEFAULT 'local', build_host VARCHAR(255) NOT NULL DEFAULT '', build_cmd TEXT,
 		build_tool VARCHAR(32) NOT NULL DEFAULT 'command', maven_executable VARCHAR(255) NOT NULL DEFAULT 'auto',
-		maven_goals TEXT, maven_profiles TEXT, maven_properties TEXT, maven_settings_path TEXT,
+		maven_goals TEXT, maven_profiles TEXT, maven_properties TEXT, maven_arguments TEXT, maven_threads VARCHAR(32) NOT NULL DEFAULT '', maven_update_snapshots TINYINT(1) NOT NULL DEFAULT 0, maven_settings_path TEXT,
 		gradle_executable VARCHAR(255) NOT NULL DEFAULT 'auto', gradle_tasks TEXT, gradle_excluded_tasks TEXT,
 		gradle_project_properties TEXT, gradle_system_properties TEXT, artifact_glob TEXT,
 		image_name TEXT, pre_cmd TEXT, target_type VARCHAR(32) NOT NULL DEFAULT 'ssh-jar', remote_dir TEXT,
@@ -172,7 +204,7 @@ var mysqlDeploySchema = []string{
 		kind VARCHAR(64) NOT NULL, uri TEXT NOT NULL, digest VARCHAR(255) NOT NULL, size BIGINT NOT NULL DEFAULT 0,
 		metadata LONGTEXT, source VARCHAR(64) NOT NULL DEFAULT '', source_id BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL,
 		source_id_unique BIGINT GENERATED ALWAYS AS (IF(source<>'' AND source_id>0,source_id,NULL)) STORED,
-		UNIQUE KEY idx_artifacts_source(source,source_id_unique)
+		UNIQUE KEY idx_artifacts_outputs(source,source_id_unique,kind,digest)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	`CREATE TABLE IF NOT EXISTS hosts (
 		name VARCHAR(255) PRIMARY KEY, addr VARCHAR(512), user VARCHAR(255) NOT NULL DEFAULT 'root', key_path TEXT,
@@ -180,6 +212,7 @@ var mysqlDeploySchema = []string{
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	`CREATE TABLE IF NOT EXISTS environments (
 		name VARCHAR(128) PRIMARY KEY, display_name VARCHAR(255) NOT NULL, protected TINYINT NOT NULL DEFAULT 0,
+		purpose VARCHAR(32) NOT NULL DEFAULT '',
 		require_reason TINYINT NOT NULL DEFAULT 0, sort_order INT NOT NULL DEFAULT 0, approvers TEXT, created_at BIGINT
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	`CREATE TABLE IF NOT EXISTS service_environments (

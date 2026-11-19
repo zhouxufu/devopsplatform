@@ -19,4 +19,4 @@ const labels={success:'已执行',uncertain:'结果不确定，必须核对',exe
     </template>
   </section>
 </template>
-<style scoped>.redis-preview{min-width:0}.redis-preview article{border:1px solid var(--border);border-radius:8px;padding:12px;margin:10px 0;min-width:0}.redis-preview p,.redis-preview span{color:var(--muted);font-size:12px;overflow-wrap:anywhere}.redis-preview b{overflow-wrap:anywhere}.redis-command{margin-top:8px}.redis-command pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel2);padding:8px;margin:0;font-size:12px}</style>
+<style scoped>.redis-preview{min-width:0}.redis-preview article{border:1px solid var(--border);border-radius:8px;padding:12px;margin:10px 0;min-width:0}.redis-preview p,.redis-preview span{color:var(--muted);font-size:.75rem;overflow-wrap:anywhere}.redis-preview b{overflow-wrap:anywhere}.redis-command{margin-top:8px}.redis-command pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel2);padding:8px;margin:0;font-size:.75rem}</style>

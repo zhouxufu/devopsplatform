@@ -1,54 +1,93 @@
 <script setup>
-import { inject, ref, watch } from 'vue'
-import Modal from '../../shared/components/Modal.vue'
+import {computed,inject,nextTick,ref,watch} from 'vue'
+import {applicationOption} from '../../shared/applicationName.js'
+import {applicationResourceDraft} from '../applicationResourceDraft.js'
+import {mergeDiscoveredResources,rebaseResourceDraft,resourceCheckKey,resourceCheckLabels,resourceDocumentEditable,resourceDraftDiff,resourceEnvironmentComparison,resourceEnvironmentCounts,resourceSaveBody} from '../resourceExperience.js'
+import ResourceBindingsFields from './ResourceBindingsFields.vue'
+import ApplicationNacosPicker from './ApplicationNacosPicker.vue'
+import ResourceDependencyDiscovery from './ResourceDependencyDiscovery.vue'
 import ResourcesView from '../pages/ResourcesView.vue'
-import Sel from '../../shared/components/Sel.vue'
-import { ElButton, ElInput } from '../../shared/components/ui.js'
-import { toast } from '../../shared/composables/toast.js'
+import OptionPicker from '../../shared/components/OptionPicker.vue'
+import {toast} from '../../shared/composables/toast.js'
+import {confirmAction} from '../../shared/shadcnFeedback.js'
+import {Accordion,AccordionContent,AccordionItem,AccordionTrigger,Badge,Button,Dialog,DialogContent,DialogDescription,DialogFooter,DialogHeader,DialogTitle,Empty,EmptyHeader,EmptyDescription,Field,FieldLabel,Spinner,Table,TableBody,TableCell,TableHead,TableHeader,TableRow,Tabs,TabsList,TabsTrigger} from '../../shared/shadcn-ui.js'
 const props=defineProps({show:Boolean,services:Array,initialService:String})
 const emit=defineEmits(['close'])
-const api=inject('api'),service=ref(''),resources=ref({requirements:[],bindings:[]}),connections=ref([]),environments=ref([]),busy=ref(false),loading=ref(false)
-const resourcePlugin=inject('resourcePlugin','deploy')
+const api=inject('api'),resourcePlugin=inject('resourcePlugin','deploy')
 const directAPI=!location.pathname.startsWith('/api/plugins/')
-async function loadService(){
-  if(!service.value){resources.value={requirements:[],bindings:[]};return}
-  loading.value=true
-  const requestedService=service.value
-  try{const value=await api(`api/services/${encodeURIComponent(requestedService)}/resources`);if(service.value===requestedService)resources.value={...value,bindings:(value.bindings||[]).map(b=>({...b,config:b.config||{}}))}}catch(e){toast(e.message,'error')}finally{if(service.value===requestedService)loading.value=false}
+const service=ref(''),resources=ref(applicationResourceDraft()),baseline=ref(null),connections=ref([]),environments=ref([]),resourceGroups=ref([])
+const loading=ref(false),saving=ref(false),checking=ref(false),discovering=ref(false),connectionReading=ref(false),loadFailed=ref(false),tab=ref('bindings'),mode=ref('application'),shared=ref([]),checkEnvironment=ref(''),onlyFailed=ref(false),latest=ref(null),choices=ref({}),conflicted=ref(false),bindingFields=ref(null),nacosPicker=ref(null)
+const connectionView=ref(null),connectionState=ref({busy:false,dirty:false})
+const busy=computed(()=>loading.value||saving.value||checking.value||discovering.value||connectionState.value.busy)
+const snapshot=value=>JSON.stringify(resourceSaveBody(value))
+const draftDirty=computed(()=>baseline.value&&snapshot(resources.value)!==snapshot(baseline.value))
+const inherited=computed(()=>resourceGroups.value.filter(g=>(resources.value.resource_groups||[]).includes(g.name)))
+const environmentCounts=computed(()=>resourceEnvironmentCounts(resources.value,environments.value,inherited.value))
+const comparison=computed(()=>resourceEnvironmentComparison(resources.value,environments.value,inherited.value))
+const diff=computed(()=>resourceDraftDiff(baseline.value,resources.value))
+const serverDiff=computed(()=>latest.value?resourceDraftDiff(baseline.value,latest.value):null)
+const rebased=computed(()=>latest.value?rebaseResourceDraft(baseline.value,resources.value,latest.value,choices.value):null)
+const checkRows=computed(()=>(resources.value.checks||[]).filter(c=>(!checkEnvironment.value||c.environment===checkEnvironment.value)&&(!onlyFailed.value||!['passed','not_applicable'].includes(c.status))))
+let generation=0
+let checkedTargets=new Map()
+const targetMap=()=>new Map([...(resources.value.bindings||[]),...(resources.value.nacos_configs||[]).map(r=>({...r,config:{group:r.group,data_id:r.data_id}})),...inherited.value.flatMap(g=>g.bindings||[])].map(b=>[resourceCheckKey(b),JSON.stringify([b.connection,b.config||{},connections.value.find(c=>c.name===b.connection)?.revision||''])]))
+watch(()=>JSON.stringify([...targetMap()]),()=>{const current=targetMap();resources.value.checks=(resources.value.checks||[]).map(c=>checkedTargets.get(resourceCheckKey(c))!==current.get(resourceCheckKey(c))?{...c,status:'stale',message:'草稿目标已变化，请重新核验'}:c)})
+watch([draftDirty,busy],()=>{if(window.parent!==window)window.parent.postMessage({type:'workspace.dirty',dirty:!!draftDirty.value,busy:busy.value},location.origin)})
+function chooseGroups(){resources.value.group_revisions=Object.fromEntries(inherited.value.map(g=>[g.name,g.revision]))}
+async function refreshConnections(){if(connectionReading.value)return;connectionReading.value=true;try{connections.value=await api('api/connections')}catch(e){toast(e.message,'error')}finally{connectionReading.value=false}}
+async function readResources(){
+ if(!service.value)return
+ const current=++generation,requested=service.value;loading.value=true;loadFailed.value=true
+ try{const value=await api(`api/services/${encodeURIComponent(requested)}/resources`);if(current!==generation||service.value!==requested)return;resources.value=applicationResourceDraft(value);baseline.value=applicationResourceDraft(JSON.parse(JSON.stringify(value)));checkedTargets=targetMap();latest.value=null;choices.value={};conflicted.value=false;loadFailed.value=!resourceDocumentEditable(value);if(value.error)toast(value.error,'error')}
+ catch(e){if(current===generation)toast(e.message,'error')}finally{if(current===generation)loading.value=false}
 }
-watch(service,loadService)
-watch(()=>props.show,async show=>{if(!show)return;try{[connections.value,environments.value]=await Promise.all([api('api/connections'),api('api/environments')]);service.value=props.initialService||props.services?.[0]?.name||'';await loadService()}catch(e){toast(e.message,'error')}})
-function addBinding(alias){resources.value.bindings.push({alias,environment:'',connection:'',config:{}})}
-const showConnections=ref(false)
-async function refreshConnections(){try{connections.value=await api('api/connections')}catch(e){toast(e.message,'error')}}
-function openConnections(){if(window.parent!==window)window.parent.postMessage({type:'platform.open',view:'resources'},location.origin);else showConnections.value=true}
+watch(()=>props.show,async show=>{
+ if(!show){generation++;return}
+ tab.value='bindings';mode.value='application';checkEnvironment.value='';shared.value=[];latest.value=null;baseline.value=null;loading.value=true
+ try{[connections.value,environments.value,resourceGroups.value]=await Promise.all([api('api/connections'),api('api/environments'),api('api/resource-groups')]);service.value=props.initialService||props.services?.[0]?.name||'';await readResources()}
+ catch(e){loadFailed.value=true;toast(e.message,'error')}finally{loading.value=false}
+},{immediate:true})
+async function closeEditor(){if(busy.value)return;if(mode.value==='connections'&&!await connectionView.value?.closeAgentFlow?.())return;if(draftDirty.value&&!await confirmAction('关闭将放弃未保存的资源绑定修改。','保留草稿继续编辑？',{confirmButtonText:'放弃修改',cancelButtonText:'继续编辑'}))return;emit('close')}
+async function changeService(value){if(busy.value||value===service.value)return;if(draftDirty.value&&!await confirmAction('切换应用将放弃当前未保存的资源绑定，是否继续？'))return;service.value=value;await readResources()}
+function openConnections(){if(window.parent!==window)window.parent.postMessage({type:'platform.open',view:'resources'},location.origin);else mode.value='connections'}
+async function returnToApplication(){if(!await connectionView.value?.closeAgentFlow?.())return;mode.value='application';connectionState.value={busy:false,dirty:false};await refreshConnections()}
 async function save(){
-  busy.value=true
-  try{await api(`api/services/${encodeURIComponent(service.value)}/resources`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(resources.value)});toast('应用环境资源绑定已保存','success');emit('close')}catch(e){toast(e.message,'error')}finally{busy.value=false}
+ if(loadFailed.value||busy.value||!service.value||!draftDirty.value)return
+ const problem=bindingFields.value?.validate?.();if(problem){tab.value='bindings';await nextTick();await bindingFields.value.focusInvalid(problem);toast(problem.message,'warning');return}
+ const nacosProblem=nacosPicker.value?.validate?.();if(nacosProblem){tab.value='bindings';await nextTick();const item=resources.value.nacos_configs[nacosProblem.index];await nacosPicker.value.focusReference(item.alias,item.environment);toast(nacosProblem.message,'warning');return}
+ saving.value=true
+ try{const value=await api(`api/services/${encodeURIComponent(service.value)}/resources`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(resourceSaveBody(resources.value))});resources.value=applicationResourceDraft(value);baseline.value=applicationResourceDraft(JSON.parse(JSON.stringify(value)));checkedTargets=targetMap();latest.value=null;conflicted.value=false;toast('绑定已保存；目标可用性以核验结果为准，未执行或发布配置','success')}
+ catch(e){conflicted.value=/其他窗口|修订|资源已变化/.test(e.message);toast(e.message,'error')}finally{saving.value=false}
 }
+async function check(){
+ if(busy.value||!checkEnvironment.value)return
+ checking.value=true
+ try{const report=await api(`api/services/${encodeURIComponent(service.value)}/resources/check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resources:resourceSaveBody(resources.value),environments:[checkEnvironment.value]})});const keys=new Set(report.items.map(resourceCheckKey));resources.value.checks=[...(resources.value.checks||[]).filter(c=>!keys.has(resourceCheckKey(c))),...report.items];checkedTargets=targetMap();toast(`核验完成：通过 ${report.counts.passed||0} 项，需核对 ${report.items.filter(row=>!['passed','not_applicable'].includes(row.status)).length} 项；未验证业务写权限`,'success')}
+ catch(e){toast(e.message,'error')}finally{checking.value=false}
+}
+async function compareLatest(){if(busy.value)return;loading.value=true;try{latest.value=applicationResourceDraft(await api(`api/services/${encodeURIComponent(service.value)}/resources`));choices.value={};tab.value='changes'}catch(e){toast(e.message,'error')}finally{loading.value=false}}
+function adoptRebase(){if(!rebased.value||rebased.value.conflicts.length)return;resources.value=rebased.value.draft;baseline.value=latest.value;latest.value=null;choices.value={};conflicted.value=false;checkedTargets=targetMap();toast('已合并最新配置与草稿，请核对差异后保存','success')}
+function applyCandidates(items){try{resources.value=mergeDiscoveredResources(resources.value,items);tab.value='changes';toast('候选已加入草稿，请核对环境映射后保存','success')}catch(e){toast(e.message,'error')}}
+function targetLabel(row){if(!row)return '无绑定';return [row.connection,...Object.entries(row.config||{}).map(([k,v])=>k+'='+v)].join(' / ')}
+function locate(check){tab.value='bindings';nextTick(()=>{if(resources.value.requirements.some(r=>r.alias===check.alias))bindingFields.value?.focusBinding(check.alias,check.environment);else if(resources.value.nacos_configs.some(r=>r.alias===check.alias))nacosPicker.value?.focusReference(check.alias,check.environment);else{shared.value=['groups'];toast('此资源来自共享组，请在共享资源中维护：'+check.alias,'info')}})}
 </script>
 <template>
-  <Modal :show="show" title="应用环境资源绑定" extra-wide @close="emit('close')">
-    <div class="binding-editor">
-      <label>应用<Sel v-model="service" :disabled="busy||loading" :options="(services||[]).map(s=>s.name)" width="100%" /></label>
-      <p>变更选择逻辑资源别名；执行时按环境解析实际连接。</p>
-      <div><ElButton size="small" @click="openConnections">管理资源连接</ElButton> <ElButton size="small" @click="refreshConnections">刷新连接</ElButton></div>
-      <p v-if="loading">读取资源绑定中…</p>
-      <template v-else>
-        <article v-for="(r,i) in resources.requirements" :key="i">
-          <div class="binding-row"><ElInput v-model="r.alias" :disabled="!!r.service" placeholder="资源别名，如 business-db" /><Sel v-model="r.kind" :disabled="!!r.service" :options="[{value:'mysql',label:'MySQL'},{value:'nacos',label:'Nacos'},{value:'redis',label:'Redis'}]" /><ElButton @click="resources.requirements.splice(i,1);resources.bindings=resources.bindings.filter(b=>b.alias!==r.alias)">删除资源</ElButton></div>
-          <div v-for="(b,j) in resources.bindings" :key="j">
-            <div v-if="b.alias===r.alias" class="binding-row" :class="{'nacos-binding':r.kind==='nacos'}"><Sel v-model="b.environment" :options="environments.map(e=>({value:e.name,label:e.display_name}))" all-label="选择环境" /><Sel v-model="b.connection" :options="connections.filter(c=>c.kind===r.kind).map(c=>({value:c.name,label:`${c.name} · ${c.config?.database||c.endpoint}`}))" all-label="选择连接" filterable /><template v-if="r.kind==='nacos'"><label>Data ID<ElInput v-model="b.config.data_id" :disabled="busy" placeholder="该环境 Data ID；留空沿用变更默认值" /></label><label>Group<ElInput v-model="b.config.group" :disabled="busy" placeholder="留空沿用变更默认 Group" /></label></template><ElButton @click="resources.bindings.splice(j,1)">移除绑定</ElButton></div>
-          </div>
-          <ElButton size="small" :disabled="!r.alias" @click="addBinding(r.alias)">＋ 环境绑定</ElButton>
-        </article>
-        <ElButton :disabled="!service" @click="resources.requirements.push({alias:'',kind:'mysql',required:false,description:''})">＋ 声明资源</ElButton>
-      </template>
-      <div class="binding-footer"><ElButton @click="emit('close')">取消</ElButton><ElButton type="primary" :loading="busy" :disabled="loading||!service" @click="save">保存绑定</ElButton></div>
+ <Dialog :open="show" @update:open="value=>{if(!value)closeEditor()}"><DialogContent class="flex h-[90dvh] max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(1240px,94vw)]" :show-close-button="!busy" @interact-outside="event=>event.preventDefault()" @escape-key-down="event=>{if(busy)event.preventDefault()}">
+  <DialogHeader class="shrink-0 border-b px-5 py-4 pr-12"><DialogTitle>{{mode==='connections'?'资源连接':'应用资源绑定'}}</DialogTitle><DialogDescription class="sr-only">按环境维护资源映射、核验目标与核对差异；保存不执行发布</DialogDescription></DialogHeader>
+  <div v-if="mode==='connections'" class="min-h-0 flex-1 overflow-auto p-4"><Button variant="ghost" @click="returnToApplication">← 返回应用绑定，保留草稿</Button><ResourcesView ref="connectionView" initial-section="connections" @state="connectionState=$event" :plugin="resourcePlugin" :directAPI="directAPI"/></div>
+  <div v-show="mode!=='connections'" class="flex min-h-0 flex-1 flex-col">
+   <div class="shrink-0 space-y-3 border-b px-5 py-3"><div class="flex flex-wrap items-center justify-between gap-2"><OptionPicker v-if="!initialService" :model-value="service" :options="(services||[]).map(applicationOption)" :disabled="busy" aria-label="绑定应用" @update:model-value="changeService"/><strong v-else>{{services?.find(s=>s.name===service)?.display_name||service}}</strong><div class="flex flex-wrap gap-1"><Badge variant="secondary">修订 {{resources.revision||0}}</Badge><Button variant="ghost" size="sm" :disabled="busy" @click="openConnections">连接管理</Button><Button variant="ghost" size="sm" :disabled="busy||connectionReading" @click="refreshConnections"><Spinner v-if="connectionReading"/>刷新连接</Button></div></div><Tabs v-model="tab"><TabsList class="max-w-full flex-wrap h-auto!"><TabsTrigger value="bindings">资源配置</TabsTrigger><TabsTrigger value="overview">环境对照</TabsTrigger><TabsTrigger value="checks">目标核验</TabsTrigger><TabsTrigger value="discover">识别依赖</TabsTrigger><TabsTrigger value="changes">保存差异 <Badge variant="secondary">{{diff.bindings.length}}</Badge></TabsTrigger></TabsList></Tabs></div>
+   <div class="min-h-0 min-w-0 flex-1 overflow-auto p-5">
+    <div v-if="loading" class="flex items-center gap-2 py-3" role="status"><Spinner/>读取资源配置…</div>
+    <div v-show="!loading" class="space-y-4">
+     <div v-show="tab==='bindings'" class="space-y-5"><ResourceBindingsFields :key="service" ref="bindingFields" :resources="resources" :connections="connections" :environments="environments" :disabled="busy" catalog-nacos/><Accordion v-model="shared" type="multiple"><AccordionItem value="groups"><AccordionTrigger>复用共享资源（可选）</AccordionTrigger><AccordionContent class="space-y-3"><Field><FieldLabel>共享资源组</FieldLabel><OptionPicker v-model="resources.resource_groups" multiple :options="resourceGroups.map(g=>({value:g.name,label:g.name}))" :disabled="busy" @update:model-value="chooseGroups"/></Field><div v-for="group in inherited" :key="group.name" class="rounded-lg border p-3 text-sm">{{group.name}} · 修订 {{group.revision}} · {{group.bindings.length}} 条共享绑定</div></AccordionContent></AccordionItem></Accordion><ApplicationNacosPicker :key="service" ref="nacosPicker" v-model="resources.nacos_configs" :request="api" :connections="connections" :environments="environments" :disabled="busy"/></div>
+     <div v-show="tab==='overview'" class="space-y-4"><h3 class="text-sm font-medium">声明与实际环境绑定分别计数</h3><div class="overflow-auto rounded-lg border"><Table class="table-fixed min-w-[620px]"><TableHeader><TableRow><TableHead>环境</TableHead><TableHead>资源声明</TableHead><TableHead>已绑定 / 待绑定</TableHead><TableHead>来源待完善 / 缺配置</TableHead><TableHead>此环境未使用</TableHead><TableHead>未核验</TableHead><TableHead>已核验通过</TableHead><TableHead>需核对</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="env in environmentCounts" :key="env.name"><TableCell>{{env.display_name||env.name}}</TableCell><TableCell>{{env.declared}}</TableCell><TableCell>{{env.bound}} / {{env.missing}}</TableCell><TableCell>{{env.pending_source}} / {{env.missing_config}}</TableCell><TableCell>{{env.not_applicable}}</TableCell><TableCell>{{env.unchecked}}</TableCell><TableCell>{{env.passed}}</TableCell><TableCell>{{env.failed}}</TableCell><TableCell><Button variant="ghost" size="sm" @click="checkEnvironment=env.name;tab='checks'">查看核验</Button></TableCell></TableRow></TableBody></Table></div><div class="max-h-[46dvh] overflow-auto rounded-lg border"><Table class="table-fixed min-w-[780px]"><TableHeader><TableRow><TableHead class="w-40">逻辑资源</TableHead><TableHead v-for="env in environments" :key="env.name">{{env.display_name||env.name}}</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="row in comparison" :key="row.alias"><TableCell class="break-all whitespace-normal">{{row.alias}}</TableCell><TableCell v-for="target in row.targets" :key="target.environment" class="break-all whitespace-normal align-top"><Badge variant="secondary">{{resourceCheckLabels[target.status]}}</Badge><p class="text-xs mt-1">{{targetLabel(target.binding)}}</p><p v-if="target.binding" class="text-xs text-muted-foreground">{{connections.find(c=>c.name===target.binding.connection)?.config?.namespace||''}}</p><Button variant="ghost" size="sm" @click="locate(target)">定位</Button></TableCell></TableRow></TableBody></Table></div><p class="text-xs text-muted-foreground">未绑定和未核验均不代表可用；结果不会代替发布时的权限与目标检查。</p></div>
+     <div v-show="tab==='checks'" class="space-y-4"><div class="flex flex-wrap gap-2"><OptionPicker v-model="checkEnvironment" :options="environments.map(e=>({value:e.name,label:e.display_name||e.name}))" all-label="选择核验环境" aria-label="资源核验环境" :disabled="busy"/><Button variant="outline" :disabled="busy||!checkEnvironment" @click="check"><Spinner v-if="checking"/>核验当前环境</Button><Button :variant="onlyFailed?'secondary':'ghost'" :aria-pressed="onlyFailed" @click="onlyFailed=!onlyFailed">只看待核对</Button></div><div class="max-h-[50dvh] overflow-auto rounded-lg border"><Table class="table-fixed min-w-[620px]"><TableHeader><TableRow><TableHead>资源 / 环境</TableHead><TableHead>连接</TableHead><TableHead>结果</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="row in checkRows" :key="resourceCheckKey(row)"><TableCell class="whitespace-normal break-all">{{row.alias}} / {{row.environment}}</TableCell><TableCell class="whitespace-normal break-all">{{row.connection||'尚未选择'}}</TableCell><TableCell class="whitespace-normal"><Badge :variant="row.status==='failed'?'destructive':'secondary'">{{resourceCheckLabels[row.status]||row.status}}</Badge><p class="mt-1 text-xs text-muted-foreground">{{row.message}}</p><p v-if="row.persistence_warning" class="text-xs text-destructive">{{row.persistence_warning}}</p><p v-if="row.suggestion" class="mt-1 text-xs">{{row.suggestion}}</p></TableCell><TableCell><Button variant="ghost" size="sm" @click="locate(row)">定位配置</Button></TableCell></TableRow><TableRow v-if="!checkRows.length"><TableCell colspan="4"><Empty><EmptyHeader><EmptyDescription>尚无当前筛选下的核验结果；先选择环境，再执行只读核验</EmptyDescription></EmptyHeader></Empty></TableCell></TableRow></TableBody></Table></div></div>
+     <ResourceDependencyDiscovery :key="service" v-show="tab==='discover'" :service="service" :environments="environments" :connections="connections" :request="api" :disabled="saving||loading||checking" @busy="discovering=$event" @apply="applyCandidates"/>
+     <div v-show="tab==='changes'" class="space-y-4"><div class="flex flex-wrap items-center justify-between gap-2"><h3 class="text-sm font-medium">{{diff.bindings.length}} 条目标映射变化{{diff.declarationsChanged?' · 资源声明或共享组有变化':''}}</h3><Button variant="outline" size="sm" :disabled="busy" @click="compareLatest">核对服务器最新差异</Button></div><div class="overflow-auto rounded-lg border"><Table class="table-fixed min-w-[640px]"><TableHeader><TableRow><TableHead>环境 / 资源</TableHead><TableHead>原目标</TableHead><TableHead>草稿目标</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="row in diff.bindings" :key="resourceCheckKey(row)"><TableCell>{{row.environment}} / {{row.alias}}</TableCell><TableCell class="whitespace-normal break-all">{{targetLabel(row.before)}}</TableCell><TableCell class="whitespace-normal break-all">{{targetLabel(row.after)}}</TableCell></TableRow><TableRow v-if="!diff.bindings.length"><TableCell colspan="3">目标映射未改变</TableCell></TableRow></TableBody></Table></div><div v-if="latest" class="space-y-3 rounded-lg border p-4"><h4 class="text-sm font-medium">服务器修订 {{latest.revision}} · 保留双方不冲突的修改</h4><div v-for="row in serverDiff.bindings" :key="resourceCheckKey(row)" class="space-y-1 rounded-md bg-muted/30 p-3 text-xs break-all"><strong>{{row.environment}} / {{row.alias}} · 服务器变更</strong><p>原目标：{{targetLabel(row.before)}}</p><p>新目标：{{targetLabel(row.after)}}</p></div><p v-if="serverDiff.declarationsChanged" class="text-xs text-muted-foreground">服务器的资源声明或共享组也已变化；合并后请核对资源配置。</p><div v-for="row in rebased.conflicts" :key="row.id" class="grid gap-2 sm:grid-cols-2"><span class="text-sm">{{row.environment}} {{row.alias}}：两边均已修改</span><OptionPicker v-model="choices[row.id]" :options="[{value:'local',label:'采用当前草稿'},{value:'remote',label:'采用服务器配置'}]" placeholder="请选择如何处理此冲突" :aria-label="'冲突选择 '+row.alias"/></div><Button variant="outline" :disabled="rebased.conflicts.length>0" @click="adoptRebase">合并到草稿，继续核对</Button></div></div>
     </div>
-  </Modal>
-  <Modal :show="showConnections" title="资源中心" extra-wide @close="showConnections=false;refreshConnections()"><ResourcesView :plugin="resourcePlugin" :directAPI="directAPI" /></Modal>
+   </div>
+   <DialogFooter class="shrink-0 flex-row flex-wrap items-center border-t p-4"><span class="basis-full text-xs text-muted-foreground sm:mr-auto sm:basis-auto">{{draftDirty?'有未保存修改':'配置已保存或尚无修改'}} · 保存不会执行资源操作</span><Button v-if="conflicted" variant="outline" :disabled="busy" @click="compareLatest">保留草稿，核对冲突</Button><Button v-if="loadFailed" variant="outline" :disabled="busy" @click="readResources">重新读取</Button><Button variant="outline" :disabled="busy" @click="closeEditor">{{draftDirty?'取消':'完成'}}</Button><Button :disabled="loadFailed||busy||!service||!draftDirty" @click="save"><Spinner v-if="saving"/>保存绑定</Button></DialogFooter>
+  </div>
+ </DialogContent></Dialog>
 </template>
-<style scoped>
-.binding-editor{display:grid;gap:14px}.binding-editor p{color:var(--muted);margin:0}.binding-editor article{border:1px solid var(--border);border-radius:8px;padding:14px;display:grid;gap:10px}.binding-row{display:grid;grid-template-columns:minmax(160px,1fr) minmax(160px,1.4fr) auto;gap:12px;align-items:center}.nacos-binding{grid-template-columns:minmax(100px,.7fr) minmax(160px,1fr) minmax(180px,1.3fr) minmax(130px,.8fr) auto}.binding-row>.el-select{width:100%!important}.nacos-binding label{display:grid;gap:4px;font-size:12px;color:var(--muted);min-width:0}.binding-footer{display:flex;justify-content:flex-end;gap:12px}@media(max-width:900px){.nacos-binding{grid-template-columns:1fr 1fr}.nacos-binding>.el-button{justify-self:start}}@media(max-width:700px){.binding-row{grid-template-columns:1fr}}
-</style>

@@ -149,8 +149,8 @@ func TestNacosReviewCASRecoveryAndEncryption(t *testing.T) {
 	if posts != 1 || !strings.Contains(after, "enabled: true") || !strings.Contains(after, "preserve comment") {
 		t.Fatal("publish or comments", after, posts)
 	}
-	if _, e = st.prepareNacosNode(context.Background(), "again", []int64{c.ID}, "prod"); e == nil {
-		t.Fatal("duplicate allowed")
+	if repeat, err := st.prepareNacosNode(context.Background(), "again", []int64{c.ID}, "prod"); err != nil || !repeat.Configs[0].Skip || repeat.Configs[0].PriorRunID != run.ID {
+		t.Fatal("proven success was not reused", err)
 	}
 	mux := http.NewServeMux()
 	registerNacosRoutes(mux, st)

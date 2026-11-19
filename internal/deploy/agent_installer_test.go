@@ -56,7 +56,7 @@ func TestAgentInstallCommandDoesNotContainToken(t *testing.T) {
 	if strings.Contains(cmd, "top-secret") {
 		t.Fatal("token leaked into shell command")
 	}
-	for _, required := range []string{"systemctl enable logagent", "systemctl restart logagent", "install -m 0600", "systemctl is-active"} {
+	for _, required := range []string{"systemctl enable logagent", "systemctl restart logagent", "install -m 0600", "systemctl is-active", "backups/install-", "cp -p /usr/local/bin/logagent"} {
 		if !strings.Contains(cmd, required) {
 			t.Fatalf("install command missing %q", required)
 		}

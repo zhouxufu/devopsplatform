@@ -60,9 +60,20 @@ func (a *APIServer) handleTail(w http.ResponseWriter, r *http.Request) {
 	if since > 0 {
 		start = since + 1
 	}
-	resp, err := a.st.Search(filter.Service, filter.Environment, "", level, start, end, q.Get("q"), "", "", replay)
-	if err == nil && len(resp.Hits) > 0 {
+	sub := a.hub.Subscribe(filter)
+	defer a.hub.Unsubscribe(sub)
+	seen := map[string]bool{}
+	var resp *types.SearchResponse
+	if replay > 0 {
+		resp, err = a.st.Search(filter.Service, filter.Environment, "", level, start, end, q.Get("q"), "", "", replay)
+	}
+	if err != nil {
+		a.wsWrite(c, wsMsg{Type: "error", Error: err.Error()})
+		return
+	}
+	if resp != nil && len(resp.Hits) > 0 {
 		for i := len(resp.Hits) - 1; i >= 0; i-- {
+			seen[resp.Hits[i].EventID] = true
 			if !a.wsWrite(c, wsMsg{Type: "log", Hit: &resp.Hits[i]}) {
 				return
 			}
@@ -71,8 +82,6 @@ func (a *APIServer) handleTail(w http.ResponseWriter, r *http.Request) {
 	a.wsWrite(c, wsMsg{Type: "replay_done"})
 
 	// 2) 订阅增量
-	sub := a.hub.Subscribe(filter)
-	defer a.hub.Unsubscribe(sub)
 	ping := time.NewTicker(20 * time.Second)
 	defer ping.Stop()
 	for {
@@ -83,6 +92,9 @@ func (a *APIServer) handleTail(w http.ResponseWriter, r *http.Request) {
 			a.wsWrite(c, wsMsg{Type: "slow_client"})
 			return
 		case hit := <-sub.ch:
+			if hit.EventID != "" && seen[hit.EventID] {
+				continue
+			}
 			if !a.wsWrite(c, wsMsg{Type: "log", Hit: &hit}) {
 				return
 			}

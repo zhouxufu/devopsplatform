@@ -9,7 +9,7 @@ import (
 )
 
 func TestStorageSeparatesEnvironments(t *testing.T) {
-	st, err := Open(t.TempDir(), 7, 1)
+	st, err := openTestLogStorage(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,6 +22,7 @@ func TestStorageSeparatesEnvironments(t *testing.T) {
 	if n, err := st.Insert(events); err != nil || n != 2 {
 		t.Fatalf("insert = %d, %v", n, err)
 	}
+	awaitTestLogDelivery(t, st)
 	resp, err := st.Search("orders", "test", "", "", now-1000, now+1000, "", "", "", 10)
 	if err != nil || len(resp.Hits) != 1 || resp.Hits[0].Environment != "test" || resp.Hits[0].Host != "test-a" {
 		t.Fatalf("environment search leaked data: %#v, %v", resp, err)
@@ -33,7 +34,7 @@ func TestStorageSeparatesEnvironments(t *testing.T) {
 }
 
 func TestStorageIdempotencyAndSourcePath(t *testing.T) {
-	st, err := Open(t.TempDir(), 7, 1)
+	st, err := openTestLogStorage(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,9 +49,10 @@ func TestStorageIdempotencyAndSourcePath(t *testing.T) {
 	}
 	// event_id 去重表是全局的，即使重试时 agent 时间跨过午夜也不会重复。
 	event.Ts = now - 24*60*60*1000
-	if n, err := st.Insert([]types.Event{event}); err != nil || n != 0 {
-		t.Fatalf("cross-day duplicate = %d, %v", n, err)
+	if _, err := st.Insert([]types.Event{event}); err != ErrLogIdentityConflict {
+		t.Fatalf("changed event identity must be rejected: %v", err)
 	}
+	awaitTestLogDelivery(t, st)
 	resp, err := st.Search("orders", "prod", "", "", now-1000, now+1000, "", "", "", 10)
 	if err != nil || len(resp.Hits) != 1 {
 		t.Fatalf("search = %#v, %v", resp, err)
@@ -61,7 +63,7 @@ func TestStorageIdempotencyAndSourcePath(t *testing.T) {
 }
 
 func TestQuotedSearchRequiresLiteralPhrase(t *testing.T) {
-	st, err := Open(t.TempDir(), 7, 1)
+	st, err := openTestLogStorage(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +78,7 @@ func TestQuotedSearchRequiresLiteralPhrase(t *testing.T) {
 	if n, err := st.Insert(events); err != nil || n != 2 {
 		t.Fatalf("insert = %d, %v", n, err)
 	}
+	awaitTestLogDelivery(t, st)
 	resp, err := st.Search("orders", "test", "", "", now-1000, now+1000, `"com.alibaba.nacos.common.remote.client"`, "", "", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +89,7 @@ func TestQuotedSearchRequiresLiteralPhrase(t *testing.T) {
 }
 
 func TestLogQueryBooleanFieldsWildcardsAndLiveMatch(t *testing.T) {
-	st, err := Open(t.TempDir(), 7, 1)
+	st, err := openTestLogStorage(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +106,7 @@ func TestLogQueryBooleanFieldsWildcardsAndLiveMatch(t *testing.T) {
 
 	assertCount := func(query string, want int) {
 		t.Helper()
+		awaitTestLogDelivery(t, st)
 		resp, err := st.Search("", "", "", "", now-1000, now+1000, query, "", "", 20)
 		if err != nil {
 			t.Fatalf("query %q: %v", query, err)

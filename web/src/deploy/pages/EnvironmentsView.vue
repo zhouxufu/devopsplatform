@@ -1,69 +1,100 @@
 <script setup>
-import PageHeader from "../../shared/components/PageHeader.vue"
-import { ref, onMounted } from 'vue'
-import Modal from '../../shared/components/Modal.vue'
-import HelpTip from '../../shared/components/HelpTip.vue'
-import Sel from '../../shared/components/Sel.vue'
-import { ElButton, ElInput, ElInputNumber } from '../../shared/components/ui.js'
-import { toast } from '../../shared/composables/toast.js'
+import DataTable from "../../shared/components/DataTable.vue"
 
-defineProps({ embedded: { type: Boolean, default: false } })
-const environments = ref([]), users = ref([]), show = ref(false), editing = ref(null), form = ref({})
-const resourceURL = path => `/api/resources/${path}`
-async function load() {
-  const [envRows, userRows] = await Promise.all([fetch(resourceURL('environments')).then(r => r.json()), fetch('/api/users').then(r => r.ok ? r.json() : [])])
-  environments.value = envRows ?? []
-  users.value = (userRows ?? []).filter(user => user.enabled)
+import {computed,nextTick,onMounted,onBeforeUnmount,onDeactivated,ref,watch} from 'vue'
+
+
+import PageHeader from '../../shared/components/PageHeader.vue'
+
+
+import {useTableLayout} from '../../shared/composables/tableLayout.js'
+import {toast} from '../../shared/composables/toast.js'
+import DeliveryNodeEditor from '../components/DeliveryNodeEditor.vue'
+import EnvironmentNacosEditor from '../components/EnvironmentNacosEditor.vue'
+const props=defineProps({embedded:{type:Boolean,default:false},editorOnly:Boolean,title:{type:String,default:'环境管理'}})
+const emit=defineEmits(['saved','state'])
+const {pinTableActions}=useTableLayout()
+const environments=ref([]),users=ref([]),reading=ref(false),readError=ref(''),show=ref(false),editing=ref(null),form=ref({}),formRef=ref(null),nameInput=ref(null),displayInput=ref(null),approversInput=ref(null),saving=ref(false),removing=ref(''),baseline=ref(''),active=ref('base')
+const policy=ref({revision:0,stages:[]}),policyLoading=ref(false),policyError=ref(''),policyBaseline=ref(''),defaultTemplates=ref([]),nacosEnvironment=ref(null),nacosState=ref({dirty:false,busy:false})
+const query=ref(''),protection=ref(''),page=ref(1)
+let policySequence=0,policyAbort=null
+const purposes=[{value:'development',label:'开发'},{value:'test',label:'测试 / 验收'},{value:'staging',label:'预发布'},{value:'production',label:'生产'},{value:'other',label:'其他'}]
+const sourceOptions=[{value:'existing',label:'使用已有制品'},{value:'build',label:'按本次范围合并并构建'}]
+const dirty=computed(()=>show.value&&(JSON.stringify(form.value)!==baseline.value||(!policyError.value&&!policyLoading.value&&JSON.stringify(policy.value)!==policyBaseline.value)))
+watch(()=>({dirty:dirty.value||nacosState.value.dirty,busy:saving.value||!!removing.value||nacosState.value.busy}),v=>emit('state',v),{immediate:true})
+const rules=computed(()=>({name:[{required:true,message:'请填写环境标识'},{match:/^[a-z][a-z0-9_-]{0,31}$/,message:'小写字母开头，支持小写字母、数字、短横线和下划线，最多 32 位'}],display_name:[{required:true,message:'请填写显示名称'}],approver_list:form.value.protected?[{type:'array',required:true,minLength:1,message:'受保护环境至少选择一名审批人'}]:[]}))
+const filtered=computed(()=>environments.value.filter(e=>(!protection.value||(protection.value==='protected'?e.protected:!e.protected))&&[e.name,e.display_name,purposes.find(p=>p.value===e.purpose)?.label].some(v=>String(v||'').toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase()))))
+const rows=computed(()=>filtered.value.slice((page.value-1)*20,page.value*20))
+watch([query,protection],()=>page.value=1)
+watch(()=>filtered.value.length,n=>page.value=Math.min(page.value,Math.max(1,Math.ceil(n/20))))
+const userOptions=computed(()=>[...users.value.map(u=>({value:u.username,label:u.display_name?u.display_name+' · '+u.username:u.username})),...(form.value.approver_list||[]).filter(name=>!users.value.some(u=>u.username===name)).map(value=>({value,label:value}))])
+const userName=name=>users.value.find(u=>u.username===name)?.display_name||name
+async function read(path,opt){const r=await fetch(path,opt),body=await r.json();if(!r.ok)throw Error(body.error||'请求失败');return body}
+const url=path=>'/api/resources/'+path
+async function load(){reading.value=true;readError.value='';try{const [envRows,userRows]=await Promise.all([read(url('environments')),read('/api/users').catch(()=>[])]);if(!Array.isArray(envRows))throw Error('环境数据格式异常');environments.value=envRows;users.value=(Array.isArray(userRows)?userRows:[]).filter(u=>u.enabled);return true}catch(e){readError.value=e.message;return false}finally{reading.value=false}}
+async function loadPolicy(){
+ if(!editing.value)return
+ const seq=++policySequence;policyAbort?.abort();policyAbort=new AbortController();policyLoading.value=true;policyError.value=''
+ try{
+  const [p,templates]=await Promise.all([read(url('environments/'+encodeURIComponent(editing.value.name)+'/delivery-policy'),{signal:policyAbort.signal}),read(url('delivery/templates'),{signal:policyAbort.signal})])
+  if(seq!==policySequence)return
+  if(!p||Array.isArray(p)||!Array.isArray(templates))throw Error('环境流程数据格式异常')
+  policy.value={workflow_template_id:0,hotfix_template_id:0,...p,stages:Array.isArray(p.stages)?p.stages:[],defaults:{strategy_kind:'',template_id:0,artifact_source:'',...p.defaults,applications:p.defaults?.applications||{}}}
+  defaultTemplates.value=templates.filter(t=>!t.workbench);policyBaseline.value=JSON.stringify(policy.value)
+ }catch(e){if(seq===policySequence&&e.name!=='AbortError')policyError.value=e.message}
+ finally{if(seq===policySequence)policyLoading.value=false}
 }
-function open(env) {
-  editing.value = env || null
-	form.value = env ? { ...env, approver_list: String(env.approvers || '').split(',').map(v => v.trim()).filter(Boolean) } : { name: '', display_name: '', protected: false, require_reason: false, approvers: '', approver_list: [], sort_order: 50 }
-  show.value = true
+async function open(env){
+ if(saving.value)return
+ editing.value=env||null
+ form.value=env?{...env,approver_list:String(env.approvers||'').split(',').map(v=>v.trim()).filter(Boolean)}:{name:'',display_name:'',purpose:'other',protected:false,require_reason:false,approvers:'',approver_list:[],sort_order:50}
+ baseline.value=JSON.stringify(form.value);policy.value={revision:0,stages:[]};policyBaseline.value=JSON.stringify(policy.value);policyError.value='';active.value='base';show.value=true
+ if(env)await loadPolicy()
 }
-async function save() {
-  if (!form.value.name || !form.value.display_name) return toast('环境标识和名称必填')
-	form.value.approvers = (form.value.approver_list || []).join(',')
-  if (form.value.protected && !form.value.approvers) return toast('受保护环境必须配置至少一名审批人', 'warning')
-	const { approver_list, ...payload } = form.value
-	const res = await fetch(resourceURL('environments'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-  const body = await res.json()
-  if (!res.ok) return toast(body.error || '保存失败', 'error')
-  show.value = false; toast('环境已保存', 'success'); load()
+async function close(){if(saving.value)return;if(dirty.value&&!await confirmAction('关闭将放弃本次未保存的环境与策略修改。','放弃未保存的修改？',{confirmButtonText:'放弃修改',cancelButtonText:'继续编辑'}))return;policySequence++;policyAbort?.abort();policyLoading.value=false;show.value=false}
+function cancel(){close();return false}
+async function save(){
+ if(saving.value||policyLoading.value||policyError.value)return
+ saving.value=true;let baseSaved=false
+ try{
+  const errors=await validateFields(formRef.value,form.value,rules.value,_validationErrors)
+  if(errors){saving.value=false;active.value='base';const field=Object.keys(errors)[0];await nextTick();scrollToValidationField(formRef.value,field);focusControl(({name:nameInput.value,display_name:displayInput.value,approver_list:approversInput.value})[field]);focusControl(formRef.value?.querySelector('.arco-form-item-error input'));toast(errors[field].message,'warning');return}
+  const {approver_list,...payload}=form.value;payload.approvers=approver_list.join(',')
+  if(form.value.purpose!=='production')policy.value.hotfix_template_id=0
+  await read(url('environments'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});baseSaved=true
+  if(editing.value&&JSON.stringify(policy.value)!==policyBaseline.value){const saved=await read(url('environments/'+encodeURIComponent(editing.value.name)+'/delivery-policy'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(policy.value)});policy.value=saved;policyBaseline.value=JSON.stringify(saved)}
+  show.value=false;toast('环境与交付策略已保存；已有执行单不改写','success');await load();emit('saved')
+ }catch(e){toast((baseSaved?'环境基础信息已保存，但交付策略未保存：':'')+e.message,'error')}finally{saving.value=false}
 }
-async function remove(env) {
-  if (!confirm(`删除环境「${env.display_name}」？`)) return
-  const res = await fetch(resourceURL(`environments/${env.name}`), { method: 'DELETE' })
-  const body = await res.json()
-  if (!res.ok) return toast(body.error || '删除失败', 'error')
-  load()
-}
-onMounted(load)
+async function remove(env){if(removing.value||!await confirmAction('删除环境「'+env.display_name+'」？被引用的环境可能无法删除。','删除环境',{confirmButtonText:'删除'}))return;removing.value=env.name;try{await read(url('environments/'+encodeURIComponent(env.name)),{method:'DELETE'});toast('环境已删除','success');await load()}catch(e){toast(e.message,'error')}finally{removing.value=''}}
+async function editEnvironment(name){if(!await load())return;const env=environments.value.find(e=>e.name===name);if(!env)return toast('目标环境不存在，请重新载入','error');await open(env)}
+function deactivate(){if(!saving.value){policySequence++;policyAbort?.abort();show.value=false;policyLoading.value=false;nacosEnvironment.value=null}}
+defineExpose({editEnvironment})
+onMounted(()=>{if(!props.editorOnly)load()})
+onDeactivated(deactivate)
+onBeforeUnmount(()=>{policySequence++;policyAbort?.abort()})
+
+import OptionPicker from '../../shared/components/OptionPicker.vue'
+
+import {PlusIcon as IconPlus,RefreshCwIcon as IconRefresh,SearchIcon as IconSearch} from '@lucide/vue'
+
+import {confirmAction} from '../../shared/shadcnFeedback.js'
+
+import {ref as _viewRef} from 'vue'
+const _view1=_viewRef([])
+
+import {reactive as _validationReactive} from 'vue'
+import {validateFields,setFieldErrors,scrollToValidationField} from '../../shared/formValidation.js'
+const _validationErrors=_validationReactive({})
+
+import {focusControl} from '../../shared/focusControl.js'
+
+
+import {Accordion,AccordionContent,AccordionItem,AccordionTrigger,Badge,Button,DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuTrigger,Empty,EmptyContent,EmptyDescription,EmptyHeader,EmptyTitle,Field,FieldDescription,FieldError,FieldLabel,Input,NumberField,NumberFieldContent,NumberFieldDecrement,NumberFieldIncrement,NumberFieldInput,Pagination,PaginationContent,PaginationNext,PaginationPrevious,Sheet,SheetContent,SheetDescription,SheetFooter,SheetHeader,SheetTitle,Spinner,Switch,Table,TableBody,TableCell,TableHead,TableHeader,TableRow,Tabs,TabsContent,TabsList,TabsTrigger} from '../../shared/shadcn-ui.js'
+
+import {InputGroup,InputGroupInput,InputGroupAddon,InputGroupButton} from '../../shared/shadcn-ui.js'
+
+import {XIcon} from '@lucide/vue'
 </script>
-
-<template>
-  <div>
-<PageHeader title="环境管理" :heading-tag="embedded ? 'h3' : 'h2'" help="环境是运行资源和发布策略的隔离边界；同一个应用可以配置多个环境，无需复制应用。"><template #actions><ElButton type="primary" native-type="button" size="small" @click="open()">＋ 新增环境</ElButton></template></PageHeader>
-    <div class="scope-note">主机、主机组和应用部署配置只能属于同一环境；受保护环境必须审批后才能发布。</div>
-    <table>
-      <thead><tr><th>环境</th><th>标识</th><th>保护策略</th><th>审批人</th><th>顺序</th><th>操作</th></tr></thead>
-      <tbody><tr v-for="env in environments" :key="env.name">
-        <td><b>{{ env.display_name }}</b></td><td><code>{{ env.name }}</code></td>
-        <td><span :class="env.protected ? 'st-run' : 'st-ok'">{{ env.protected ? '🔒 受保护' : '普通' }}</span><span v-if="env.require_reason" style="color:var(--dim)"> · 必填原因</span></td><td :class="env.protected && !env.approvers ? 'st-fail' : ''">{{env.approvers || (env.protected ? '未配置（禁止发布）' : '无需审批')}}</td>
-        <td>{{ env.sort_order }}</td>
-        <td><button class="op op-btn" @click="open(env)">编辑</button><button class="op op-btn del" :disabled="environments.length <= 1" :title="environments.length <= 1 ? '至少保留一个环境' : '删除环境'" @click="remove(env)">删除</button></td>
-      </tr></tbody>
-    </table>
-    <Modal :show="show" :title="editing ? '编辑环境' : '新增环境'" @close="show = false">
-      <div class="fld"><label>环境标识</label><ElInput v-model="form.name" :disabled="!!editing" placeholder="如 uat" /></div>
-      <div class="fld"><label>显示名称</label><ElInput v-model="form.display_name" placeholder="如 用户验收" /></div>
-      <div class="fld"><label>排序</label><ElInputNumber v-model="form.sort_order" :min="0" :max="999" /></div>
-      <label style="display:block;margin:10px 0"><input v-model="form.protected" type="checkbox" /> 受保护环境，需要审批后发布</label>
-      <label style="display:block;margin:10px 0"><input v-model="form.require_reason" type="checkbox" /> 发布时必须填写原因</label>
-			<div class="fld"><label>发布 / 操作审核人员</label><Sel v-model="form.approver_list" :options="users.map(user=>({value:user.username,label:user.display_name+' · '+user.username}))" multiple filterable width="100%" placeholder="选择审核人员" /><small style="color:var(--dim)">从平台成员中选择；发起人不能审核自己的执行单。普通环境的服务发布仍无需审核，但 SQL 写操作和 Redis 操作始终需要另一名审核人。</small></div>
-      <div style="display:flex"><ElButton type="primary" style="margin-left:auto" @click="save">保存</ElButton></div>
-    </Modal>
-  </div>
-</template>
-<style scoped>
-.page-head{display:flex;align-items:center;margin-bottom:12px}.page-head h2{font-size:20px}.page-head>button{margin-left:auto}.title-row{display:flex;align-items:center;gap:7px}.scope-note{padding:9px 11px;margin-bottom:12px;border:1px solid var(--border);border-radius:7px;background:var(--panel);color:var(--muted);font-size:12px}
-</style>
+<template><section><template v-if="!editorOnly"><PageHeader class="environment-header" :title="title" compact :heading-tag="embedded?'h3':'h2'" help="环境负责资源隔离、流程绑定和审批；应用自己的分支与制品策略在应用环境中配置。"><template #actions><slot name="actions"/><Button @click="open()" variant="default" size="default" type="button" :disabled="(reading||!!readError)"><IconPlus/>新增环境</Button></template></PageHeader><div class="environment-toolbar"><InputGroup class="environment-search min-w-0"><InputGroupInput v-model="query" placeholder="搜索环境名称、标识或用途" v-bind="{'aria-label':'搜索环境'}"/><InputGroupAddon align="inline-end"><InputGroupButton v-if="query" :disabled="false" size="icon-xs" aria-label="清空输入" @click="query='' "><XIcon/></InputGroupButton></InputGroupAddon></InputGroup><OptionPicker v-model="protection" :style="{width:'180px'}" aria-label="环境保护筛选" :options="[{value:&quot;&quot;,label:&quot;全部保护策略&quot;},{value:&quot;protected&quot;,label:&quot;受保护&quot;},{value:&quot;normal&quot;,label:&quot;普通&quot;}]"/><Button aria-label="重新加载环境" @click="load" class="refresh" variant="outline" size="default" type="button" :disabled="(reading)"><Spinner v-if="reading"/><IconRefresh/></Button></div><Empty v-if="readError"><EmptyHeader><EmptyTitle>{{"环境加载失败"}}</EmptyTitle><EmptyDescription>{{readError}}</EmptyDescription></EmptyHeader><EmptyContent><Button @click="load" variant="default" size="default" type="button">重新加载</Button></EmptyContent></Empty><template v-else><div class="console-table min-w-0 max-w-full"><div v-if="reading" class="flex items-center gap-2 py-2" role="status"><Spinner/>正在读取</div><div class="environment-table min-w-0 max-w-full"><DataTable :rows="(rows||[])" :columns="[{id:'c0',label:&quot;环境&quot;,size:220,minSize:64,required:true,defaultHidden:false,flex:true,selection:false,pin:'left'},{id:'c1',label:&quot;用途&quot;,size:120,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c2',label:&quot;保护策略&quot;,size:180,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c3',label:&quot;审批人&quot;,size:240,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c4',label:&quot;排序&quot;,size:72,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c5',label:&quot;操作&quot;,size:128,minSize:64,required:true,defaultHidden:false,flex:false,selection:false,pin:'right'}]" table-key="deploy-pages-EnvironmentsView-0" :row-key="(record,rowIndex)=>typeof (&quot;name&quot;)==='function'?(&quot;name&quot;)(record):record[&quot;name&quot;]??rowIndex"><template #header-c0>环境</template><template #cell-c0="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(&quot;&quot;)}"><template v-for="{record:env} in [{record,rowIndex}]"><b>{{env.display_name}}</b><small>{{env.name}}</small></template></div></template><template #header-c1>用途</template><template #cell-c1="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:env} in [{record,rowIndex}]">{{purposes.find(p=>p.value===env.purpose)?.label||'其他'}}</template></div></template><template #header-c2>保护策略</template><template #cell-c2="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:env} in [{record,rowIndex}]"><Badge :variant="(env.protected?'orange':'gray')==='red'?'destructive':'secondary'">{{env.protected?'受保护':'普通'}}</Badge><small v-if="env.require_reason">发布必填原因</small></template></div></template><template #header-c3>审批人</template><template #cell-c3="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(&quot;&quot;)}"><template v-for="{record:env} in [{record,rowIndex}]">{{env.approvers?String(env.approvers).split(',').map(userName).join('、'):env.protected?'未配置（禁止发布）':'无需审批'}}</template></div></template><template #header-c4>排序</template><template #cell-c4="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:env} in [{record,rowIndex}]">{{env.sort_order??'—'}}</template></div></template><template #header-c5>操作</template><template #cell-c5="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:env} in [{record,rowIndex}]"><Button @click="open(env)" variant="ghost" size="sm" type="button" :disabled="(!!removing)">编辑</Button><DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="sm" type="button" :disabled="(!!removing)">更多</Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem @select="nacosEnvironment=env">Nacos 接入</DropdownMenuItem><DropdownMenuItem @select="remove(env)" :disabled="environments.length<=1">删除环境</DropdownMenuItem></DropdownMenuContent></DropdownMenu></template></div></template><template #empty><Empty v-if="!reading"><EmptyHeader><EmptyDescription><p>{{environments.length?'没有匹配的环境':'尚未配置环境'}}</p><Button v-if="environments.length" @click="query='';protection=''" variant="ghost" size="default" type="button">清空筛选</Button><span v-else>先添加开发或测试环境，再配置主机与应用发布目标。</span></EmptyDescription></EmptyHeader></Empty></template></DataTable></div></div><div class="environment-footer"><div class="flex w-full flex-wrap items-center justify-between gap-3"><span class="mr-auto text-sm text-muted-foreground">共 {{filtered.length}} 项</span><Pagination class="mx-0 w-auto" :page="page" :total="filtered.length" :items-per-page="20" @update:page="page=$event;"><PaginationContent><PaginationPrevious/><span class="px-2 text-sm">{{page}} / {{Math.max(1,Math.ceil((filtered.length)/(20)))}}</span><PaginationNext/></PaginationContent></Pagination></div></div></template><EnvironmentNacosEditor v-if="nacosEnvironment" :key="nacosEnvironment.name" :environment="nacosEnvironment" @state="nacosState=$event" @close="nacosEnvironment=null;nacosState={dirty:false,busy:false}"/></template><Sheet :open="show" @update:open="async v=>{if(!v){if(await (cancel)()===false)return;}}"><SheetContent class="data-[side=right]:w-full gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-[var(--editor-width)]" :class="false?'inset-0 h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 rounded-none sm:max-w-none':''" :style="{'--editor-width':typeof ('min(880px, 100vw)')==='number'?('min(880px, 100vw)')+'px':('min(880px, 100vw)')}" :show-close-button="!saving" @interact-outside="e=>{if(!(false))e.preventDefault()}" @escape-key-down="e=>{if(!(!saving))e.preventDefault()}"><SheetHeader class="shrink-0 border-b p-5 pr-12"><SheetTitle>{{editing?'编辑环境 · '+editing.display_name:'新增环境'}}</SheetTitle><SheetDescription class="sr-only">详情与操作</SheetDescription></SheetHeader><div class="min-h-0 flex-1 overflow-auto p-5"><form ref="formRef" @submit.prevent=""><fieldset   class="min-w-0 space-y-5" :disabled="saving"><Tabs :model-value="active" @update:model-value="active=$event;"><div class="flex min-w-0 items-center gap-2"><TabsList class="h-auto! max-w-full flex-wrap gap-y-1 [&>[data-slot=tabs-trigger]]:h-7"><TabsTrigger :value="&quot;base&quot;">基础信息</TabsTrigger><TabsTrigger :disabled="!editing" :value="&quot;workflow&quot;">交付流程</TabsTrigger><TabsTrigger :disabled="!editing||policyLoading||!!policyError" :value="&quot;approval&quot;">审核阶段</TabsTrigger></TabsList></div><TabsContent :value="&quot;base&quot;" force-mount v-show="!(active!==&quot;base&quot;)" class="min-w-0"><div class="environment-fields"><Field data-validation-field="name" :data-invalid="!!_validationErrors['name']" @vue:mounted="delete _validationErrors['name']"><FieldLabel>环境标识</FieldLabel><Input ref="nameInput" v-model="form.name" :disabled="!!editing" placeholder="如 uat"/><FieldError v-if="_validationErrors['name']">{{_validationErrors['name'].message}}</FieldError></Field><Field data-validation-field="display_name" :data-invalid="!!_validationErrors['display_name']" @vue:mounted="delete _validationErrors['display_name']"><FieldLabel>显示名称</FieldLabel><Input ref="displayInput" v-model="form.display_name" placeholder="如 用户验收"/><FieldError v-if="_validationErrors['display_name']">{{_validationErrors['display_name'].message}}</FieldError></Field><Field data-validation-field="purpose" :data-invalid="!!_validationErrors['purpose']" @vue:mounted="delete _validationErrors['purpose']"><FieldLabel>环境用途</FieldLabel><OptionPicker v-model="form.purpose" :options="purposes" width="100%"/><FieldError v-if="_validationErrors['purpose']">{{_validationErrors['purpose'].message}}</FieldError></Field><Field data-validation-field="sort_order" :data-invalid="!!_validationErrors['sort_order']" @vue:mounted="delete _validationErrors['sort_order']"><FieldLabel>排序</FieldLabel><NumberField v-model="form.sort_order" :min="0" :max="999"><NumberFieldContent><NumberFieldDecrement/><NumberFieldInput/><NumberFieldIncrement/></NumberFieldContent></NumberField><FieldError v-if="_validationErrors['sort_order']">{{_validationErrors['sort_order'].message}}</FieldError></Field></div><Field data-validation-field="protected" :data-invalid="!!_validationErrors['protected']" @vue:mounted="delete _validationErrors['protected']"><FieldLabel>受保护环境</FieldLabel><Switch v-model="form.protected" aria-label="受保护环境"/><FieldDescription>启用后，必须通过审批才能发布；不影响数据库或 Redis 的独立审批开关。</FieldDescription><FieldError v-if="_validationErrors['protected']">{{_validationErrors['protected'].message}}</FieldError></Field><Field data-validation-field="require_reason" :data-invalid="!!_validationErrors['require_reason']" @vue:mounted="delete _validationErrors['require_reason']"><FieldLabel>发布必须填写原因</FieldLabel><Switch v-model="form.require_reason" aria-label="发布必须填写原因"/><FieldError v-if="_validationErrors['require_reason']">{{_validationErrors['require_reason'].message}}</FieldError></Field><Field data-validation-field="approver_list" :data-invalid="!!_validationErrors['approver_list']" @vue:mounted="delete _validationErrors['approver_list']"><FieldLabel>发布 / 操作审核人员</FieldLabel><OptionPicker ref="approversInput" v-model="form.approver_list" :options="userOptions" multiple  width="100%" placeholder="选择审核人员"/><FieldDescription>受保护环境至少选择一人，发起人不能自审。审批阶段在“审核阶段”中配置。</FieldDescription><FieldError v-if="_validationErrors['approver_list']">{{_validationErrors['approver_list'].message}}</FieldError></Field></TabsContent><TabsContent :disabled="!editing" :value="&quot;workflow&quot;" force-mount v-show="!(active!==&quot;workflow&quot;)" class="min-w-0"><Empty v-if="policyError"><EmptyHeader><EmptyTitle>{{"交付策略加载失败"}}</EmptyTitle><EmptyDescription>{{policyError}}</EmptyDescription></EmptyHeader><EmptyContent><Button @click="loadPolicy" variant="outline" size="default" type="button">重新读取策略</Button></EmptyContent></Empty><template v-else><Field><FieldLabel>默认交付流程</FieldLabel><OptionPicker v-model="policy.workflow_template_id" :disabled="policyLoading||saving" :options="[{value:0,label:'不绑定，保留标准 / 自定义方式'},...defaultTemplates.filter(t=>t.mode==='version').map(t=>({value:t.id,label:t.name}))]" filterable width="100%"/><FieldDescription>绑定后发起交付自动使用，不能切换标准交付绕过；已有执行单不改写。</FieldDescription></Field><Field v-if="form.purpose==='production'"><FieldLabel>Hotfix 流程</FieldLabel><OptionPicker v-model="policy.hotfix_template_id" :disabled="policyLoading||saving" :options="[{value:0,label:'沿用默认交付流程'},...defaultTemplates.filter(t=>t.mode==='version').map(t=>({value:t.id,label:t.name}))]" filterable width="100%"/></Field><Accordion v-if="policy.defaults" type="multiple" :model-value="(_view1||[]).map(String)" @update:model-value="_view1=$event"><AccordionItem :value="String(&quot;defaults&quot;)"><AccordionTrigger>环境通用交付默认值</AccordionTrigger><AccordionContent force-mount v-show="!(!(_view1||[]).map(String).includes(String(&quot;defaults&quot;)))"><Field><FieldLabel>默认交付方式</FieldLabel><OptionPicker v-model="policy.defaults.strategy_kind" :disabled="policyLoading||saving" :options="[{value:'standard',label:'标准交付'},{value:'custom',label:'自定义编排'}]" all-label="不指定" width="100%" @change="policy.defaults.template_id=0"/></Field><Field v-if="policy.defaults.strategy_kind==='custom'"><FieldLabel>默认编排模板</FieldLabel><OptionPicker v-model="policy.defaults.template_id" :disabled="policyLoading||saving" :options="defaultTemplates.map(t=>({value:t.id,label:t.name}))" filterable width="100%"/></Field><Field><FieldLabel>默认制品来源</FieldLabel><OptionPicker v-model="policy.defaults.artifact_source" :disabled="policyLoading||saving" :options="sourceOptions" all-label="不指定（已有制品）" width="100%"/></Field><small>应用分支与制品策略在“应用 → 环境 → 配置环境”中维护，此处只设置公共默认值。</small></AccordionContent></AccordionItem></Accordion></template></TabsContent><TabsContent :disabled="!editing||policyLoading||!!policyError" :value="&quot;approval&quot;" force-mount v-show="!(active!==&quot;approval&quot;)" class="min-w-0"><DeliveryNodeEditor approvals-only :nodes="policy.stages" :users="userOptions" :disabled="policyLoading||saving"/></TabsContent></Tabs></fieldset></form></div><SheetFooter class="shrink-0 flex-wrap border-t p-4 sm:flex-row sm:justify-end"><small v-if="policyLoading">正在读取交付策略…</small><small v-else-if="!editing">保存环境后，可继续绑定交付流程与审核阶段。</small><Button @click="close" variant="outline" size="default" type="button" :disabled="(saving)">取消</Button><Button @click="save" variant="default" size="default" type="button" :disabled="(!!policyError)||(saving||policyLoading)"><Spinner v-if="saving||policyLoading"/>保存环境与策略</Button></SheetFooter></SheetContent></Sheet></section></template>
+<style scoped>.environment-header :deep(.flex-1){flex-wrap:nowrap}.environment-toolbar{display:grid;grid-template-columns:minmax(200px,420px) 180px minmax(32px,1fr);gap:12px;align-items:center;margin-bottom:12px}.refresh{justify-self:end}.environment-table :deep([data-slot=table-container]){border:1px solid var(--border);border-radius:var(--radius)}.environment-footer{margin-top:12px}.environment-fields{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}small{display:block;color:var(--muted-foreground);font-size:.875rem}@media(max-width:650px){.environment-header :deep(.flex-1){flex-basis:100%}.environment-toolbar{grid-template-columns:minmax(0,1fr) auto;gap:8px}.environment-search{grid-column:1/-1}.environment-fields{grid-template-columns:1fr}}</style>

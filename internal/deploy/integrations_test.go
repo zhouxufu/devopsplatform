@@ -148,11 +148,17 @@ func TestSQLPayloadPersistsAndRejectsUnsafe(t *testing.T) {
 		t.Fatal("list missing payload")
 	}
 	c.SQL.Content = "DROP TABLE menus"
-	if e := st.UpdateChange(c); e == nil {
-		t.Fatal("accepted destructive DDL")
+	if e := st.UpdateChange(c); e != nil {
+		t.Fatal("draft should preserve original SQL", e)
 	}
-	if st.GetChange(c.ID).SQL.Content == c.SQL.Content {
-		t.Fatal("failed update modified payload")
+	if st.GetChange(c.ID).SQL.Content != c.SQL.Content {
+		t.Fatal("draft lost original SQL")
+	}
+	if _, e := st.SetChangeReady(c.ID, true); e == nil {
+		t.Fatal("destructive SQL draft became ready")
+	}
+	if st.GetChange(c.ID).Status != ChangeDraft {
+		t.Fatal("failed readiness changed draft state")
 	}
 }
 func TestSQLParserAndSchemaSimulation(t *testing.T) {

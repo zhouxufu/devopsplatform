@@ -1,20 +1,38 @@
 <script setup>
-import { reactive, ref, onMounted, onBeforeUnmount, computed } from 'vue'
-import RangePicker from '../shared/components/RangePicker.vue'
-import Sel from '../shared/components/Sel.vue'
-import { ElButton, ElInput } from '../shared/components/ui.js'
-import { ElDialog, ElDropdown, ElDropdownMenu, ElDropdownItem } from 'element-plus'
-import { themeDark, toggleTheme } from '../shared/composables/theme.js'
-import PlatformPanel from '../shared/components/PlatformPanel.vue'
-import UserManagement from '../shared/components/UserManagement.vue'
-import UiIcon from '../shared/components/UiIcon.vue'
-import { DEFAULT_RECENT_MINUTES, inferRecentMinutes, recentRange, restoreTimeRange } from '../shared/timeRange.js'
+
+import {AUTH_REQUIRED_EVENT, resetPlatformAuth} from '../shared/platformAuth.js'
+import {workspaceTitle as formatWorkspaceTitle} from './workspaceTitle.js'
+import PersonalHome from './PersonalHome.vue'
+import LoginView from './LoginView.vue'
+import {loginPageURL,requestedLoginReturn} from '../shared/loginNavigation.js'
+import ConsoleNavigation from './ConsoleNavigation.vue'
+import {workspaceNavigation, homeWorkspaceTarget, workspaceBreadcrumb} from './navigation.js'
+import {platformPage,platformWorkspacePlugin} from './platformPages.js'
+import {workspaceCloseTargets,nextWorkspaceAfterClose} from './workspaceActions.js'
+
+
+import AppearanceSettings from './AppearanceSettings.vue'
+import {safeWorkspaceHash, runtimeWorkspaceHash, linkedWorkspaceContext, windowContext, workspaceSnapshot, restoreWorkspaceSnapshot, workspaceStorageKey} from './workspaceSession.js'
+import {randomUUID} from '../shared/uuid.js'
+
+import {reactive, ref, onMounted, onBeforeUnmount, computed, nextTick, watch} from 'vue'
+import TimeRangeControl from './TimeRangeControl.vue'
+import OptionPicker from '../shared/components/OptionPicker.vue'
+import {confirmDialog} from '../shared/shadcnFeedback.js'
+
+import {themeDark, themeSyncPayload, toggleTheme} from '../shared/composables/theme.js'
+
+import MembersDialog from './MembersDialog.vue'
+import ConsoleIcon from './ConsoleIcon.vue'
+import {applicationOption} from '../shared/applicationName.js'
+import {currentApplications} from './applicationCatalog.js'
+import {DEFAULT_RECENT_MINUTES, inferRecentMinutes, recentRange, restoreTimeRange} from '../shared/timeRange.js'
 
 const dark = themeDark
 function switchTheme() {
   dark.value = toggleTheme()
   // 广播给全部工作区 iframe（EP/自有变量同源各自动态生效）
-  st.workspaces.forEach(w => { try { w.el.contentWindow.postMessage({ type: 'theme.sync', dark: dark.value }, location.origin) } catch {} })
+  st.workspaces.forEach(w => { try { w.el.contentWindow.postMessage(themeSyncPayload(), location.origin) } catch {} })
 }
 
 const CTX_KEY = 'lp-global-context'
@@ -32,32 +50,105 @@ const saved = savedContext()
 // 工作区保活，每个窗口独立上下文；只有主题仍全局广播。
 const st = reactive({
   plugins: [], services: [], deployServices: [], environments: [], workspaces: [], active: 0, gSvc: saved.service, gEnv: saved.environment, range: saved.range, rangeMinutes: saved.rangeMinutes,
-	showLogin: false, username: 'admin', pwd: '', me: {}, users: [], showUsers: false, plusOpen: false, _seq: 0,
+	showLogin: location.pathname==='/login', username: 'admin', pwd: '', loginError:'', loginBusy:false, loginExpired:new URLSearchParams(location.search).get('reason')==='expired', reauthUser:'', me: {}, users: [], showUsers: false, plusOpen: false, _seq: 0,
   platformPanel: '',
   showSetup: false, setupStep: 1, setupTemplate: 'simple', setupRows: [], setupError: '', setupSaving: false,
 })
+const workspaceTabBar=ref(null)
+let workspaceTabObserver
+function revealActiveWorkspaceTab(){
+ const scroller=workspaceTabBar.value?.querySelector('[data-slot="tabs"]')
+ const trigger=scroller?.querySelector('[role="tab"][aria-selected="true"]')
+ if(!trigger||!scroller.clientWidth)return
+ const item=trigger.closest('[data-workspace-tab]')||trigger
+ const viewport=scroller.getBoundingClientRect(),bounds=item.getBoundingClientRect()
+ // Adjust only this strip's horizontal position; keep the page and iframe scroll intact.
+ if(bounds.left<viewport.left||bounds.width>viewport.width)scroller.scrollLeft+=bounds.left-viewport.left
+ else if(bounds.right>viewport.right)scroller.scrollLeft+=bounds.right-viewport.right
+}
+watch(workspaceTabBar,bar=>{
+ workspaceTabObserver?.disconnect()
+ if(!bar)return
+ workspaceTabObserver=new ResizeObserver(revealActiveWorkspaceTab)
+ workspaceTabObserver.observe(bar)
+}, {flush:'post'})
+watch(()=>[st.active,...st.workspaces.map(w=>workspaceTitle(w))],()=>nextTick(revealActiveWorkspaceTab),{flush:'post'})
+onBeforeUnmount(()=>workspaceTabObserver?.disconnect())
 const activeWorkspace = computed(() => st.workspaces.find(w => w.id === st.active))
+const homeWorkspaces=computed(()=>st.workspaces.map(w=>({...w,displayTitle:workspaceTitle(w)})))
+const windowsReady=ref(false),authReady=ref(false)
+let loginResumeURL='/'
+watch(()=>st.showLogin,value=>{document.documentElement.toggleAttribute('data-console-auth-page',value);document.title=value?'登录 · DevOps 控制台':'DevOps 控制台'},{immediate:true})
+function currentWorkspaceHash(w){
+ try{if(w.el.contentWindow.location.origin===location.origin)return runtimeWorkspaceHash(w.el.contentWindow.location.hash||'#/',w.plugin.name)}catch{}
+ return w.hash
+}
+function rememberWindows(){
+ if(!windowsReady.value)return
+ try{sessionStorage.setItem(workspaceStorageKey(st.me.username),JSON.stringify(workspaceSnapshot(st.workspaces.map(w=>({...w,hash:currentWorkspaceHash(w)})),st.active)))}catch{}
+}
+watch(()=>[st.active,...st.workspaces.map(w=>[w.id,w.title,w.hash,w.context?.service,w.context?.environment])],rememberWindows,{deep:true})
+function openHome(){switchWs(0);st.plusOpen=false}
+function openPlatformWorkspace(view){
+ if(!platformPage(view,st.me,st.plugins))return
+ const hash='#/'+view,existing=st.workspaces.find(w=>w.plugin.name==='platform'&&w.hash===hash)
+ if(existing)switchWs(existing.id)
+ else openPlugin(platformWorkspacePlugin,hash,{context:windowContext({})})
+}
+
+function navigationOpen(action){
+ const plugin=st.plugins.find(p=>p.name===action.plugin)
+ if(!plugin)return
+ const hash=runtimeWorkspaceHash(action.hash||'#/',plugin.name)
+ const candidates=st.workspaces.filter(w=>w.plugin.name===plugin.name)
+ const destination=workspaceNavigation({plugin,hash})
+ const workspace=candidates.find(w=>workspaceNavigation(w).id===destination.id)
+ if(workspace){switchWs(workspace.id);if(currentWorkspaceHash(workspace)!==hash)workspace.el.contentWindow.postMessage({type:'workspace.navigate',hash},location.origin)}
+ else openPlugin(plugin,hash,{context:windowContext({})})
+ st.plusOpen=false
+}
+function homeOpen(action){
+ const plugin=st.plugins.find(p=>p.name===action.plugin)
+ if(!plugin)return
+ const hash=runtimeWorkspaceHash(action.hash||'#/',plugin.name)
+ const target=homeWorkspaceTarget(st.workspaces.map(w=>({...w,hash:currentWorkspaceHash(w)})),plugin.name,hash)
+ const existing=target&&st.workspaces.find(w=>w.id===target.id)
+ if(existing){switchWs(existing.id);if(currentWorkspaceHash(existing)!==hash)existing.el.contentWindow.postMessage({type:'workspace.navigate',hash},location.origin)}
+ else openPlugin(plugin,hash,{context:windowContext({})})
+}
 const renameWorkspace=ref(null),workspaceName=ref('')
 const controlsContext=()=>({service:st.gSvc,environment:st.gEnv,range:[...(st.range||[])],rangeMinutes:st.rangeMinutes})
-function workspaceTitle(w){return w.title||w.plugin.display+(w.context?.service?' · '+w.context.service:'')}
+function duplicateWorkspace(w){openPlugin(w.plugin,currentWorkspaceHash(w),{context:windowContext(w.context)})}
+function workspaceTitle(w){return formatWorkspaceTitle(w,st.workspaces)}
 function renameWs(w){renameWorkspace.value=w;workspaceName.value=workspaceTitle(w)}
 function saveWorkspaceName(){const value=workspaceName.value.trim();if(!value||value.length>60)return;renameWorkspace.value.title=value;renameWorkspace.value=null}
-const showTimeContext = computed(() => ['logs', 'monitor'].includes(activeWorkspace.value?.plugin?.name))
-const contextFields=computed(()=>activeWorkspace.value?.contextFields||{service:showTimeContext.value,environment:showTimeContext.value})
-const showContext=computed(()=>showTimeContext.value||contextFields.value.service||contextFields.value.environment)
-const defaultPlugin = () => st.plugins.find(p => p.name === 'deploy') || st.plugins.find(p => p.name !== 'devtools')
-function openDefault() { const plugin=defaultPlugin(); if(plugin) openPlugin(plugin); else if(st.plugins.some(p=>p.name==='devtools')) st.platformPanel='mcp' }
+const showContext = computed(() => ['logs', 'monitor'].includes(activeWorkspace.value?.plugin?.name))
+const showTimeContext=computed(()=>{
+ const workspace=activeWorkspace.value
+ if(!showContext.value)return false
+ const path=new URL((workspace.hash||'#/').slice(1),'http://context').pathname
+ return workspace.plugin.name==='logs'?['/','/search'].includes(path):!['/alerts','/rules'].includes(path)
+})
+const contextFields=computed(()=>activeWorkspace.value?.contextFields||{service:showContext.value,environment:showContext.value})
+function openDefault() { openHome() }
 
-function openPlugin(p, hash = '', source=activeWorkspace.value) {
+function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
   if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
-  const ws = { id: ++st._seq, plugin: p, context:JSON.parse(JSON.stringify(source?.context||controlsContext())) }
+  const ws = { id: ++st._seq, plugin: p, context:windowContext(source?.context||controlsContext()), hash:runtimeWorkspaceHash(hash||'#/',p.name), title:restored?.title||'' }
   const el = document.createElement('iframe')
-  el.name='lp-workspace-'+crypto.randomUUID()
+  el.allowFullscreen = true
+  el.allow = 'fullscreen'
+  el.title=p.display||p.name
+  el.name=restored?.name||'lp-workspace-'+randomUUID()
   // 内联样式：scoped CSS 对 JS 动态创建的元素不生效
   el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;display:none'
   el.addEventListener('load', () => {
+    const readRoute=()=>{try{const target=st.workspaces.find(w=>w.id===ws.id);if(target)target.hash=runtimeWorkspaceHash(el.contentWindow.location.hash,p.name);rememberWindows()}catch{}}
+    readRoute()
+    try{el.contentWindow.addEventListener('hashchange',readRoute)}catch{}
+    if(st.me.auth_enabled)getJSON('/api/me')
     ctxSync([ws])
-    try { el.contentWindow.postMessage({ type: 'theme.sync', dark: dark.value }, location.origin) } catch {}
+    try { el.contentWindow.postMessage(themeSyncPayload(), location.origin) } catch {}
   })
   el.src = p.url + (hash || '#/?ws=' + ws.id)
   document.getElementById('wsarea').appendChild(el)
@@ -70,21 +161,36 @@ function switchWs(id) {
   st.active = id
   const c=activeWorkspace.value?.context
   if(c){st.gSvc=c.service;st.gEnv=c.environment;st.range=[...(c.range||[])];st.rangeMinutes=c.rangeMinutes;if(c.rangeMinutes>0)st.range=recentRange(c.rangeMinutes)}
-  st.workspaces.forEach(w => w.el.style.display = w.id === id ? 'block' : 'none')
+  st.workspaces.forEach(w => {w.el.style.display = w.id === id ? 'block' : 'none';try{w.el.contentWindow.postMessage({type:'workspace.visibility',active:w.id===id},location.origin)}catch{}})
+  rememberWindows()
 }
-function closeWs(id) {
-  const i = st.workspaces.findIndex(w => w.id === id)
-  if (i < 0) return
-  st.workspaces[i].el.remove()
-  st.workspaces.splice(i, 1)
-  if (!st.workspaces.length) return
-  if (!st.workspaces.some(w => w.id === st.active)) switchWs(st.workspaces[Math.min(i,st.workspaces.length-1)].id)
+const closingWorkspace = ref(false)
+async function closeWorkspaceIDs(ids){
+ if(closingWorkspace.value)return
+ const targets=st.workspaces.filter(w=>ids.includes(w.id));if(!targets.length)return
+ closingWorkspace.value=true
+ try{
+  const unsafe=targets.filter(w=>w.dirty||w.busy)
+  if(unsafe.length){
+   const names=unsafe.slice(0,5).map(workspaceTitle).join('、')+(unsafe.length>5?' 等':'')
+   try{await confirmDialog.confirm(`将关闭 ${targets.length} 个标签，其中 ${unsafe.length} 个存在未保存编辑或进行中的请求（${names}）。关闭会丢弃未保存内容，不会取消远程任务，也不会撤销已保存配置。`, '确认关闭标签',{confirmButtonText:'确认关闭',cancelButtonText:'继续编辑'})}catch{return}
+  }
+  const active=nextWorkspaceAfterClose(st.workspaces,st.active,ids)
+  st.workspaces.filter(w=>ids.includes(w.id)).forEach(w=>w.el.remove())
+  st.workspaces=st.workspaces.filter(w=>!ids.includes(w.id))
+  switchWs(active)
+ }finally{closingWorkspace.value=false}
 }
+function closeWs(id){return closeWorkspaceIDs([id])}
+function closeWorkspaceGroup(action,anchor=st.active){return closeWorkspaceIDs(workspaceCloseTargets(st.workspaces,anchor,action))}
+function hasCloseTargets(action,anchor=st.active){return !closingWorkspace.value&&workspaceCloseTargets(st.workspaces,anchor,action).length>0}
+
 function ctxSync(list) {
   if (st.rangeMinutes > 0) st.range = recentRange(st.rangeMinutes)
   if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
   localStorage.setItem(CTX_KEY, JSON.stringify({ service: st.gSvc, environment: st.gEnv, range: st.range, rangeMinutes: st.rangeMinutes }))
   ;(list || (activeWorkspace.value?[activeWorkspace.value]:[])).forEach(w => {const c=w.context||controlsContext();if(c.rangeMinutes>0)c.range=recentRange(c.rangeMinutes);const msg={type:'context.sync',service:c.service,environment:c.environment,rangeStart:c.range?.[0]||0,rangeEnd:c.range?.[1]||0,rangeMinutes:c.rangeMinutes};try { w.el.contentWindow.postMessage(msg, location.origin) } catch {} })
+  rememberWindows()
 }
 
 async function getJSON(url) {
@@ -94,31 +200,20 @@ async function getJSON(url) {
   } catch { return null }
 }
 
-// 服务目录合并注册表与各插件当前观测到的服务，插件暂时离线也不影响其他来源。
+// 当前目录决定可见应用；历史日志、监控和部署记录不重新加入下拉框。
+let servicesRequest = 0
 async function loadServices() {
+  const request = ++servicesRequest
   const has = name => st.plugins.some(p => p.name === name)
   const sources = await Promise.all([
-    getJSON('/api/registry/services'),
-    has('logs') ? getJSON('/api/plugins/logs/api/services') : null,
-    has('monitor') ? getJSON('/api/plugins/monitor/api/services') : null,
-    has('monitor') ? getJSON('/api/plugins/monitor/api/otlp/services') : null,
-    has('deploy') ? getJSON('/api/plugins/deploy/api/services') : null,
-    getJSON('/api/registry/deployments'),
+    getJSON('/api/registry/applications'),
+    has('deploy') ? getJSON('/api/plugins/deploy/api/application-references') : null,
   ])
-  const byName = new Map()
-  const add = (name, meta = {}) => {
-    if (typeof name !== 'string' || !name.trim()) return
-    const key = name.trim()
-    byName.set(key, { ...(byName.get(key) || {}), ...meta, name: key })
-  }
-  ;(sources[0] || []).forEach(s => add(s.name, { ...s, observed: true }))
-  Object.keys(sources[1] || {}).forEach(name => add(name, { observed: true }))
-  ;(sources[2] || []).forEach(name => add(name, { observed: true }))
-  ;(sources[3] || []).forEach(name => add(name, { observed: true }))
-  st.deployServices = sources[4] || []
-  st.deployServices.forEach(s => add(s.name, { managed: true }))
-  ;(sources[5] || []).filter(d => !st.gEnv || d.environment === st.gEnv).forEach(d => add(d.service, { version: d.version, environment: d.environment }))
-  st.services = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  if (request !== servicesRequest) return
+  if (sources[1]?.complete === true && Array.isArray(sources[1].applications)) st.deployServices = sources[1].applications
+  // An unavailable catalog must not resurrect historical names or clear a
+  // workspace's selected query scope. Keep the last successful presentation.
+  if (Array.isArray(sources[0])) st.services = currentApplications(sources[0], st.deployServices)
 }
 async function environmentChanged() { await loadServices(); ctxSync() }
 async function closePlatformPanel() {
@@ -133,11 +228,37 @@ async function closePlatformPanel() {
 }
 function useRecentRange() { st.rangeMinutes = DEFAULT_RECENT_MINUTES; st.range = recentRange(); ctxSync() }
 function timeRangeChanged(value) { st.rangeMinutes = inferRecentMinutes(value); ctxSync() }
-async function login() {
-	const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: st.username, password: st.pwd }) })
-	if (r.ok) location.reload(); else alert('用户名或密码错误')
+function loginReturnTarget(){return requestedLoginReturn(location.search,location.hash)}
+function requireLogin(){
+ if(st.showLogin)return
+ loginResumeURL=location.pathname==='/'?location.pathname+location.search+location.hash:'/'
+ st.reauthUser=st.me.username||'';st.username=st.reauthUser||st.username;st.pwd='';st.loginError='';st.loginExpired=!!st.reauthUser;st.showLogin=true
+ history.replaceState(null,'',loginPageURL(loginReturnTarget(),st.loginExpired))
+ for(const ws of st.workspaces)ws.el.contentWindow?.postMessage({type:'workspace.visibility',active:false},location.origin)
 }
-async function logout() { await fetch('/api/logout', { method: 'POST' }); location.reload() }
+function loginRouteChanged(){if(st.showLogin&&location.pathname!=='/login')history.replaceState(null,'',loginPageURL(loginReturnTarget(),st.loginExpired))}
+window.addEventListener('popstate',loginRouteChanged)
+window.addEventListener(AUTH_REQUIRED_EVENT,requireLogin)
+async function login() {
+ if(st.loginBusy)return;st.loginBusy=true;st.loginError=''
+ try{
+  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:st.username,password:st.pwd})})
+  const result=await r.json().catch(()=>({}))
+  if(!r.ok){st.loginError=result.error||'登录失败，请重试';return}
+  st.pwd='';resetPlatformAuth()
+  if(st.loginExpired&&st.reauthUser===result.username){
+   await loadIdentity();st.showLogin=false;st.loginExpired=false
+   history.replaceState(null,'',loginResumeURL)
+   for(const ws of st.workspaces)ws.el.contentWindow?.postMessage({type:'platform.auth.restored'},location.origin)
+   switchWs(st.active)
+   return
+  }
+  const target=loginReturnTarget()
+  location.replace(target||'/')
+ }catch{st.loginError='无法连接平台，请重试'}finally{st.loginBusy=false}
+}
+
+async function logout() { await fetch('/api/logout', { method: 'POST' }); location.replace('/login') }
 async function loadIdentity() {
 	st.me = await getJSON('/api/me') || {}
 	st.users = await getJSON('/api/users') || []
@@ -206,6 +327,7 @@ async function finishSetup() {
     st.environments = body.environments || []
     st.gEnv = st.environments.find(e => e.name === 'test')?.name || st.environments[0]?.name || ''
     st.showSetup = false
+    windowsReady.value=true
     await loadServices()
     ctxSync()
     if (!st.workspaces.length && st.plugins.length) openDefault()
@@ -219,20 +341,27 @@ window.addEventListener('message', e => {
   // 只响应当前工作区 iframe，避免页面中其他 frame 伪造上下文消息。
   if (e.origin !== location.origin) return
   const ws = st.workspaces.find(w => w.el.contentWindow === e.source)
+  if(ws&&e.data?.type==='platform.auth.required'){requireLogin();return}
+  if(ws&&e.data?.type==='workspace.route'){ws.hash=currentWorkspaceHash(ws);rememberWindows()}
+  if(ws&&e.data?.type==='workspace.label'&&typeof e.data.label==='string')ws.label=e.data.label.trim().slice(0,160)
+  if(ws&&e.data?.type==='application.presentation.changed')loadServices()
+  if(ws&&e.data?.type==='workspace.dirty'){ws.dirty=e.data.dirty===true;ws.busy=e.data.busy===true}
   if (ws && e.data?.type === 'context.request') ctxSync([ws])
+  if (ws && e.data?.type === 'workspace.activity.request') ws.el.contentWindow.postMessage({type:'workspace.visibility',active:ws.id===st.active},location.origin)
   if (ws && e.data?.type === 'context.visibility') ws.contextFields={service:e.data.service===true,environment:e.data.environment===true}
-  if (ws?.plugin.name === 'dbms' && e.data?.type === 'work-item.changed' && Number.isSafeInteger(e.data.id) && e.data.id > 0) {
-    for (const target of st.workspaces.filter(w => w.plugin.name === 'deploy')) target.el.contentWindow?.postMessage({ type: 'work-item.changed', id: e.data.id }, location.origin)
+  if (['dbms','research','deploy'].includes(ws?.plugin.name) && e.data?.type === 'work-item.changed' && Number.isSafeInteger(e.data.id) && e.data.id > 0) {
+    for (const target of st.workspaces.filter(w => ['deploy','research'].includes(w.plugin.name))) target.el.contentWindow?.postMessage({ type: 'work-item.changed', id: e.data.id }, location.origin)
   }
   if (ws && e.data?.type === 'workspace.open') {
     const p = st.plugins.find(x => x.name === e.data.plugin)
     const hash = typeof e.data.hash === 'string' && e.data.hash.startsWith('#/') ? e.data.hash : ''
-    if (p) openPlugin(p, hash,ws)
+    if (p) openPlugin(p, hash,{...ws,context:linkedWorkspaceContext(ws.context,e.data.context)})
   }
-  if (ws && e.data?.type === 'platform.open' && ['apps', 'resources', 'mcp'].includes(e.data.view) && (e.data.view !== 'mcp' || st.plugins.some(p=>p.name==='devtools'))) {
+  if (ws && e.data?.type === 'platform.open' && platformPage(e.data.view,st.me,st.plugins)) {
     st.platformPanel = e.data.view
     st.plusOpen = false
   }
+  if(ws&&e.data?.type==='platform.home')openHome()
   // 回写消息来源窗口；从该窗口打开日志/监控时继承条件，不影响其他窗口。
   if (ws && e.data?.type === 'context.update') {
     let changed = false
@@ -254,8 +383,9 @@ window.addEventListener('message', e => {
 
 onMounted(async () => {
   const r = await fetch('/api/plugins')
-  if (r.status === 401) { st.showLogin = true; return }
-	await loadIdentity()
+  if (r.status === 401) { requireLogin(); return }
+  const returnTo=loginReturnTarget();if(r.ok&&(location.pathname==='/login'||returnTo!=='/')){location.replace(returnTo);return}
+	await loadIdentity();authReady.value=true
   st.plugins = (await r.json()) ?? []
   if (st.plugins.some(p => ['deploy','dbms','redis'].includes(p.name))) {
     const setup = await getJSON('/api/resources/setup')
@@ -267,7 +397,7 @@ onMounted(async () => {
     st.environments = setup?.environments || await getJSON('/api/resources/environments') || []
     if (!st.environments.some(e => e.name === st.gEnv)) st.gEnv = st.environments.find(e => e.name === 'test')?.name || st.environments[0]?.name || ''
   }
-  await loadServices()
+  loadServices()
   // 默认工作区是部署平台。日志/监控里仍有历史数据的服务不等于已接入的
   // 部署应用，不能用缓存上下文把部署平台带进一个不存在的应用详情页。
   if (st.gSvc && !st.deployServices.some(s => s.name === st.gSvc)) {
@@ -276,151 +406,53 @@ onMounted(async () => {
   }
   // platform 与插件并行启动，稍后再合并一次，补上启动较慢的插件数据。
   setTimeout(loadServices, 2500)
-  if (st.plugins.length) openDefault()
+  let restored={windows:[],active:-1}
+  try{restored=restoreWorkspaceSnapshot(JSON.parse(sessionStorage.getItem(workspaceStorageKey(st.me.username))||'null'),[...st.plugins,platformWorkspacePlugin],st.me)}catch{}
+  for(const row of restored.windows)openPlugin(row.plugin,row.hash,row,row)
+  if(restored.active>=0)switchWs(st.workspaces[restored.active]?.id||0)
+  else openDefault()
+  windowsReady.value=true;rememberWindows()
 })
+window.addEventListener('pagehide',rememberWindows)
 const recentClock = setInterval(() => { if (st.rangeMinutes > 0) st.range = recentRange(st.rangeMinutes) }, 30000)
-onBeforeUnmount(() => clearInterval(recentClock))
+onBeforeUnmount(() => {rememberWindows();clearInterval(recentClock);window.removeEventListener('pagehide',rememberWindows);window.removeEventListener(AUTH_REQUIRED_EVENT,requireLogin);window.removeEventListener('popstate',loginRouteChanged);document.documentElement.removeAttribute('data-console-auth-page')})
+watch(()=>st.platformPanel,view=>{if(view){openPlatformWorkspace(view);st.platformPanel=''}})
+import {SidebarProvider,SidebarInset,SidebarTrigger} from '@/components/ui/sidebar'
+import {Stepper,StepperItem,StepperTrigger,StepperIndicator,StepperTitle,StepperSeparator} from '@/components/ui/stepper'
+import {ChevronDownIcon,XIcon,PlusIcon,CheckIcon,LogOutIcon,UserRoundIcon} from '@lucide/vue'
+import ContextHelp from '../shared/components/ContextHelp.vue'
+import FeedbackHost from '../shared/components/FeedbackHost.vue'
+
+import {Breadcrumb,BreadcrumbList,BreadcrumbItem,BreadcrumbPage,BreadcrumbSeparator} from '@/components/ui/breadcrumb'
+import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,ContextMenuSeparator,ContextMenuTrigger,Dialog,DialogContent,DialogDescription,DialogFooter,DialogHeader,DialogTitle,DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuSeparator,DropdownMenuTrigger,Field,FieldGroup,FieldLabel,Input,Separator,Spinner,Tabs,TabsList,TabsTrigger,TooltipProvider} from '../shared/shadcn-ui.js'
 </script>
 
 <template>
-  <div class="layout">
-    <header class="topbar">
-      <div class="logo"><span class="mark">DO</span>DevOps 控制台</div>
-      <div class="wstabs">
-        <div class="wstab-list">
-          <div v-for="w in st.workspaces" :key="w.id" class="wstab" :class="{ on: w.id === st.active }" role="button" tabindex="0" :aria-current="w.id === st.active ? 'page' : undefined" @click="switchWs(w.id)" @keydown.enter.self="switchWs(w.id)" @keydown.space.self.prevent="switchWs(w.id)">
-            <UiIcon :name="w.plugin.name" :size="16"/> <span @dblclick.stop="renameWs(w)">{{ workspaceTitle(w) }}</span>
-            <ElDropdown trigger="click" @command="command=>command==='rename'?renameWs(w):openPlugin(w.plugin,'',w)"><button class="x" type="button" :aria-label="`管理${workspaceTitle(w)}工作区`" @click.stop>⋯</button><template #dropdown><ElDropdownMenu><ElDropdownItem command="rename">重命名</ElDropdownItem><ElDropdownItem command="duplicate">新开同类工作区</ElDropdownItem></ElDropdownMenu></template></ElDropdown>
-            <button class="x" type="button" :aria-label="`关闭${workspaceTitle(w)}工作区`" @click.stop="closeWs(w.id)">×</button>
-          </div>
-        </div>
-        <div class="wslauncher">
-          <button class="wsplus" type="button" aria-label="打开插件工作区" :aria-expanded="st.plusOpen" @click.stop="st.plusOpen = !st.plusOpen">＋</button>
-          <div class="pm" v-if="st.plusOpen" @click.stop>
-            <span class="launcher-label">打开工作区</span>
-            <button v-for="p in st.plugins.filter(p=>p.name!=='devtools')" :key="p.name" type="button" @click="openPlugin(p); st.plusOpen = false"><UiIcon :name="p.name"/> {{ p.display }}</button>
-          </div>
-        </div>
-      </div>
-		<button class="account" type="button" :title="st.me.role==='admin'?'管理平台成员':'当前登录用户'" @click="st.me.role==='admin'&&(st.showUsers=true)">{{st.me.display_name||st.me.username||'本地'}} · {{st.me.role==='admin'?'管理员':'成员'}}</button>
-		<button v-if="st.me.auth_enabled" class="logout" type="button" @click="logout">退出</button>
-		<button class="topr" type="button" :aria-label="dark ? '切换浅色主题' : '切换深色主题'" :title="dark ? '切换浅色主题' : '切换深色主题'" @click="switchTheme"><UiIcon :name="dark ? 'sun' : 'moon'"/></button>
-    </header>
-    <div v-if="showContext" class="contextbar">
-      <div v-if="contextFields.service" class="context-field"><label>应用</label>
-        <Sel v-model="st.gSvc" :options="st.services.map(s => ({ value: s.name, label: s.managed ? s.name : s.name + ' · 未接入部署' }))"
-          all-label="全部应用" filterable width="190px" @change="ctxSync()" />
-      </div>
-      <div v-if="contextFields.environment" class="context-field"><label>环境</label>
-        <Sel v-model="st.gEnv" :options="st.environments.map(e => ({ value: e.name, label: (e.protected ? '🔒 ' : '') + e.display_name }))"
-          all-label="全部环境" width="125px" @change="environmentChanged" />
-      </div>
-      <template v-if="showTimeContext">
-        <span class="context-divider"></span>
-        <div class="context-field"><label>时间范围</label>
-        <div class="seg">
-          <button type="button" :class="{on:st.rangeMinutes===15}" :aria-pressed="st.rangeMinutes===15" title="当前工作区使用动态时间范围" @click="useRecentRange">最近15分钟{{st.rangeMinutes===15?'（动态）':''}}</button>
-          <RangePicker v-model="st.range" @change="timeRangeChanged" width="200px" />
-        </div>
-      </div>
-      </template>
-    </div>
-    <div class="wsarea" id="wsarea">
-      <div class="emptyws" v-if="!st.workspaces.length"><div>点击 ＋ 打开一个插件工作区</div><ElButton v-if="st.plugins.some(p=>p.name==='devtools')" @click="st.platformPanel='mcp'">打开 MCP</ElButton></div>
-    </div>
-		<PlatformPanel :view="st.platformPanel" :plugin="activeWorkspace?.plugin?.name || 'deploy'" @switch="st.platformPanel=$event" @close="closePlatformPanel" />
-		<ElDialog :model-value="!!renameWorkspace" title="重命名工作区" width="360px" @close="renameWorkspace=null"><ElInput v-model="workspaceName" maxlength="60" aria-label="工作区名称" @keyup.enter="saveWorkspaceName"/><template #footer><ElButton @click="renameWorkspace=null">取消</ElButton><ElButton type="primary" :disabled="!workspaceName.trim()" @click="saveWorkspaceName">保存名称</ElButton></template></ElDialog>
-		<UserManagement :show="st.showUsers" :current="st.me" @close="st.showUsers=false;loadIdentity()" />
-		<div class="mask" v-if="st.showLogin"><div class="box"><h3>DevOps 控制台登录</h3>
-			<ElInput v-model="st.username" placeholder="用户名" style="width:220px" />
-			<ElInput v-model="st.pwd" type="password" placeholder="密码" style="width:220px" @keydown.enter="login" />
-      <ElButton type="primary" @click="login">登录</ElButton></div></div>
-    <div class="setup-mask" v-if="st.showSetup">
-      <section class="setup-dialog">
-        <header><div><span class="eyebrow">首次使用向导</span><h2>配置团队的发布环境</h2></div><span class="step-count">{{ st.setupStep }} / 3</span></header>
-        <div class="setup-steps"><span :class="{on:st.setupStep>=1}">1 选择模板</span><i></i><span :class="{on:st.setupStep>=2}">2 配置策略</span><i></i><span :class="{on:st.setupStep>=3}">3 确认创建</span></div>
-
-        <div v-if="st.setupStep === 1" class="setup-body">
-          <p class="setup-lead">环境是主机、发布和监控数据的隔离边界。模板只负责快速填写，下一步仍可修改。</p>
-          <div class="template-grid">
-            <button type="button" :class="{selected:st.setupTemplate==='simple'}" @click="chooseEnvironmentTemplate('simple')"><b>简单流程</b><small>开发 → 测试 → 生产</small><em>推荐小团队</em></button>
-            <button type="button" :class="{selected:st.setupTemplate==='standard'}" @click="chooseEnvironmentTemplate('standard')"><b>标准流程</b><small>开发 → 测试 → 预发 → 生产</small><em>生产默认审批</em></button>
-            <button type="button" :class="{selected:st.setupTemplate==='custom'}" @click="chooseEnvironmentTemplate('custom')"><b>完全自定义</b><small>从一个空环境开始</small><em>适合已有规范</em></button>
-          </div>
-        </div>
-
-        <div v-else-if="st.setupStep === 2" class="setup-body setup-config">
-          <div class="config-head"><p>环境名称和策略以后还能修改；已被资源引用的环境不能直接删除。</p><button type="button" @click="addSetupEnvironment">＋ 添加环境</button></div>
-          <div class="env-row env-row-head"><span>环境标识</span><span>显示名称</span><span>发布策略</span><span>审批人</span><span></span></div>
-          <div class="env-row" v-for="(row,index) in st.setupRows" :key="index">
-            <input v-model="row.name" placeholder="如 uat" />
-            <input v-model="row.display_name" placeholder="如 用户验收" />
-            <div class="checks"><label><input v-model="row.require_reason" type="checkbox" /> 原因必填</label><label><input v-model="row.protected" type="checkbox" /> 审批保护</label></div>
-			<Sel v-model="row.approver_list" :disabled="!row.protected" :options="st.users.filter(u=>u.enabled).map(u=>({value:u.username,label:u.display_name+' · '+u.username}))" multiple width="100%" placeholder="选择审核人员" />
-            <button type="button" class="remove-env" :disabled="st.setupRows.length<=1" @click="removeSetupEnvironment(index)">×</button>
-          </div>
-		  <p class="policy-tip">审核人员从平台成员中选择；发布发起人不能审批自己的发布单。</p>
-        </div>
-
-        <div v-else class="setup-body">
-          <p class="setup-lead">将一次性创建以下环境。平台不会额外生成 <code>default</code> 环境。</p>
-          <div class="confirm-envs"><div v-for="row in st.setupRows" :key="row.name"><span :class="{protected:row.protected}">{{row.protected?'🔒':'●'}}</span><b>{{row.display_name}}</b><code>{{row.name}}</code><small>{{row.protected?'需审批':row.require_reason?'原因必填':'普通发布'}}</small></div></div>
-        </div>
-
-        <p v-if="st.setupError" class="setup-error">{{ st.setupError }}</p>
-        <footer><button v-if="st.setupStep>1" type="button" @click="st.setupStep--;st.setupError=''">上一步</button><span></span><button v-if="st.setupStep<3" class="primary" type="button" @click="nextSetupStep">下一步</button><button v-else class="primary" type="button" :disabled="st.setupSaving" @click="finishSetup">{{st.setupSaving?'创建中…':'创建并进入平台'}}</button></footer>
-      </section>
-    </div>
+<TooltipProvider>
+<LoginView v-if="st.showLogin" v-model:username="st.username" v-model:password="st.pwd" :busy="st.loginBusy" :error="st.loginError" :expired="st.loginExpired" :preserve-workspace="!!st.reauthUser" @submit="login"/>
+<SidebarProvider v-show="authReady&&!st.showLogin" class="h-svh min-h-0" :style="{'--sidebar-width':'var(--console-sidebar-width,15rem)'}" :inert="st.showLogin?true:undefined">
+ <ConsoleNavigation :plugins="st.plugins" :workspace="activeWorkspace" :home="st.active===0" :admin="st.me.role==='admin'" @home="openHome" @open="navigationOpen" @platform="openPlatformWorkspace"/>
+ <SidebarInset class="h-svh min-w-0 overflow-hidden">
+  <header data-slot="shell-header" class="flex h-14 shrink-0 items-center gap-2 border-b px-4"><SidebarTrigger aria-label="切换主导航"/><Separator orientation="vertical" class="mx-1 h-4"/><Breadcrumb class="min-w-0"><BreadcrumbList class="flex-nowrap text-sm"><template v-for="(label,i) in workspaceBreadcrumb(st.active===0?null:activeWorkspace)" :key="i"><BreadcrumbSeparator v-if="i" class="hidden sm:block"/><BreadcrumbItem :class="i===0&&st.active!==0?'hidden sm:inline-flex':'min-w-0'"><BreadcrumbPage v-if="i===workspaceBreadcrumb(st.active===0?null:activeWorkspace).length-1" class="truncate font-normal">{{label}}</BreadcrumbPage><span v-else>{{label}}</span></BreadcrumbItem></template></BreadcrumbList></Breadcrumb><span class="ml-auto"/><AppearanceSettings/><DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" class="max-w-48 gap-2"><UserRoundIcon class="size-4"/><span class="truncate">{{st.me.display_name||st.me.username||'本地'}}</span><ChevronDownIcon class="size-3.5"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem disabled>{{st.me.role==='admin'?'管理员':'成员'}}</DropdownMenuItem><DropdownMenuItem v-if="st.me.role==='admin'" @select="st.showUsers=true">成员管理</DropdownMenuItem><DropdownMenuSeparator v-if="st.me.auth_enabled"/><DropdownMenuItem v-if="st.me.auth_enabled" @select="logout"><LogOutIcon class="size-4"/>退出登录</DropdownMenuItem></DropdownMenuContent></DropdownMenu></header>
+  <div data-slot="workspace-tabs" ref="workspaceTabBar" class="flex h-11 shrink-0 items-center gap-1 border-b px-3">
+   <Tabs activation-mode="manual" :model-value="String(st.active)" class="h-10 min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" @update:model-value="value=>switchWs(Number(value))"><TabsList variant="line" class="h-full! w-max min-w-full shrink-0 justify-start rounded-none bg-transparent p-0 [&_[data-slot=tabs-trigger]]:after:hidden">
+    <ContextMenu><ContextMenuTrigger as-child><TabsTrigger value="0" class="h-10 flex-none shrink-0 gap-2 rounded-none px-3"><ConsoleIcon name="user"/><span>个人工作台</span></TabsTrigger></ContextMenuTrigger><ContextMenuContent><ContextMenuItem :disabled="!hasCloseTargets('right',0)" @select="closeWorkspaceGroup('right',0)">关闭右侧</ContextMenuItem><ContextMenuItem :disabled="!hasCloseTargets('all',0)" @select="closeWorkspaceGroup('all',0)">关闭全部</ContextMenuItem></ContextMenuContent></ContextMenu>
+    <ContextMenu v-for="workspace in st.workspaces" :key="workspace.id"><ContextMenuTrigger as-child><div data-workspace-tab class="group flex h-10 max-w-64 shrink-0 items-center border-b-2" :class="workspace.id===st.active?'border-foreground bg-muted/60':'border-transparent'"><TabsTrigger :value="String(workspace.id)" class="h-full min-w-0 flex-1 gap-2 rounded-none border-0 bg-transparent px-3 shadow-none" :title="workspaceTitle(workspace)" @dblclick.stop="renameWs(workspace)"><ConsoleIcon :name="workspaceNavigation(workspace).icon"/><span class="truncate">{{workspaceTitle(workspace)}}</span></TabsTrigger><Button variant="ghost" size="icon-xs" class="mr-1 shrink-0" :disabled="closingWorkspace" :aria-label="'关闭 '+workspaceTitle(workspace)" @click.stop="closeWs(workspace.id)"><XIcon class="size-3"/></Button></div></ContextMenuTrigger><ContextMenuContent><ContextMenuItem @select="duplicateWorkspace(workspace)">新开相同页面</ContextMenuItem><ContextMenuItem @select="renameWs(workspace)">重命名页签</ContextMenuItem><ContextMenuSeparator/><ContextMenuItem :disabled="closingWorkspace" @select="closeWs(workspace.id)">关闭页签</ContextMenuItem><ContextMenuItem :disabled="!hasCloseTargets('left',workspace.id)" @select="closeWorkspaceGroup('left',workspace.id)">关闭左侧</ContextMenuItem><ContextMenuItem :disabled="!hasCloseTargets('right',workspace.id)" @select="closeWorkspaceGroup('right',workspace.id)">关闭右侧</ContextMenuItem><ContextMenuItem :disabled="!hasCloseTargets('all',workspace.id)" @select="closeWorkspaceGroup('all',workspace.id)">关闭全部</ContextMenuItem></ContextMenuContent></ContextMenu>
+   </TabsList></Tabs>
+   <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon-sm" aria-label="标签页操作"><ChevronDownIcon class="size-4"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem :disabled="!hasCloseTargets('left')" @select="closeWorkspaceGroup('left')">关闭左侧</DropdownMenuItem><DropdownMenuItem :disabled="!hasCloseTargets('right')" @select="closeWorkspaceGroup('right')">关闭右侧</DropdownMenuItem><DropdownMenuItem :disabled="!hasCloseTargets('all')" @select="closeWorkspaceGroup('all')">关闭全部</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
   </div>
+  <div v-if="showContext" class="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-2"><div v-if="contextFields.service" class="flex min-w-0 items-center gap-2"><span class="shrink-0 text-xs text-muted-foreground">应用</span><div class="w-48"><OptionPicker v-model="st.gSvc" :retain-missing="false" :placeholder="st.gSvc?'历史应用：'+st.gSvc:'请选择'" :options="st.services.map(s=>({value:s.name,label:applicationOption(s).label+(s.managed?'':' · 未接入部署')}))" all-label="全部应用" aria-label="当前工作区应用" @change="ctxSync()"/></div></div><div v-if="contextFields.environment" class="flex min-w-0 items-center gap-2"><span class="text-xs text-muted-foreground">环境</span><div class="w-36"><OptionPicker v-model="st.gEnv" :options="st.environments.map(e=>({value:e.name,label:(e.protected?'🔒 ':'')+e.display_name}))" all-label="全部环境" aria-label="当前工作区环境" @change="environmentChanged"/></div></div><div v-if="showTimeContext" class="ml-auto flex min-w-0 flex-wrap items-center gap-2"><TimeRangeControl v-model="st.range" @change="timeRangeChanged"/><Button variant="ghost" size="sm" :aria-pressed="st.rangeMinutes===15" @click="useRecentRange">最近15分钟</Button><Badge v-if="st.rangeMinutes>0" variant="secondary">动态</Badge></div></div>
+  <div id="wsarea" class="relative min-h-0 min-w-0 flex-1 overflow-hidden"><PersonalHome v-if="windowsReady" v-show="st.active===0" :active="st.active===0&&!st.showLogin" :me="st.me" :plugins="st.plugins" :workspaces="homeWorkspaces" @open="homeOpen" @resume="switchWs" @platform="openPlatformWorkspace"/></div>
+ </SidebarInset>
+</SidebarProvider>
+<Dialog :open="!!renameWorkspace" @update:open="v=>{if(!v)renameWorkspace=null}"><DialogContent class="sm:max-w-sm"><DialogHeader><DialogTitle>重命名工作区</DialogTitle><DialogDescription class="sr-only">仅修改当前页签名称</DialogDescription></DialogHeader><form class="space-y-5" @submit.prevent="saveWorkspaceName"><Field><FieldLabel for="workspace-name">工作区名称</FieldLabel><Input id="workspace-name" v-model="workspaceName" maxlength="60" required/></Field><DialogFooter><Button type="button" variant="outline" @click="renameWorkspace=null">取消</Button><Button type="submit" :disabled="!workspaceName.trim()">保存名称</Button></DialogFooter></form></DialogContent></Dialog>
+<MembersDialog :show="st.showUsers" :current="st.me" @close="st.showUsers=false;loadIdentity()"/>
+<Dialog :open="st.showSetup"><DialogContent :show-close-button="false" class="flex max-h-[94dvh] flex-col sm:max-w-4xl" @escape-key-down="e=>e.preventDefault()" @interact-outside="e=>e.preventDefault()"><DialogHeader><DialogTitle>配置团队的发布环境</DialogTitle><DialogDescription class="sr-only">选择模板，配置环境策略，确认创建</DialogDescription></DialogHeader>
+ <Stepper :model-value="st.setupStep" class="flex w-full gap-2"><StepperItem v-for="(label,index) in ['选择模板','配置策略','确认创建']" :key="label" :step="index+1" class="relative flex flex-1 flex-col items-center gap-2"><StepperTrigger class="pointer-events-none flex items-center gap-2"><StepperIndicator>{{index+1}}</StepperIndicator><StepperTitle class="text-sm">{{label}}</StepperTitle></StepperTrigger><StepperSeparator v-if="index<2" class="absolute top-4 left-[calc(50%+70px)] h-px w-[calc(100%-140px)] bg-border"/></StepperItem></Stepper>
+ <div class="min-h-0 overflow-auto py-5"><div v-if="st.setupStep===1" class="grid gap-3 sm:grid-cols-3"><Button v-for="entry in [{id:'simple',label:'简单流程',detail:'开发 → 测试 → 生产'},{id:'standard',label:'标准流程',detail:'开发 → 测试 → 预发 → 生产'},{id:'custom',label:'完全自定义',detail:'从空环境开始'}]" :key="entry.id" :variant="st.setupTemplate===entry.id?'secondary':'outline'" class="h-28 flex-col gap-2" @click="chooseEnvironmentTemplate(entry.id)"><strong>{{entry.label}}</strong><span class="text-xs text-muted-foreground">{{entry.detail}}</span></Button></div>
+ <div v-else-if="st.setupStep===2" class="space-y-4"><div class="flex items-center justify-between"><ContextHelp text="审核人员从平台成员中选择；发起人不能审批自己的发布单。环境后续可修改，已被引用的环境不能直接删除。"/><Button variant="outline" size="sm" @click="addSetupEnvironment"><PlusIcon class="size-3.5"/>添加环境</Button></div><section v-for="(row,index) in st.setupRows" :key="index" class="grid items-start gap-4 rounded-lg border p-4 sm:grid-cols-2"><Field><FieldLabel :for="'env-id-'+index">环境标识</FieldLabel><Input :id="'env-id-'+index" v-model="row.name" placeholder="如 uat"/></Field><Field><FieldLabel :for="'env-label-'+index">显示名称</FieldLabel><Input :id="'env-label-'+index" v-model="row.display_name" placeholder="如 用户验收"/></Field><div class="flex items-center gap-4"><Field orientation="horizontal"><Checkbox :id="'env-reason-'+index" v-model="row.require_reason"/><FieldLabel :for="'env-reason-'+index">原因必填</FieldLabel></Field><Field orientation="horizontal"><Checkbox :id="'env-protected-'+index" v-model="row.protected"/><FieldLabel :for="'env-protected-'+index">审批保护</FieldLabel></Field></div><Field><FieldLabel :for="'env-reviewer-'+index">审批人</FieldLabel><OptionPicker :id="'env-reviewer-'+index" v-model="row.approver_list" :disabled="!row.protected" multiple :options="st.users.filter(u=>u.enabled).map(u=>({value:u.username,label:u.display_name+' · '+u.username}))" placeholder="选择审核人员"/></Field><Button variant="ghost" size="sm" class="justify-self-end text-destructive sm:col-span-2" :disabled="st.setupRows.length<=1" @click="removeSetupEnvironment(index)">移除此环境</Button></section></div>
+ <div v-else class="grid gap-3 sm:grid-cols-2"><div v-for="row in st.setupRows" :key="row.name" class="flex items-center justify-between gap-3 rounded-lg border p-4"><div><strong class="text-sm">{{row.display_name}}</strong><code class="ml-2 text-xs text-muted-foreground">{{row.name}}</code></div><Badge variant="outline">{{row.protected?'需审批':row.require_reason?'原因必填':'普通发布'}}</Badge></div></div>
+ </div><p v-if="st.setupError" role="alert" class="text-sm text-destructive">{{st.setupError}}</p><DialogFooter><Button v-if="st.setupStep>1" variant="outline" :disabled="st.setupSaving" @click="st.setupStep--;st.setupError=''">上一步</Button><Button v-if="st.setupStep<3" @click="nextSetupStep">下一步</Button><Button v-else :disabled="st.setupSaving" @click="finishSetup"><Spinner v-if="st.setupSaving"/>创建并进入平台</Button></DialogFooter></DialogContent></Dialog>
+<FeedbackHost/>
+</TooltipProvider>
 </template>
-
-<style scoped>
-.layout{position:relative;display:flex;flex-direction:column;height:100vh}
-.topbar{height:48px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid var(--border);background:var(--panel);gap:12px;flex-shrink:0}
-.logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;flex-shrink:0}
-.logo .mark{width:22px;height:22px;border-radius:5px;background:linear-gradient(135deg,var(--brand),#1f6feb);display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700}
-.wstabs{display:flex;align-items:center;gap:2px;align-self:stretch;margin-left:8px;min-width:0;overflow:visible}.wstab-list{display:flex;align-self:stretch;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}.wstab-list::-webkit-scrollbar{display:none}
-.wstab{display:flex;align-items:center;gap:6px;padding:0 10px;font-size:12px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;user-select:none}
-.wstab:hover{color:var(--text);background:var(--panel2)}
-.wstab.on{color:var(--text);border-bottom-color:var(--brand)}
-.wstab .x{opacity:.5;font-size:14px;padding:0 2px;border-radius:3px}
-.wstab .x:hover{opacity:1;background:var(--panel2)}
-.wslauncher{position:relative;display:flex;align-self:stretch;flex-shrink:0}.wsplus{display:flex;align-items:center;padding:0 12px;border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px}
-.wsplus:hover,.wsplus[aria-expanded="true"]{color:var(--text);background:var(--panel2)}
-.pm{position:absolute;top:42px;left:0;display:flex;flex-direction:column;padding:4px;background:var(--panel);border:1px solid var(--border);border-radius:8px;min-width:170px;z-index:80;box-shadow:0 8px 24px rgba(0,0,0,.28)}
-.pm button{width:100%;padding:8px 10px;border:0;border-radius:5px;background:transparent;text-align:left;font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap}
-.pm button:hover{background:var(--panel2);color:var(--text)}
-.contextbar{height:44px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--panel) 88%,var(--bg));flex-shrink:0;overflow-x:auto}
-.context-title{font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap}.context-field{display:flex;align-items:center;gap:6px;white-space:nowrap}.context-field>label{font-size:11px;color:var(--dim)}.context-divider{height:20px;border-left:1px solid var(--border)}.context-tip{margin-left:auto;color:var(--dim);font-size:10px;white-space:nowrap}
-.seg{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden}
-.seg button{background:transparent;border:none;color:var(--muted);padding:5px 10px;font-size:12px;cursor:pointer;border-right:1px solid var(--border)}
-.seg button:last-child{border-right:none}
-.seg button.on{background:var(--brand-soft);color:var(--brand-ink);font-weight:600}
-.seg>button:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}
-.account,.logout{border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:11px;padding:6px 8px;cursor:pointer;white-space:nowrap}.account{margin-left:auto}.account:hover,.logout:hover{background:var(--panel2);color:var(--text)}.topr{font-size:15px;color:var(--muted);cursor:pointer;user-select:none;padding:5px 7px;border-radius:6px}.topr:hover{background:var(--panel2);color:var(--text)}
-.wsarea{flex:1;position:relative;overflow:hidden;background:var(--bg)}
-.ws{position:absolute;inset:0;border:none;width:100%;height:100%;display:none}
-.ws.on{display:block}
-.emptyws{position:absolute;inset:0;display:flex;flex-direction:column;gap:16px;align-items:center;justify-content:center;color:var(--dim)}
-.mask{position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;align-items:center;justify-content:center}
-.mask .box{width:320px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:24px;text-align:center}
-.mask h3{margin-bottom:16px}
-.mask input{width:100%;margin-bottom:12px;padding:8px 10px}
-.mask button{width:100%;background:var(--brand);border-color:var(--brand);color:#fff;padding:8px}
-.setup-mask{position:fixed;inset:0;z-index:110;display:flex;align-items:center;justify-content:center;padding:24px;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(5px)}
-.setup-dialog{width:min(920px,96vw);max-height:92vh;overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.28)}
-.setup-dialog header{display:flex;justify-content:space-between;align-items:flex-start}.setup-dialog h2{margin:4px 0 0;font-size:22px}.eyebrow{font-size:11px;color:var(--brand);font-weight:600}.step-count{color:var(--dim);font:12px var(--mono)}
-.setup-steps{display:flex;align-items:center;justify-content:center;margin:24px 0;color:var(--dim);font-size:12px}.setup-steps span.on{color:var(--brand);font-weight:600}.setup-steps i{width:64px;border-top:1px solid var(--border);margin:0 12px}
-.setup-body{min-height:255px}.setup-lead{color:var(--muted);margin:0 0 18px}.template-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.template-grid button{display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:20px;text-align:left;background:var(--panel2);border:1px solid var(--border);border-radius:10px;color:var(--text);cursor:pointer}.template-grid button:hover,.template-grid button.selected{border-color:var(--brand);box-shadow:0 0 0 1px var(--brand)}.template-grid b{font-size:15px}.template-grid small{color:var(--muted)}.template-grid em{margin-top:10px;color:var(--brand);font-style:normal;font-size:11px}
-.config-head{display:flex;align-items:center;margin-bottom:10px}.config-head p{margin:0;color:var(--muted);font-size:12px}.config-head button{margin-left:auto}.env-row{display:grid;grid-template-columns:1fr 1fr 1.45fr 1.15fr 30px;gap:8px;align-items:center;margin-bottom:8px}.env-row-head{color:var(--dim);font-size:10px;margin-bottom:5px}.env-row input:not([type=checkbox]){min-width:0;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--text)}.env-row input:focus{outline:none;border-color:var(--brand)}.env-row input:disabled{opacity:.6}.env-row .checks{display:flex;gap:10px;font-size:11px;white-space:nowrap}.env-row .checks label{display:flex;align-items:center;gap:4px}.remove-env{border:0;background:transparent;color:var(--dim);font-size:18px;cursor:pointer}.remove-env:hover{color:var(--error)}.remove-env:disabled{opacity:.3}.policy-tip{font-size:11px;color:var(--dim);margin:12px 0 0}.confirm-envs{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.confirm-envs>div{display:grid;grid-template-columns:24px 1fr auto;align-items:center;gap:8px;padding:13px;background:var(--panel2);border-radius:8px}.confirm-envs span{color:var(--ok)}.confirm-envs span.protected{color:var(--warn)}.confirm-envs code{color:var(--muted)}.confirm-envs small{grid-column:2/4;color:var(--dim)}.setup-error{padding:9px 11px;border-radius:7px;background:color-mix(in srgb,var(--error) 10%,var(--panel));color:var(--error);font-size:12px}.setup-dialog footer{display:flex;gap:8px;border-top:1px solid var(--border);padding-top:16px;margin-top:18px}.setup-dialog footer span{flex:1}.setup-dialog footer button,.config-head button{padding:8px 14px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);cursor:pointer}.setup-dialog footer button.primary{background:var(--brand);border-color:var(--brand);color:#fff}.setup-dialog footer button:disabled{opacity:.55;cursor:not-allowed}
-@media(max-width:900px){.logo{font-size:0}.logo .mark{flex-shrink:0}.context-tip{display:none}.context-title{display:none}.contextbar{padding:0 10px}.wstab{padding:0 8px}}
-@media(max-width:650px){.context-field>label{display:none}.context-divider{display:none}.seg button{display:none}.template-grid{grid-template-columns:1fr}.env-row{grid-template-columns:1fr 1fr}.env-row-head{display:none}.env-row .remove-env{justify-self:end}.setup-body{min-height:0}.confirm-envs{grid-template-columns:1fr}}
-/* Refreshed chrome: workspace tabs remain alive; only their presentation changes. */
-.topbar{height:56px;padding:0 20px;gap:16px}.logo{font-size:15px;gap:10px;letter-spacing:-.25px}.logo .mark{width:28px;height:28px;border-radius:9px;font-size:11px;box-shadow:0 3px 8px rgb(37 99 235 / 20%)}
-.wstabs{margin-left:12px;padding-top:8px;flex:1}.wstab-list{gap:4px}.wstab{gap:8px;padding:0 14px;border-radius:10px 10px 0 0;font-size:13px}.wstab.on{background:var(--brand-soft);color:var(--brand-ink);font-weight:600}.wstab .x{border:0;background:transparent;color:inherit;padding:0;width:24px;height:28px;opacity:.65;line-height:1}.wsplus{align-self:center;width:36px;height:36px;justify-content:center;padding:0;border-radius:9px;font-size:20px}
-.pm{top:48px;min-width:220px;padding:8px;box-shadow:var(--shadow-float);border-radius:12px}.pm button{display:flex;align-items:center;gap:12px;padding:11px 12px;font-size:13px}.launcher-label{padding:6px 12px 8px;font-size:11px;color:var(--dim);font-weight:600}
-.account{margin-left:0;font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis}.topr{border:1px solid var(--border);background:var(--panel);width:34px;height:34px;display:grid;place-items:center;padding:0;flex-shrink:0}
-.contextbar{height:48px;padding:0 20px;gap:12px;background:var(--panel)}.context-title{font-size:11px;padding-right:12px;border-right:1px solid var(--border);color:var(--muted)}.context-field>label{font-size:12px;color:var(--muted)}.context-tip{font-size:11px}
-@media(max-width:900px){.topbar{padding:0 12px;gap:8px}.logo{font-size:0}.wstabs{margin-left:0}.wstab{padding:0 10px}.account{font-size:11px;max-width:150px}.contextbar{padding:0 12px}.context-title,.context-tip{display:none}}
-@media(max-width:650px){.account{display:none}.wstab{font-size:12px;gap:5px}.wstab .x{width:20px}.logo .mark{width:26px;height:26px}.context-field{flex-shrink:0}}
-</style>

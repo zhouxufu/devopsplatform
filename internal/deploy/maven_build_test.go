@@ -155,7 +155,7 @@ func TestMavenServiceConfigurationRoundTrip(t *testing.T) {
 	}
 	defer st.Close()
 	sv := Service{Name: "orders", ArtifactType: "jar", BuildTool: "maven", MavenExecutable: "./mvnw",
-		MavenGoals: "clean verify", MavenProfiles: "ci", MavenProperties: "revision=1.2.3", MavenSettingsPath: "/opt/settings.xml"}
+		MavenGoals: "clean verify", MavenThreads: "1C", MavenUpdateSnapshots: true, MavenProfiles: "ci", MavenProperties: "revision=1.2.3", MavenSettingsPath: "/opt/settings.xml"}
 	if err := prepareBuildConfig(&sv); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestMavenServiceConfigurationRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := st.GetService("orders")
-	if got == nil || got.BuildTool != "maven" || got.MavenGoals != "clean verify" || got.MavenProfiles != "ci" || got.MavenProperties != "revision=1.2.3" || got.MavenSettingsPath != "/opt/settings.xml" {
+	if got == nil || got.BuildTool != "maven" || got.MavenGoals != "clean verify" || got.MavenThreads != "1C" || !got.MavenUpdateSnapshots || got.MavenProfiles != "ci" || got.MavenProperties != "revision=1.2.3" || got.MavenSettingsPath != "/opt/settings.xml" {
 		t.Fatalf("Maven build config did not round-trip: %#v", got)
 	}
 }

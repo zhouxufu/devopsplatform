@@ -1,0 +1,10 @@
+interface:
+  display_name: "研发变更登记"
+  short_description: "整理本次代码、数据库与配置变更，复用平台资源并预览确认登记草稿"
+  default_prompt: "使用 $devops-change-report 整理本次开发变更，确认应用及关联范围后预览上报。"
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "devOps"
+      description: "用户已配置的研发效能平台 MCP，地址及令牌由客户端配置提供"

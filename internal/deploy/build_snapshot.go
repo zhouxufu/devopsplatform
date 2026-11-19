@@ -19,6 +19,14 @@ type buildSnapshot struct {
 
 func (s *Store) saveBuildSnapshot(id int64, sv *Service, d *ServiceDelivery) error {
 	v := buildSnapshot{Service: *sv}
+	// Freeze the concrete template content/version without mutating app settings.
+	v.Service.Steps = make([]StepInst, len(sv.Steps))
+	for i, step := range sv.Steps {
+		v.Service.Steps[i] = step
+		if step.Step == "docker-build" {
+			v.Service.Steps[i].Params = resolvedDockerfileParams(step.Params)
+		}
+	}
 	if d != nil {
 		v.Delivery = *d
 	}
@@ -68,6 +76,39 @@ func (s *Store) buildReplay(id int64) (*Service, *ServiceDelivery, string, error
 	return &v.Service, &v.Delivery, commit, nil
 }
 func registerBuildControlRoutes(mux *http.ServeMux, st *Store, pr *PipelineRunner, wj func(http.ResponseWriter, any), failure func(http.ResponseWriter, int, any), actor func(*http.Request) string) {
+	mux.HandleFunc("GET /api/services/{name}/build-environments", func(w http.ResponseWriter, r *http.Request) {
+		options, required, err := st.buildEnvironmentOptions(r.PathValue("name"))
+		if err != nil {
+			failure(w, 400, err)
+			return
+		}
+		sv := st.GetService(r.PathValue("name"))
+		documentEnvironments, err := st.automaticDocumentEnvironments(sv)
+		if err != nil {
+			failure(w, 400, err)
+			return
+		}
+		wj(w, map[string]any{"environments": options, "environment_required": required, "documentation_environment_required": len(documentEnvironments) > 0, "documentation_environments": documentEnvironments})
+	})
+	mux.HandleFunc("GET /api/artifacts/{id}/build-compatibility", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		a := st.GetArtifact(id)
+		if a == nil || st.GetEnvironment(r.URL.Query().Get("environment")) == nil {
+			failure(w, 400, "请选择有效制品和目标环境")
+			return
+		}
+		detail := ""
+		if !st.artifactMatchesEnvironment(a, st.GetService(a.Service), r.URL.Query().Get("environment")) {
+			detail = "制品类型与目标环境发布方式不匹配"
+		}
+		if err := st.artifactBuildComplete(a); err != nil {
+			detail = err.Error()
+		}
+		if err := st.validateArtifactBuildVariant(a, r.URL.Query().Get("environment")); err != nil {
+			detail = err.Error()
+		}
+		wj(w, map[string]any{"compatible": detail == "", "reason": detail})
+	})
 	find := func(w http.ResponseWriter, r *http.Request) *PipelineRun {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		v := st.GetRun(id)

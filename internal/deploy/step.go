@@ -97,6 +97,7 @@ func (l *StepLib) ValidateBuildPipeline(steps []StepInst) error {
 	if err := l.ValidatePipeline(steps); err != nil {
 		return err
 	}
+	javaBuilt, nodeBuilt, built := false, false, false
 	for index, inst := range steps {
 		def := l.Get(inst.Step)
 		if def != nil && def.Kind == "deploy" {
@@ -107,6 +108,45 @@ func (l *StepLib) ValidateBuildPipeline(steps []StepInst) error {
 			if strings.TrimSpace(script) == "" || len(script) > 64<<10 || strings.ContainsRune(script, '\x00') {
 				return fmt.Errorf("第 %d 步脚本内容应为非空 Bash 文本，且不超过 64 KiB", index+1)
 			}
+		}
+		if def != nil && def.ID == "docker-build" {
+			params := def.RenderParams(inst)
+			if err := validateDockerfileParams(params); err != nil {
+				return fmt.Errorf("第 %d 步：%w", index+1, err)
+			}
+			if params["DOCKERFILE_SOURCE"] == "template" {
+				if params["DOCKERFILE_TEMPLATE"] != "nginx" && !javaBuilt {
+					return fmt.Errorf("第 %d 步 Java 运行时镜像模板缺少前置 Java 构建；请在应用的构建与制品中选择 Maven / Gradle 或 Java 编译命令，或改用自行编译的仓库 Dockerfile", index+1)
+				}
+				if params["DOCKERFILE_TEMPLATE"] == "nginx" && !nodeBuilt {
+					return fmt.Errorf("第 %d 步 Nginx 模板缺少前置 Node 构建，请先配置源码编译步骤", index+1)
+				}
+			}
+		}
+		if inst.Step == javaBundleStep {
+			if !built {
+				return fmt.Errorf("Java 整包归档之前必须有成功的构建步骤")
+			}
+			if err := validateBundlePackageParams(def.RenderParams(inst)); err != nil {
+				return err
+			}
+		}
+		if def != nil && def.Kind == "build" {
+			built = true
+		}
+		switch inst.Step {
+		case "git-checkout":
+			javaBuilt, nodeBuilt, built = false, false, false
+		case "java-build":
+			if strings.TrimSpace(def.RenderParams(inst)["COMMAND"]) == "" {
+				return fmt.Errorf("第 %d 步 Java 编译命令不能为空", index+1)
+			}
+			javaBuilt = true
+		case "npm-build":
+			if strings.TrimSpace(def.RenderParams(inst)["COMMAND"]) == "" {
+				return fmt.Errorf("第 %d 步 Node 编译命令不能为空", index+1)
+			}
+			nodeBuilt = true
 		}
 	}
 	return nil
@@ -139,7 +179,7 @@ func loadStepDef(dir string) *StepDef {
 	if def.Kind == "" {
 		def.Kind = map[string]string{"源码": "source", "构建": "build", "打包": "package", "部署": "deploy"}[def.Category]
 	}
-	if _, err := os.Stat(filepath.Join(dir, "run.sh")); err != nil && def.Kind != "deploy" {
+	if _, err := os.Stat(filepath.Join(dir, "run.sh")); err != nil && def.Kind != "deploy" && def.ID != javaBundleStep {
 		return nil // shell 步骤必须有执行体；部署类步骤走内置状态机
 	}
 	if def.Kind == "deploy" && def.Driver == "" {
@@ -200,7 +240,11 @@ func (d *StepDef) BuildEnv(inst StepInst, workspace, service, version, outputDir
 		EnvOutputDir+"="+outputDir,
 		EnvOutputsF+"="+filepath.Join(outputDir, ".outputs"),
 	)
-	for k, v := range d.RenderParams(inst) {
+	params := d.RenderParams(inst)
+	if d.ID == "docker-build" {
+		params = resolvedDockerfileParams(params)
+	}
+	for k, v := range params {
 		env = append(env, "LP_"+k+"="+v)
 	}
 	return env

@@ -1,65 +1,19 @@
 <script setup>
-// 统一时间范围选择器：Element Plus datetimerange + 常用快捷项
-// 对外契约：v-model = [startMs, endMs]（毫秒时间戳）；null/[] = 不限（全部）
-import { computed } from 'vue'
-import { ElConfigProvider, ElDatePicker } from 'element-plus'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import { useDatePopup } from '../composables/datePopup.js'
-import 'element-plus/dist/index.css'
-import 'element-plus/theme-chalk/dark/css-vars.css'
+import {ref,computed,useId} from 'vue'
+import {CalendarDate} from '@internationalized/date'
+import {CalendarIcon} from '@lucide/vue'
+import {RangeCalendar} from '@/components/ui/range-calendar'
+const props=defineProps({modelValue:Array,width:{type:String,default:'280px'},size:String,label:{type:String,default:'时间范围'}}),emit=defineEmits(['update:modelValue','change'])
+const open=ref(false),range=ref({}),startTime=ref('00:00:00'),endTime=ref('23:59:59'),error=ref(''),uid=useId()
+const formatter=new Intl.DateTimeFormat('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})
+const valueLabel=computed(()=>props.modelValue?.length===2?props.modelValue.map(t=>formatter.format(new Date(t))).join(' → '):'不限时间')
+function initialize(value){open.value=value;if(!value)return;error.value='';const dates=(props.modelValue||[Date.now()-900000,Date.now()]).map(t=>new Date(t));range.value={start:new CalendarDate(dates[0].getFullYear(),dates[0].getMonth()+1,dates[0].getDate()),end:new CalendarDate(dates[1].getFullYear(),dates[1].getMonth()+1,dates[1].getDate())};startTime.value=dates[0].toTimeString().slice(0,8);endTime.value=dates[1].toTimeString().slice(0,8)}
+function timestamp(day,time){if(!day||!/^\d{2}:\d{2}(:\d{2})?$/.test(time))return NaN;const [h,m,s=0]=time.split(':').map(Number);if(h>23||m>59||s>59)return NaN;return new Date(day.year,day.month-1,day.day,h,m,s).getTime()}
+function update(value){emit('update:modelValue',value);emit('change',value);open.value=false}
+function apply(){const value=[timestamp(range.value.start,startTime.value),timestamp(range.value.end,endTime.value)];if(value.some(t=>!Number.isFinite(t))||value[1]<value[0]){error.value='请选择完整范围，结束时间不能早于开始时间';return}update(value)}
+function recent(minutes){update([Date.now()-minutes*60000,Date.now()])}
 
-const props = defineProps({
-  modelValue: { type: Array, default: null },
-  size: { type: String, default: 'small' },
-  width: { type: String, default: '230px' },
-})
-const emit = defineEmits(['update:modelValue', 'change'])
-const { picker, dateVisible } = useDatePopup()
 
-const inner = computed({
-  get: () => (props.modelValue && props.modelValue.length === 2 ? [new Date(props.modelValue[0]), new Date(props.modelValue[1])] : null),
-  set: v => {
-    const ms = v && v.length === 2 ? [v[0].getTime(), v[1].getTime()] : null
-    emit('update:modelValue', ms)
-    emit('change', ms)
-  },
-})
-
-const ago = m => Date.now() - m * 60000
-const shortcuts = [
-  { text: '最近15分钟', value: () => [new Date(ago(15)), new Date()] },
-  { text: '最近1小时', value: () => [new Date(ago(60)), new Date()] },
-  { text: '最近6小时', value: () => [new Date(ago(360)), new Date()] },
-  { text: '最近24小时', value: () => [new Date(ago(1440)), new Date()] },
-  { text: '最近3天', value: () => [new Date(ago(3 * 1440)), new Date()] },
-  { text: '最近7天', value: () => [new Date(ago(7 * 1440)), new Date()] },
-  {
-    text: '今天',
-    value: () => {
-      const d = new Date()
-      d.setHours(0, 0, 0, 0)
-      return [d, new Date()]
-    },
-  },
-  {
-    text: '昨天',
-    value: () => {
-      const d = new Date()
-      d.setHours(0, 0, 0, 0)
-      return [new Date(d.getTime() - 86400000), d]
-    },
-  },
-]
+import {Button,Field,FieldLabel,Input,Popover,PopoverContent,PopoverTrigger} from '../shadcn-ui.js'
 </script>
-<template>
-  <ElConfigProvider :locale="zhCn">
-    <ElDatePicker ref="picker" v-model="inner" type="datetimerange" :shortcuts="shortcuts" range-separator="→" popper-class="platform-date-popper" @visible-change="dateVisible"
-      start-placeholder="不限开始" end-placeholder="不限结束" :size="size" :clearable="true"
-      format="MM-DD HH:mm" date-format="MM-DD" time-format="HH:mm"
-      :style="{ width, '--el-date-editor-datetime-range-width': width }" />
-  </ElConfigProvider>
-</template>
-<style scoped>
-:deep(.el-range-input) { font-size: 11px }
-:deep(.el-range-separator) { font-size: 11px }
-</style>
+<template><Popover :open="open" @update:open="initialize"><PopoverTrigger as-child><Button variant="outline" class="max-w-full min-w-0 justify-start font-normal" :style="{width}" :aria-label="label"><CalendarIcon class="size-4"/><span class="truncate">{{valueLabel}}</span></Button></PopoverTrigger><PopoverContent class="w-auto max-w-[calc(100vw-2rem)] p-3" align="end"><div class="mb-3 flex max-w-72 flex-wrap gap-1"><Button v-for="minutes in [15,60,360,1440,4320,10080]" :key="minutes" variant="ghost" size="xs" @click="recent(minutes)">{{minutes<60?'最近15分钟':minutes<1440?'最近'+minutes/60+'小时':'最近'+minutes/1440+'天'}}</Button></div><RangeCalendar v-model="range" locale="zh-CN" :number-of-months="1"/><div class="grid grid-cols-2 gap-3 border-t pt-3"><Field><FieldLabel :for="uid+'-start'">开始时间</FieldLabel><Input :id="uid+'-start'" v-model="startTime" type="time" step="1"/></Field><Field><FieldLabel :for="uid+'-end'">结束时间</FieldLabel><Input :id="uid+'-end'" v-model="endTime" type="time" step="1"/></Field></div><p v-if="error" role="alert" class="mt-2 max-w-72 text-xs text-destructive">{{error}}</p><div class="mt-3 flex justify-end gap-2"><Button variant="ghost" size="sm" @click="update(null)">清空</Button><Button variant="outline" size="sm" @click="open=false">取消</Button><Button size="sm" @click="apply">应用</Button></div></PopoverContent></Popover></template>

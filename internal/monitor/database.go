@@ -125,6 +125,9 @@ func openMonitorDatabase(cfg DatabaseConfig) (*monitorDB, error) {
 }
 
 var mysqlMonitorSchema = []string{
+	arthasCredentialDDL + ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
+	arthasTargetDDL + ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
+	arthasAuditDDL + ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
 	`CREATE TABLE IF NOT EXISTS metrics_minute (
 		minute BIGINT NOT NULL, service VARCHAR(128) NOT NULL, environment VARCHAR(64) NOT NULL DEFAULT '', level VARCHAR(16) NOT NULL, count BIGINT NOT NULL,
 		PRIMARY KEY(minute,service,environment,level), KEY idx_metrics_service(service,environment,minute)

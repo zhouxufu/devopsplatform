@@ -1,0 +1,10 @@
+interface:
+  display_name: "接口测试与画布"
+  short_description: "通过平台 MCP 管理用例、测试集和画布，执行回归、检索报告及停止指定运行"
+  default_prompt: "使用 $devops-api-testing 根据当前应用接口创建带条件分支和并行路径的测试画布，先校验并预览保存，不执行。"
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "devOps"
+      description: "用户已配置的研发效能平台 MCP，地址及令牌由客户端配置提供"

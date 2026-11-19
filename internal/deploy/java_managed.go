@@ -3,6 +3,7 @@ package deploy
 import (
 	"archive/zip"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -29,16 +30,27 @@ func healthFailureAction(sv *Service) string {
 }
 
 func managedJava(sv *Service) bool {
-	return sv.TargetType == "ssh-jar" && sv.DeployConfig["java_mode"] == "managed"
+	return (sv.TargetType == "ssh-jar" || sv.TargetType == TargetJavaBundle) && sv.DeployConfig["java_mode"] == "managed"
 }
 
 func validateManagedJava(sv *Service) error {
 	c := sv.DeployConfig
+	if sv.TargetType == TargetJavaBundle {
+		if c["java_mode"] != "managed" || !bundleRelative(c["java_bundle_jar"], false) || !strings.HasSuffix(c["java_bundle_jar"], ".jar") {
+			return fmt.Errorf("Java 整包需要平台托管模式和包内主 JAR 相对路径")
+		}
+		if strings.TrimSpace(c["java_workdir"]) != "" {
+			return fmt.Errorf("Java 整包运行目录固定为当前版本包目录，不能关联旧版本目录")
+		}
+	}
 	if !path.IsAbs(sv.RemoteDir) || path.Clean(sv.RemoteDir) == "/" {
 		return fmt.Errorf("标准 Java 部署需要独立的绝对路径目录，不能使用根目录")
 	}
 	if c["java_home"] != "" && !path.IsAbs(c["java_home"]) {
 		return fmt.Errorf("运行 JDK 目录必须是绝对路径；留空使用主机 PATH 中的 java")
+	}
+	if dir := strings.TrimSpace(c["java_workdir"]); dir != "" && !path.IsAbs(dir) {
+		return fmt.Errorf("运行工作目录必须是绝对路径；留空使用本次发布版本目录")
 	}
 	switch c["java_version"] {
 	case "8", "11", "17", "21", "25":
@@ -54,7 +66,7 @@ func validateManagedJava(sv *Service) error {
 	if c["java_port"] == "" && strings.TrimSpace(sv.HealthURL) == "" {
 		return fmt.Errorf("标准 Java 部署至少配置监听端口或健康检查 URL，避免仅凭进程启动判定发布成功")
 	}
-	for _, key := range []string{"java_home", "java_args", "java_jvm_options"} {
+	for _, key := range []string{"java_home", "java_workdir", "java_args", "java_jvm_options"} {
 		if strings.ContainsRune(c[key], 0) {
 			return fmt.Errorf("Java 配置不可包含 NUL")
 		}
@@ -114,6 +126,15 @@ func validateJavaBytecode(file string, javaVersion int) error {
 
 func managedJavaScript(sv *Service, release string) string {
 	c := sv.DeployConfig
+	workdir := strings.TrimSpace(c["java_workdir"])
+	if workdir == "" {
+		workdir = release
+	}
+	jarPath := release + "/app.jar"
+	if sv.TargetType == TargetJavaBundle {
+		workdir = release + "/bundle"
+		jarPath = workdir + "/" + c["java_bundle_jar"]
+	}
 	// The launcher runs on the target host, so the portable {host} placeholder
 	// must resolve locally instead of being handed literally to curl.
 	healthURL := strings.ReplaceAll(strings.TrimSpace(sv.HealthURL), "{host}", "127.0.0.1")
@@ -129,7 +150,8 @@ func managedJavaScript(sv *Service, release string) string {
 		return strings.Join(values, " ")
 	}
 	return "#!/usr/bin/env bash\nset -euo pipefail\n" +
-		"readonly jar=" + shellQuote(release+"/app.jar") + "\nreadonly java=" + shellQuote(java) + "\nreadonly pidfile=" + shellQuote(path.Join(sv.RemoteDir, ".devopsplatform.pid")) + "\n" +
+		"readonly jar=" + shellQuote(jarPath) + "\nreadonly java=" + shellQuote(java) + "\nreadonly pidfile=" + shellQuote(path.Join(sv.RemoteDir, ".devopsplatform.pid")) + "\n" +
+		"readonly workdir=" + shellQuote(workdir) + "\n" +
 		"readonly envfile=" + shellQuote(release+"/runtime.env") + "\nreadonly logfile=" + shellQuote(path.Join(sv.RemoteDir, "logs/application.log")) + "\n" +
 		"readonly port=" + shellQuote(c["java_port"]) + "\nreadonly health=" + shellQuote(healthURL) + "\nreadonly expected=" + shellQuote(c["java_version"]) + "\n" +
 		"readonly -a jvm=(" + quoteArgs(c["java_jvm_options"]) + ")\nreadonly -a args=(" + quoteArgs(c["java_args"]) + ")\n" + `
@@ -162,6 +184,7 @@ diagnose_readiness() {
 case "${1:-}" in
   check)
     [[ $(uname -s) == Linux ]] || { echo "Standard Java deployment requires Linux"; exit 2; }
+    [[ -d "$workdir" && -x "$workdir" ]] || { echo "Runtime working directory is missing or inaccessible"; exit 2; }
     version=$("$java" -version 2>&1) || { echo "Selected Java is not executable"; exit 2; }
     major=$(printf '%s\n' "$version" | sed -n '1s/.*version "\([0-9]*\).*/\1/p')
     if [[ "$major" == 1 ]]; then major=$(printf '%s\n' "$version" | sed -n '1s/.*version "1\.\([0-9]*\).*/\1/p'); fi
@@ -173,15 +196,25 @@ case "${1:-}" in
     if owned_pid; then echo "Already running"; exit 0; fi
     if [[ -n "$port" ]] && listening; then echo "Port $port is in use; will not stop an unmanaged process"; exit 2; fi
     umask 077
-    (cd "${jar%/*}"; set -a; source "$envfile"; set +a; exec nohup "$java" "${jvm[@]}" -jar "$jar" "${args[@]}") >> "$logfile" 2>&1 < /dev/null &
+    # Bash before 4.4 treats empty arrays as unset under nounset. Expand only
+    # populated arrays, preserving each argument literally and adding no empty arg.
+    (cd "$workdir"; set -a; source "$envfile"; set +a; exec nohup "$java" ${jvm[@]+"${jvm[@]}"} -jar "$jar" ${args[@]+"${args[@]}"}) >> "$logfile" 2>&1 < /dev/null &
     echo $! > "$pidfile"
     read -r pid < "$pidfile"
     for ((i=0;i<40;i++)); do
-      kill -0 "$pid" 2>/dev/null || { echo "Java failed to start"; exit 2; }
-      if tr '\0' '\n' < "/proc/$pid/cmdline" | grep -Fqx -- "$jar"; then exit 0; fi
+      if ! kill -0 "$pid" 2>/dev/null; then
+        status=0
+        wait "$pid" || status=$?
+        echo "Java failed to start (exit status $status)" >&2
+        diagnose_readiness
+        exit 20
+      fi
+      if { tr '\0' '\n' < "/proc/$pid/cmdline"; } 2>/dev/null | grep -Fqx -- "$jar"; then exit 0; fi
       sleep .1
     done
-    echo "Java did not start within 4 seconds"; exit 2
+    echo "Java did not start within 4 seconds" >&2
+    diagnose_readiness
+    exit 75
     ;;
   stop)
     if ! owned_pid; then rm -f -- "$pidfile"; exit 0; fi
@@ -195,13 +228,22 @@ case "${1:-}" in
   ready)
     health_detail="not checked"
     for ((i=0;i<60;i++)); do
-      owned_pid || { echo "Java exited before becoming ready" >&2; diagnose_readiness; exit 2; }
+      [[ -f "$pidfile" ]] || { echo "PID receipt is missing; result needs review"; exit 75; }
+      owned_pid || { echo "Java exited before becoming ready" >&2; diagnose_readiness; exit 20; }
       if { [[ -z "$port" ]] || listening; } && health_ready; then exit 0; fi
       sleep 2
     done
     echo "Readiness check timed out after 120 seconds" >&2
     diagnose_readiness
-    exit 2
+    exit 75
+    ;;
+  agent-probe)
+    [[ -f "$pidfile" ]] || { echo "PID receipt is missing; ownership needs review"; exit 30; }
+    owned_pid || { echo "Managed application process exited"; exit 20; }
+    health_detail="not checked"
+    if { [[ -z "$port" ]] || listening; } && health_ready; then echo "Managed process and configured readiness checks passed"; exit 0; fi
+    echo "Managed application is still starting"
+    exit 10
     ;;
   *) echo "Usage: $0 check|start|stop|ready"; exit 2;;
 esac
@@ -229,7 +271,7 @@ func managedJavaLockAcquireCommand(remoteDir, owner string) string {
 		`existing_owner=$(cat "$lock/owner" 2>/dev/null || true); started=$(cat "$lock/started_at" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || echo 0); ` +
 		`case "$started" in ''|*[!0-9]*) started=0;; esac; age=$((now-started)); recover=0; ` +
 		`if [ -z "$existing_owner" ]; then recover=1; echo 'Recovered legacy empty deployment lock'; ` +
-		`elif [ "$age" -gt 1800 ]; then recover=1; echo "Recovered stale deployment lock owned by $existing_owner (${age}s)"; fi; ` +
+		`elif [ "$age" -gt 1800 ] && [ "${existing_owner#agent:}" = "$existing_owner" ]; then recover=1; echo "Recovered stale deployment lock owned by $existing_owner (${age}s)"; fi; ` +
 		`if [ "$recover" -eq 1 ]; then rm -f "$lock/owner" "$lock/started_at"; if rmdir "$lock" 2>/dev/null && mkdir "$lock" 2>/dev/null; then acquired=1; fi; fi; fi; ` +
 		`[ "$acquired" -eq 1 ] || { echo "deployment or instance operation is running (owner: ${existing_owner:-unknown}, age: ${age:-unknown}s)" >&2; exit 3; }; ` +
 		`umask 077; printf '%s\n' "$requested_owner" > "$lock/owner"; printf '%s\n' "$now" > "$lock/started_at"`
@@ -244,14 +286,27 @@ func managedJavaLockReleaseCommand(remoteDir, owner string) string {
 }
 
 func (d *Deployer) deployManagedJavaRemote(id int64, sv *Service, host Host, artifact string, remote javaRemote) string {
+	return d.deployManagedJavaPreparedRemote(id, sv, host, remote, func(release string, _ func(string, string) bool) bool {
+		if err := remote.upload(host, artifact, release+"/app.jar"); err != nil {
+			d.emit(id, "✗ 上传制品失败: "+err.Error()+"\n")
+			return false
+		}
+		return true
+	})
+}
+
+func (d *Deployer) deployManagedJavaPreparedRemote(id int64, sv *Service, host Host, remote javaRemote, prepare func(string, func(string, string) bool) bool) string {
 	base := path.Clean(sv.RemoteDir)
 	release := fmt.Sprintf("%s/releases/deploy-%d", base, id)
 	current := base + "/current"
 	owner := sv.Name + "/" + sv.RuntimeEnvironment
 	lockOwner := fmt.Sprintf("deploy-%d", id)
+	var stepError error
+	retainLock := false
 	step := func(label, command string) bool {
 		d.emit(id, "▶ "+label+"\n")
 		out, err := remote.exec(host, command, 4*time.Minute)
+		stepError = err
 		if out != "" {
 			d.emit(id, out)
 		}
@@ -261,10 +316,23 @@ func (d *Deployer) deployManagedJavaRemote(id int64, sv *Service, host Host, art
 		}
 		return true
 	}
+	if sv.TargetType == TargetJavaBundle {
+		guard := "base=" + shellQuote(base) + `; probe="$base"; while [ "$probe" != / ] && [ -n "$probe" ]; do [ ! -L "$probe" ] || { echo 'Managed bundle directory crosses a symbolic link' >&2; exit 2; }; probe="${probe%/*}"; done; `
+		for _, rel := range []string{"releases", "logs", ".devopsplatform.pid", ".devopsplatform-owner", ".deploy-lock", ".deploy-lock/owner", ".deploy-lock/started_at"} {
+			guard += "[ ! -L " + shellQuote(path.Join(base, rel)) + " ] && "
+		}
+		guard += "true"
+		if !step("检查整包目录边界", guard) {
+			return "failed"
+		}
+	}
 	if !step("锁定独立部署目录", "mkdir -p "+shellQuote(base)+" && "+managedJavaLockAcquireCommand(base, lockOwner)) {
 		return "failed"
 	}
 	defer func() {
+		if retainLock {
+			return
+		}
 		if out, err := remote.exec(host, managedJavaLockReleaseCommand(base, lockOwner), time.Minute); err != nil {
 			d.emit(id, "⚠ 部署锁清理失败："+strings.TrimSpace(out)+" "+err.Error()+"\n")
 		}
@@ -274,17 +342,17 @@ func (d *Deployer) deployManagedJavaRemote(id int64, sv *Service, host Host, art
 	if !step("检查目录归属", guard) {
 		return "failed"
 	}
+
 	previous, err := remote.exec(host, "if [ -L "+shellQuote(current)+" ]; then readlink "+shellQuote(current)+"; elif [ -e "+shellQuote(current)+" ]; then exit 2; fi", time.Minute)
 	previous = strings.TrimSpace(previous)
 	if err != nil || (previous != "" && (!strings.HasPrefix(previous, base+"/releases/deploy-") || path.Dir(previous) != base+"/releases")) {
 		d.emit(id, "✗ current 不是平台管理的版本链接\n")
 		return "failed"
 	}
-	if !step("准备新版本", "umask 077; mkdir -p "+shellQuote(base+"/logs")+" && mkdir -p "+shellQuote(release)) {
+	if !step("准备新版本", "umask 077; mkdir -p "+shellQuote(base+"/logs")+" "+shellQuote(base+"/releases")+" && mkdir "+shellQuote(release)) {
 		return "failed"
 	}
-	if err := remote.upload(host, artifact, release+"/app.jar"); err != nil {
-		d.emit(id, "✗ 上传制品失败: "+err.Error()+"\n")
+	if !prepare(release, step) {
 		return "failed"
 	}
 	if err := remote.write(host, []byte(managedJavaScript(sv, release)), release+"/service.sh"); err != nil {
@@ -329,9 +397,19 @@ func (d *Deployer) deployManagedJavaRemote(id int64, sv *Service, host Host, art
 		return "rolled-back"
 	}
 	if !step("切换并启动新版本", switchTo(release)+" && "+command(release, "start")) {
+		if !knownJavaExit(stepError) {
+			retainLock = true
+			d.emit(id, "启动结果待核对，保留进程和部署锁，不自动停止或回滚\n")
+			return "needs_review"
+		}
 		return rollback()
 	}
 	if !step("验证进程及服务就绪", command(release, "ready")) {
+		if !knownJavaExit(stepError) {
+			retainLock = true
+			d.emit(id, "应用仍在启动或结果未知，进入待核对；不自动停止、回滚或重发\n")
+			return "needs_review"
+		}
 		switch healthFailureAction(sv) {
 		case healthFailureStop:
 			d.emit(id, "健康检查失败；按环境策略停止新版本，不恢复旧版本\n")
@@ -348,6 +426,11 @@ func (d *Deployer) deployManagedJavaRemote(id int64, sv *Service, host Host, art
 	}
 	d.emit(id, "✓ 标准 Java 发布完成，日志："+base+"/logs/application.log\n")
 	return "success"
+}
+
+func knownJavaExit(err error) bool {
+	var result interface{ ExitStatus() int }
+	return errors.As(err, &result) && result.ExitStatus() == 20
 }
 
 // ManagedJavaInstance 是标准 Java 部署在单台主机上的实时运行状态。
@@ -367,21 +450,28 @@ type ManagedJavaInstance struct {
 type javaExec func(Host, string, time.Duration) (string, error)
 
 func managedJavaStatusCommand(remoteDir string) string {
+	return managedJavaStatusCommandFor(remoteDir, "app.jar")
+}
+func managedJavaStatusCommandFor(remoteDir, jar string) string {
 	base := path.Clean(remoteDir)
-	return "base=" + shellQuote(base) + `; current="$base/current"; pidfile="$base/.devopsplatform.pid"; ` +
+	return "base=" + shellQuote(base) + "; jar_relative=" + shellQuote(jar) + `; current="$base/current"; pidfile="$base/.devopsplatform.pid"; ` +
 		`if [ ! -L "$current" ]; then printf 'state=not-deployed\n'; exit 0; fi; ` +
 		`release=$(readlink "$current") || exit 2; case "$release" in "$base"/releases/deploy-*) ;; *) printf 'state=unknown\nmessage=current link is not platform managed\n'; exit 0;; esac; ` +
 		`printf 'release=%s\n' "${release##*/}"; ` +
 		`if [ ! -f "$pidfile" ]; then printf 'state=stopped\n'; exit 0; fi; ` +
 		`read -r pid < "$pidfile"; case "$pid" in ''|*[!0-9]*) printf 'state=unknown\nmessage=invalid pid file\n'; exit 0;; esac; ` +
 		`printf 'pid=%s\n' "$pid"; ` +
-		`if kill -0 "$pid" 2>/dev/null && tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -Fqx -- "$release/app.jar"; then printf 'state=running\n'; ` +
+		`if kill -0 "$pid" 2>/dev/null && tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -Fqx -- "$release/$jar_relative"; then printf 'state=running\n'; ` +
 		`elif kill -0 "$pid" 2>/dev/null; then printf 'state=unknown\nmessage=pid belongs to another process\n'; else printf 'state=stopped\nmessage=stale pid file\n'; fi`
 }
 
 func inspectManagedJavaInstance(sv *Service, host Host, exec javaExec) ManagedJavaInstance {
 	result := ManagedJavaInstance{Host: host.Name, Address: host.Addr, State: "unknown", CheckedAt: time.Now().Unix()}
-	out, err := exec(host, managedJavaStatusCommand(sv.RemoteDir), time.Minute)
+	jar := "app.jar"
+	if sv.TargetType == TargetJavaBundle {
+		jar = "bundle/" + sv.DeployConfig["java_bundle_jar"]
+	}
+	out, err := exec(host, managedJavaStatusCommandFor(sv.RemoteDir, jar), time.Minute)
 	if err != nil {
 		result.State, result.Message = "unreachable", strings.TrimSpace(err.Error())
 		return result

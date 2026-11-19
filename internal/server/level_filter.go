@@ -19,17 +19,6 @@ func parseLevelFilter(raw string) levelFilter {
 	return levels
 }
 
-func (levels levelFilter) SQL() (string, []any) {
-	if len(levels) == 0 {
-		return "", nil
-	}
-	args := make([]any, len(levels))
-	for i, level := range levels {
-		args[i] = level
-	}
-	return "level COLLATE NOCASE IN (" + strings.TrimSuffix(strings.Repeat("?,", len(levels)), ",") + ")", args
-}
-
 func (levels levelFilter) Match(value string) bool {
 	if len(levels) == 0 {
 		return true

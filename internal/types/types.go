@@ -16,16 +16,19 @@ type Event struct {
 
 // IngestRequest agent 批量上报请求体（gzip 压缩传输）
 type IngestRequest struct {
-	AgentID    string  `json:"agent_id"`
-	BatchID    string  `json:"batch_id,omitempty"`
-	Dropped    int     `json:"dropped"` // 上一周期明确丢弃数（正常背压不会增加）
-	QueueDepth int     `json:"queue_depth,omitempty"`
-	SpoolBytes int64   `json:"spool_bytes,omitempty"`
-	Events     []Event `json:"events"`
+	AgentID      string   `json:"agent_id"`
+	AgentName    string   `json:"agent_name,omitempty"`
+	AgentAliases []string `json:"agent_aliases,omitempty"`
+	BatchID      string   `json:"batch_id,omitempty"`
+	Dropped      int      `json:"dropped"` // 上一周期明确丢弃数（正常背压不会增加）
+	QueueDepth   int      `json:"queue_depth,omitempty"`
+	SpoolBytes   int64    `json:"spool_bytes,omitempty"`
+	Events       []Event  `json:"events"`
 }
 
 // IngestResponse 只有收到匹配 batch_id 的完整 ACK，agent 才删除本地 WAL 记录。
 type IngestResponse struct {
+	Quarantined  int    `json:"quarantined,omitempty"` // 已可靠隔离的坏记录，原始内容保留供修复
 	BatchID      string `json:"batch_id,omitempty"`
 	Accepted     int    `json:"accepted"`     // 本次新写入数量（重复事件不计）
 	Acknowledged int    `json:"acknowledged"` // 已可靠处理数量（包含幂等重复）

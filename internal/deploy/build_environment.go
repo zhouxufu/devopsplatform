@@ -60,9 +60,6 @@ func validateBuildEnvironment(e *BuildEnvironment, sv *Service) error {
 	if !strings.Contains(filepath.Base(image), ":") {
 		return fmt.Errorf("构建镜像必须指定版本标签或 sha256 digest")
 	}
-	if sv != nil && sv.ArtifactType == "image" {
-		return fmt.Errorf("Docker 镜像构建使用 Runner 的 Docker 引擎，请选择本机环境；不在构建容器中挂载 Docker socket")
-	}
 	if e.Network != "" && e.Network != "bridge" && e.Network != "host" {
 		return fmt.Errorf("构建网络仅支持默认隔离网络或宿主机网络")
 	}
@@ -107,7 +104,7 @@ func buildMount(source, target string, readonly bool) (string, error) {
 	return value, nil
 }
 
-func containerBuildArgs(sv *Service, def *StepDef, env []string, cache, name, image string) ([]string, []string, error) {
+func containerBuildArgs(sv *Service, def *StepDef, env []string, cache, name, image string, stagedSettings ...string) ([]string, []string, error) {
 	values := map[string]string{}
 	for _, item := range env {
 		if k, v, ok := strings.Cut(item, "="); ok {
@@ -135,11 +132,17 @@ func containerBuildArgs(sv *Service, def *StepDef, env []string, cache, name, im
 		if err != nil || !info.Mode().IsRegular() {
 			return nil, nil, fmt.Errorf("Maven settings.xml 不存在或不是普通文件")
 		}
-		mount, err := buildMount(sv.MavenSettingsPath, sv.MavenSettingsPath, true)
-		if err != nil {
-			return nil, nil, err
+		if len(stagedSettings) != 1 || stagedSettings[0] == "" || strings.ContainsAny(stagedSettings[0]+sv.MavenSettingsPath, ",:\r\n") {
+			return nil, nil, fmt.Errorf("隔离构建尚未准备可读的 Maven 临时配置")
 		}
-		args = append(args, "--mount", mount)
+		staged, err := os.Stat(stagedSettings[0])
+		if err != nil || !staged.Mode().IsRegular() {
+			return nil, nil, fmt.Errorf("Maven 临时配置不可用")
+		}
+		// :Z applies only to this per-build private copy, never the original
+		// host settings or a shared/system directory. Keep the original
+		// container target so frozen commands and old retries still work.
+		args = append(args, "--volume", stagedSettings[0]+":"+sv.MavenSettingsPath+":ro,Z")
 	}
 	// Only forward the step contract and explicitly configured build variables.
 	// In particular, do not copy host HOME/PATH, cloud credentials or Git login.
@@ -184,6 +187,12 @@ func (b *Builder) execBuildStepContext(parent context.Context, sv *Service, def 
 	if !sv.BuildEnvironment.isolated() || def.Kind != "build" {
 		return b.execStepContext(parent, def, env, emit)
 	}
+	settings, cleanupSettings, err := stageBuildSettings(sv.MavenSettingsPath)
+	if err != nil {
+		emit("✗ " + err.Error() + "\n")
+		return -1
+	}
+	defer cleanupSettings()
 	if err := checkGradleWrapperCompatibility(sv, b.buildDir(sv)); err != nil {
 		emit("✗ " + err.Error() + "\n")
 		return -1
@@ -214,7 +223,7 @@ func (b *Builder) execBuildStepContext(parent context.Context, sv *Service, def 
 		return -1
 	}
 	name := "devops-build-" + randomToken()
-	args, childEnv, err := containerBuildArgs(sv, def, env, cache, name, strings.TrimSpace(string(imageID)))
+	args, childEnv, err := containerBuildArgs(sv, def, env, cache, name, strings.TrimSpace(string(imageID)), settings)
 	if err != nil {
 		emit("✗ " + err.Error() + "\n")
 		return -1

@@ -1,0 +1,27 @@
+<script setup>
+
+import {computed, inject, ref, watch} from 'vue'
+
+import {toast} from '../../shared/composables/toast.js'
+const props=defineProps({workItemId:Number,services:{type:Array,default:()=>[]},disabled:Boolean})
+const emit=defineEmits(['created','busy'])
+const api=inject('api'),open=ref(false),busy=ref(false),base=ref(''),commit=ref(''),branch=ref(''),plan=ref(null)
+const input=computed(()=>JSON.stringify([props.workItemId,props.services,base.value,commit.value,branch.value]))
+let generation=0
+watch(input,()=>{++generation;if(plan.value?.state==='preview')plan.value=null})
+const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+async function refreshPlan(){if(busy.value)return;busy.value=true;emit('busy',true);try{plan.value=await api('api/research/development/'+plan.value.id)}catch(e){toast(e.message,'error')}finally{busy.value=false;emit('busy',false)}}
+async function act(action){if(busy.value)return;busy.value=true;emit('busy',true);const seq=generation;try{
+ if(action==='preview'){const value=await post('api/research/development/preview',{work_item_id:props.workItemId,services:props.services,base_branch:base.value,base_commit:commit.value,branch:branch.value});if(seq===generation)plan.value=value}
+ else {const value=await post('api/research/development/'+plan.value.id+'/'+action,{confirm:true,revision:plan.value.revision});plan.value=value;if(value.state==='success'){emit('created',{branch:value.branch,services:value.repositories.flatMap(r=>r.services)});toast('分支已创建并填入当前交付内容，请保存草稿完成关联','success')}else toast(value.message,'warning',{duration:8000})}
+ }catch(e){if(action!=='preview'&&plan.value?.id){try{plan.value=await api('api/research/development/'+plan.value.id)}catch{}}toast(e.message,'error',{duration:7000})}finally{busy.value=false;emit('busy',false)}}
+
+import {ref as _viewRef} from 'vue'
+const _view1=_viewRef([])
+
+
+
+import {Accordion,AccordionContent,AccordionItem,AccordionTrigger,Button,Field,FieldLabel,Input,Spinner} from '../../shared/shadcn-ui.js'
+</script>
+<template><div class="feature-branch"><Accordion class="platform-collapse" type="multiple" :model-value="(open?['development']:[]||[]).map(String)" @update:model-value="(keys=>open=keys.length>0)($event)"><AccordionItem :disabled="disabled||!workItemId||!services.length" :value="String(&quot;development&quot;)"><AccordionTrigger>开始开发 · 自动建分支</AccordionTrigger><AccordionContent force-mount v-show="!(!(open?['development']:[]||[]).map(String).includes(String(&quot;development&quot;)))"><section aria-label="自动创建开发分支"><p class="hint">同一仓库只创建一次；不会合并、构建或发布。已有分支请直接使用上方关联分支。</p><div class="fields"><Field ><FieldLabel as="div">基线分支</FieldLabel><Input v-model="base" :disabled="busy||!!plan&&plan.state!=='preview'" placeholder="留空读取远程默认分支，确认后才创建"/></Field><Field ><FieldLabel as="div">新分支名称</FieldLabel><Input v-model="branch" :disabled="busy||!!plan&&plan.state!=='preview'" placeholder="自动生成 feature/work-编号-唯一后缀"/></Field></div><Accordion v-if="!plan||plan.state==='preview'" class="platform-collapse" type="multiple" :model-value="(_view1||[]).map(String)" @update:model-value="_view1=$event"><AccordionItem :value="String(&quot;panel&quot;)"><AccordionTrigger>指定基线提交（可选）</AccordionTrigger><AccordionContent force-mount v-show="!(!(_view1||[]).map(String).includes(String(&quot;panel&quot;)))"><Input v-model="commit" :disabled="busy" placeholder="完整 Git SHA；Hotfix 请明确核对生产基线，不使用测试公共分支" v-bind="{&quot;aria-label&quot;:&quot;指定基线提交&quot;}"/></AccordionContent></AccordionItem></Accordion><template v-if="plan"><p><b>{{plan.branch}}</b> · {{plan.state==='success'?'已创建':plan.state==='preview'?'待确认创建':'结果待核对'}}</p><ul><li v-for="r in plan.repositories" :key="r.url">{{r.services.join('、')}} · {{r.base_branch||'指定提交'}} → <code>{{r.base_commit}}</code> · {{({pending:'待创建',created:'已确认',unconfirmed:'待核对',uncertain:'结果待核对'})[r.status]||r.status}}</li></ul><p v-if="plan.message" role="status">{{plan.message}}</p></template><div class="actions"><Button v-if="!plan||plan.state==='preview'" @click="act('preview')" variant="outline" size="default" type="button" :disabled="(disabled)||(busy)"><Spinner v-if="busy"/>预览仓库与基线</Button><Button v-if="plan?.state==='preview'" @click="act('create')" variant="default" size="default" type="button" :disabled="(disabled)||(busy)"><Spinner v-if="busy"/>确认创建远程分支</Button><Button v-if="plan" @click="refreshPlan" variant="outline" size="default" type="button" :disabled="(busy)"><Spinner v-if="busy"/>核对计划状态</Button><Button v-if="['running','uncertain'].includes(plan?.state)" @click="act('reconcile')" variant="outline" size="default" type="button" :disabled="(busy)"><Spinner v-if="busy"/>只读核对创建结果</Button><Button v-if="plan&&!busy&&plan.state!=='preview'" @click="plan=null;generation++" variant="outline" size="default" type="button">新建另一份分支计划</Button></div></section></AccordionContent></AccordionItem></Accordion></div></template>
+<style scoped>.feature-branch{grid-column:1/-1}.feature-branch section{border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-top:10px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}label{display:grid;gap:6px}.hint,li{font-size:.75rem;color:var(--muted-foreground)}code{overflow-wrap:anywhere}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}@media(max-width:700px){.fields{grid-template-columns:1fr}}</style>

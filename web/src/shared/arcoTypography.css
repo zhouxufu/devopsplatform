@@ -1,0 +1,1663 @@
+:root {
+  --font-size-body-1: 14px;
+  --font-size-body-2: 15px;
+  --font-size-body-3: 16px;
+  --font-size-caption: 14px;
+  --font-size-title-1: 18px;
+  --font-size-title-2: 22px;
+  --font-size-title-3: 26px;
+  --font-size-display-1: 34px;
+  --font-size-display-2: 46px;
+  --font-size-display-3: 54px;
+  --icon-size-small: 16px;
+  --icon-size-medium: 18px;
+  --icon-size-large: 22px;
+  --icon-scale: 1;
+}
+/* Generated from installed Arco Less typography tokens. Edit typography.js / generator, not component overrides. */
+html[data-console-typography="standard"] body {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-label {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-label.arco-input-label-size-mini .arco-input-label-input,
+html[data-console-typography="standard"] .arco-input-label.arco-input-label-size-mini .arco-input-label-value {
+  padding-top: -0.5px;
+  padding-bottom: -0.5px;
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-label.arco-input-label-size-medium .arco-input-label-input,
+html[data-console-typography="standard"] .arco-input-label.arco-input-label-size-medium .arco-input-label-value {
+  padding-top: 2.5px;
+  padding-bottom: 2.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-label.arco-input-label-size-small .arco-input-label-input,
+html[data-console-typography="standard"] .arco-input-label.arco-input-label-size-small .arco-input-label-value {
+  padding-top: 0.5px;
+  padding-bottom: 0.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-label.arco-input-label-size-large .arco-input-label-input,
+html[data-console-typography="standard"] .arco-input-label.arco-input-label-size-large .arco-input-label-value {
+  padding-top: 4.5px;
+  padding-bottom: 4.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-picker-size-mini input {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-picker-size-small input {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-picker-size-medium input {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-picker-size-large input {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-view-single {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-view-single.arco-select-view-size-mini .arco-select-view-input,
+html[data-console-typography="standard"] .arco-select-view-single.arco-select-view-size-mini .arco-select-view-value {
+  padding-top: -0.5px;
+  padding-bottom: -0.5px;
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-select-view-single.arco-select-view-size-medium .arco-select-view-input,
+html[data-console-typography="standard"] .arco-select-view-single.arco-select-view-size-medium .arco-select-view-value {
+  padding-top: 2.5px;
+  padding-bottom: 2.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-view-single.arco-select-view-size-small .arco-select-view-input,
+html[data-console-typography="standard"] .arco-select-view-single.arco-select-view-size-small .arco-select-view-value {
+  padding-top: 0.5px;
+  padding-bottom: 0.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-view-single.arco-select-view-size-large .arco-select-view-input,
+html[data-console-typography="standard"] .arco-select-view-single.arco-select-view-size-large .arco-select-view-value {
+  padding-top: 4.5px;
+  padding-bottom: 4.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-view-multiple {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-view-multiple .arco-select-view-inner .arco-select-view-tag {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-select-view-multiple.arco-select-view-size-mini {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-select-view-multiple.arco-select-view-size-medium {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-view-multiple.arco-select-view-size-small {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-view-multiple.arco-select-view-size-large {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-alert {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-alert-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-autocomplete-popup .arco-select-popup .arco-select-option {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-back-top-btn {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-badge-number,
+html[data-console-typography="standard"] .arco-badge-text {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-badge .arco-badge-status-text {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-breadcrumb {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-btn-size-mini {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-btn-size-mini.arco-btn-loading-fixed-width.arco-btn-loading {
+  padding-right: 2px;
+  padding-left: 2px;
+}
+html[data-console-typography="standard"] .arco-btn-size-small {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-btn-size-small.arco-btn-loading-fixed-width.arco-btn-loading {
+  padding-right: 4px;
+  padding-left: 4px;
+}
+html[data-console-typography="standard"] .arco-btn-size-medium {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-btn-size-medium.arco-btn-loading-fixed-width.arco-btn-loading {
+  padding-right: 3px;
+  padding-left: 3px;
+}
+html[data-console-typography="standard"] .arco-btn-size-large {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-btn-size-large.arco-btn-loading-fixed-width.arco-btn-loading {
+  padding-right: 7px;
+  padding-left: 7px;
+}
+html[data-console-typography="standard"] .arco-card-size-medium {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-card-size-medium .arco-card-header-title,
+html[data-console-typography="standard"] .arco-card-size-medium .arco-card-meta-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-card-size-medium .arco-card-header-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-card-size-small {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-card-size-small .arco-card-header-title,
+html[data-console-typography="standard"] .arco-card-size-small .arco-card-meta-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-card-size-small .arco-card-header-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-carousel-arrow > div > svg {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-cascader-option,
+html[data-console-typography="standard"] .arco-cascader-search-option {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-checkbox {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-collapse-item-header {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-collapse-item-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-color-picker-size-medium .arco-color-picker-value {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-color-picker-size-mini .arco-color-picker-value {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-color-picker-size-small .arco-color-picker-value {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-color-picker-size-large .arco-color-picker-value {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-color-picker-panel .arco-color-picker-panel-colors .arco-color-picker-colors-text {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-color-picker-panel .arco-color-picker-panel-colors .arco-color-picker-colors-empty {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-color-picker-select-popup .arco-select-option {
+  font-size: 14px !important;
+}
+html[data-console-typography="standard"] .arco-comment {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-comment-author {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-comment-datetime {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-comment-actions {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-descriptions-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-descriptions-item,
+html[data-console-typography="standard"] .arco-descriptions-item-label,
+html[data-console-typography="standard"] .arco-descriptions-item-value {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-descriptions-item-label-inline,
+html[data-console-typography="standard"] .arco-descriptions-item-value-inline {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-descriptions-size-mini .arco-descriptions-item-label-block,
+html[data-console-typography="standard"] .arco-descriptions-size-mini .arco-descriptions-item-value-block {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-descriptions-size-small .arco-descriptions-item-label-block,
+html[data-console-typography="standard"] .arco-descriptions-size-small .arco-descriptions-item-value-block {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-descriptions-size-medium .arco-descriptions-item-label-block,
+html[data-console-typography="standard"] .arco-descriptions-size-medium .arco-descriptions-item-value-block {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-descriptions-size-large .arco-descriptions-item-label-block,
+html[data-console-typography="standard"] .arco-descriptions-size-large .arco-descriptions-item-value-block {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-divider-text {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-drawer-header .arco-drawer-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-dropdown-option {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-dropdown-group-title {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-empty .arco-empty-description {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-form-size-mini .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-form-size-small .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-form-size-large .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-form-item-extra {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-form-item-message {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-form-item-label-required-symbol {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-image-footer-caption-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-image-footer-caption-description {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-image-error-alt {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-image-loader-spin-text {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-image-preview-scale-value {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-image-preview-toolbar-action-name {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-tag {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-tag .arco-input-tag-inner .arco-input-tag-tag {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-tag.arco-input-tag-size-mini {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-tag.arco-input-tag-size-medium {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-tag.arco-input-tag-size-small {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-tag.arco-input-tag-size-large {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-wrapper {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-wrapper .arco-input.arco-input-size-mini {
+  padding-top: -0.5px;
+  padding-bottom: -0.5px;
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-wrapper .arco-input.arco-input-size-small {
+  padding-top: 0.5px;
+  padding-bottom: 0.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-wrapper .arco-input.arco-input-size-medium {
+  padding-top: 2.5px;
+  padding-bottom: 2.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-wrapper .arco-input.arco-input-size-large {
+  padding-top: 4.5px;
+  padding-bottom: 4.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-wrapper .arco-input-word-limit {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-mini .arco-input-outer {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-mini .arco-input-wrapper .arco-input-prefix,
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-mini .arco-input-wrapper .arco-input-suffix {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-mini .arco-input-prepend,
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-mini .arco-input-append {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-small .arco-input-outer {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-small .arco-input-wrapper .arco-input-prefix,
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-small .arco-input-wrapper .arco-input-suffix {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-small .arco-input-prepend,
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-small .arco-input-append {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-large .arco-input-outer {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-large .arco-input-wrapper .arco-input-prefix,
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-large .arco-input-wrapper .arco-input-suffix {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-large .arco-input-prepend,
+html[data-console-typography="standard"] .arco-input-outer.arco-input-outer-size-large .arco-input-append {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .size-height-size-mini {
+  padding-top: -0.5px;
+  padding-bottom: -0.5px;
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .size-height-size-small {
+  padding-top: 0.5px;
+  padding-bottom: 0.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .size-height-size-large {
+  padding-top: 4.5px;
+  padding-bottom: 4.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-textarea-word-limit {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-textarea-clear-icon {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-link {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-list {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-list-header {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-trigger-menu-item,
+html[data-console-typography="standard"] .arco-trigger-menu-pop-header {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-trigger-menu-group-title {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-message-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-modal-body {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-modal-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-notification-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-notification-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-page-header-main-with-back {
+  margin-left: -7px;
+  padding-left: 7px;
+}
+html[data-console-typography="standard"] .arco-page-header-back-btn {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-page-header-title {
+  font-size: 22px;
+}
+html[data-console-typography="standard"] .arco-page-header-subtitle {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-item {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-jumper > span {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-total {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-mini .arco-pagination-item {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-mini .arco-pagination-total {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-mini .arco-pagination-option {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-mini .arco-pagination-jumper > span {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-small .arco-pagination-item {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-small .arco-pagination-total {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-small .arco-pagination-option {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-small .arco-pagination-jumper > span {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-large .arco-pagination-item {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-large .arco-pagination-total {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-large .arco-pagination-option {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-pagination-size-large .arco-pagination-jumper > span {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-popconfirm-popup-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-popconfirm-popup-content .arco-popconfirm-body {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-popconfirm-popup-content .arco-popconfirm-body .arco-popconfirm-icon {
+  height: 25.144px;
+}
+html[data-console-typography="standard"] .arco-popover-popup-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-popover-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-progress {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-progress-line-text,
+html[data-console-typography="standard"] .arco-progress-steps-text {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-progress-size-small .arco-progress-line-text {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-progress-circle-text {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-progress-size-small .arco-progress-circle-text {
+  font-size: 15px;
+}
+html[data-console-typography="standard"] .arco-radio {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-radio-button {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-radio-group-size-small.arco-radio-group-button,
+html[data-console-typography="standard"] .arco-radio-group-size-small .arco-radio-button {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-radio-group-size-large.arco-radio-group-button,
+html[data-console-typography="standard"] .arco-radio-group-size-large .arco-radio-button {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-radio-group-size-mini.arco-radio-group-button,
+html[data-console-typography="standard"] .arco-radio-group-size-mini .arco-radio-button {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-rate {
+  font-size: 26px;
+}
+html[data-console-typography="standard"] .arco-result-title {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-result-subtitle {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-dropdown .arco-select-option {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-select-dropdown .arco-select-group-title {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-slider-marks .arco-slider-mark {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-slider-dots .arco-slider-dot-wrapper {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-statistic-title {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-steps-item-node {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-steps-item-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-steps-item-description {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-steps-size-small .arco-steps-item-node {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-steps-size-small .arco-steps-item-title {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-steps-size-small .arco-steps-item-description {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-steps-mode-dot .arco-steps-item-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-steps-mode-dot .arco-steps-item-description {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-steps-mode-arrow .arco-steps-item-title {
+  font-size: 18px;
+}
+html[data-console-typography="standard"] .arco-steps-mode-arrow .arco-steps-item-description {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-steps-mode-arrow.arco-steps-size-small .arco-steps-item-title {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-switch-text-holder {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-switch-text {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-table .arco-table-th {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-table .arco-table-td {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-table-size-medium .arco-table-th {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-table-size-medium .arco-table-td {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-table-size-small .arco-table-th {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-table-size-small .arco-table-td {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-table-size-mini .arco-table-th {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-table-size-mini .arco-table-td {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-tab {
+  padding: 2px 0;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-type-line .arco-tabs-tab {
+  padding: 6px 0;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-type-card .arco-tabs-tab,
+html[data-console-typography="standard"] .arco-tabs-nav-type-card-gutter .arco-tabs-tab {
+  padding: 2px 16px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-type-text .arco-tabs-tab {
+  padding: 3px 0;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-type-rounded .arco-tabs-tab {
+  padding: 3px 0;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-type-capsule .arco-tabs-tab {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-line .arco-tabs-tab {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-card .arco-tabs-tab,
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-card-gutter .arco-tabs-tab {
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-card .arco-tabs-nav-extra,
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-card-gutter .arco-tabs-nav-extra {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-capsule .arco-tabs-tab {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-capsule .arco-tabs-nav-extra {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-rounded .arco-tabs-tab {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-rounded .arco-tabs-nav-extra {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-line .arco-tabs-tab {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-card .arco-tabs-tab,
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-card-gutter .arco-tabs-tab {
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-card .arco-tabs-nav-extra,
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-card-gutter .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-capsule .arco-tabs-tab {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-capsule .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-rounded .arco-tabs-tab {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-small.arco-tabs-nav-type-rounded .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-line .arco-tabs-tab {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-card .arco-tabs-tab,
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-card-gutter .arco-tabs-tab {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-card .arco-tabs-nav-extra,
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-card-gutter .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-capsule .arco-tabs-tab {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-capsule .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-rounded .arco-tabs-tab {
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tabs-nav-size-large.arco-tabs-nav-type-rounded .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-textarea-wrapper {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-textarea-wrapper .arco-textarea-word-limit {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-textarea {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-timepicker-footer-extra-wrapper {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-timeline-item {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-timeline-item-label {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-timeline-item-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-timeline-item-dot-wrapper .arco-timeline-item-dot-content {
+  height: 25.144px;
+  line-height: 25.144px;
+}
+html[data-console-typography="standard"] .arco-timeline-item-dot-line {
+  top: 19.572px;
+  bottom: -5.572px;
+}
+html[data-console-typography="standard"] .arco-tooltip-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tooltip-mini {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-transfer-view-header {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-transfer-view-header-clear-btn {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-transfer-view-header-count {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-transfer-list-item-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-transfer-list-item-remove-btn {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tree-node-title {
+  padding: 3.5px 0;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tree-size-mini .arco-tree-node-title {
+  padding-top: 0.5px;
+  padding-bottom: 0.5px;
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-tree-size-small .arco-tree-node-title {
+  padding-top: 1.5px;
+  padding-bottom: 1.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-tree-size-large .arco-tree-node-title {
+  padding-top: 5.5px;
+  padding-bottom: 5.5px;
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-upload-tip {
+  font-size: 14px;
+}
+html[data-console-typography="standard"] .arco-upload-drag-text {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-upload-list-item-content {
+  font-size: 16px;
+}
+html[data-console-typography="standard"] .arco-upload-list-item-name {
+  font-size: 16px;
+}
+html[data-console-typography="large"] body {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-label {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-label.arco-input-label-size-mini .arco-input-label-input,
+html[data-console-typography="large"] .arco-input-label.arco-input-label-size-mini .arco-input-label-value {
+  padding-top: -2.5px;
+  padding-bottom: -2.5px;
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-label.arco-input-label-size-medium .arco-input-label-input,
+html[data-console-typography="large"] .arco-input-label.arco-input-label-size-medium .arco-input-label-value {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-label.arco-input-label-size-small .arco-input-label-input,
+html[data-console-typography="large"] .arco-input-label.arco-input-label-size-small .arco-input-label-value {
+  padding-top: -1px;
+  padding-bottom: -1px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-label.arco-input-label-size-large .arco-input-label-input,
+html[data-console-typography="large"] .arco-input-label.arco-input-label-size-large .arco-input-label-value {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-picker-size-mini input {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-picker-size-small input {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-picker-size-medium input {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-picker-size-large input {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-view-single {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-view-single.arco-select-view-size-mini .arco-select-view-input,
+html[data-console-typography="large"] .arco-select-view-single.arco-select-view-size-mini .arco-select-view-value {
+  padding-top: -2.5px;
+  padding-bottom: -2.5px;
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-select-view-single.arco-select-view-size-medium .arco-select-view-input,
+html[data-console-typography="large"] .arco-select-view-single.arco-select-view-size-medium .arco-select-view-value {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-view-single.arco-select-view-size-small .arco-select-view-input,
+html[data-console-typography="large"] .arco-select-view-single.arco-select-view-size-small .arco-select-view-value {
+  padding-top: -1px;
+  padding-bottom: -1px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-view-single.arco-select-view-size-large .arco-select-view-input,
+html[data-console-typography="large"] .arco-select-view-single.arco-select-view-size-large .arco-select-view-value {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-view-multiple {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-view-multiple .arco-select-view-inner .arco-select-view-tag {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-select-view-multiple.arco-select-view-size-mini {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-select-view-multiple.arco-select-view-size-medium {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-view-multiple.arco-select-view-size-small {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-view-multiple.arco-select-view-size-large {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-alert {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-alert-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-autocomplete-popup .arco-select-popup .arco-select-option {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-back-top-btn {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-badge-number,
+html[data-console-typography="large"] .arco-badge-text {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-badge .arco-badge-status-text {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-breadcrumb {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-btn-size-mini {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-btn-size-mini.arco-btn-loading-fixed-width.arco-btn-loading {
+  padding-right: 1px;
+  padding-left: 1px;
+}
+html[data-console-typography="large"] .arco-btn-size-small {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-btn-size-small.arco-btn-loading-fixed-width.arco-btn-loading {
+  padding-right: 3px;
+  padding-left: 3px;
+}
+html[data-console-typography="large"] .arco-btn-size-medium {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-btn-size-medium.arco-btn-loading-fixed-width.arco-btn-loading {
+  padding-right: 2px;
+  padding-left: 2px;
+}
+html[data-console-typography="large"] .arco-btn-size-large {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-btn-size-large.arco-btn-loading-fixed-width.arco-btn-loading {
+  padding-right: 6px;
+  padding-left: 6px;
+}
+html[data-console-typography="large"] .arco-card-size-medium {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-card-size-medium .arco-card-header-title,
+html[data-console-typography="large"] .arco-card-size-medium .arco-card-meta-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-card-size-medium .arco-card-header-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-card-size-small {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-card-size-small .arco-card-header-title,
+html[data-console-typography="large"] .arco-card-size-small .arco-card-meta-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-card-size-small .arco-card-header-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-carousel-arrow > div > svg {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-cascader-option,
+html[data-console-typography="large"] .arco-cascader-search-option {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-checkbox {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-collapse-item-header {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-collapse-item-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-color-picker-size-medium .arco-color-picker-value {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-color-picker-size-mini .arco-color-picker-value {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-color-picker-size-small .arco-color-picker-value {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-color-picker-size-large .arco-color-picker-value {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-color-picker-panel .arco-color-picker-panel-colors .arco-color-picker-colors-text {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-color-picker-panel .arco-color-picker-panel-colors .arco-color-picker-colors-empty {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-color-picker-select-popup .arco-select-option {
+  font-size: 16px !important;
+}
+html[data-console-typography="large"] .arco-comment {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-comment-author {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-comment-datetime {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-comment-actions {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-descriptions-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-descriptions-item,
+html[data-console-typography="large"] .arco-descriptions-item-label,
+html[data-console-typography="large"] .arco-descriptions-item-value {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-descriptions-item-label-inline,
+html[data-console-typography="large"] .arco-descriptions-item-value-inline {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-descriptions-size-mini .arco-descriptions-item-label-block,
+html[data-console-typography="large"] .arco-descriptions-size-mini .arco-descriptions-item-value-block {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-descriptions-size-small .arco-descriptions-item-label-block,
+html[data-console-typography="large"] .arco-descriptions-size-small .arco-descriptions-item-value-block {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-descriptions-size-medium .arco-descriptions-item-label-block,
+html[data-console-typography="large"] .arco-descriptions-size-medium .arco-descriptions-item-value-block {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-descriptions-size-large .arco-descriptions-item-label-block,
+html[data-console-typography="large"] .arco-descriptions-size-large .arco-descriptions-item-value-block {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-divider-text {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-drawer-header .arco-drawer-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-dropdown-option {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-dropdown-group-title {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-empty .arco-empty-description {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-form-size-mini .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-form-size-small .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-form-size-large .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-form-item-extra {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-form-item-message {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-form-item-label-required-symbol {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-image-footer-caption-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-image-footer-caption-description {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-image-error-alt {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-image-loader-spin-text {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-image-preview-scale-value {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-image-preview-toolbar-action-name {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-tag {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-tag .arco-input-tag-inner .arco-input-tag-tag {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-tag.arco-input-tag-size-mini {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-tag.arco-input-tag-size-medium {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-tag.arco-input-tag-size-small {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-tag.arco-input-tag-size-large {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-wrapper {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-wrapper .arco-input.arco-input-size-mini {
+  padding-top: -2.5px;
+  padding-bottom: -2.5px;
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-wrapper .arco-input.arco-input-size-small {
+  padding-top: -1px;
+  padding-bottom: -1px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-wrapper .arco-input.arco-input-size-medium {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-wrapper .arco-input.arco-input-size-large {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-wrapper .arco-input-word-limit {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-mini .arco-input-outer {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-mini .arco-input-wrapper .arco-input-prefix,
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-mini .arco-input-wrapper .arco-input-suffix {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-mini .arco-input-prepend,
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-mini .arco-input-append {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-small .arco-input-outer {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-small .arco-input-wrapper .arco-input-prefix,
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-small .arco-input-wrapper .arco-input-suffix {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-small .arco-input-prepend,
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-small .arco-input-append {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-large .arco-input-outer {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-large .arco-input-wrapper .arco-input-prefix,
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-large .arco-input-wrapper .arco-input-suffix {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-large .arco-input-prepend,
+html[data-console-typography="large"] .arco-input-outer.arco-input-outer-size-large .arco-input-append {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .size-height-size-mini {
+  padding-top: -2.5px;
+  padding-bottom: -2.5px;
+  font-size: 16px;
+}
+html[data-console-typography="large"] .size-height-size-small {
+  padding-top: -1px;
+  padding-bottom: -1px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .size-height-size-large {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-textarea-word-limit {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-textarea-clear-icon {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-link {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-list {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-list-header {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-trigger-menu-item,
+html[data-console-typography="large"] .arco-trigger-menu-pop-header {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-trigger-menu-group-title {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-message-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-modal-body {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-modal-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-notification-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-notification-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-page-header-main-with-back {
+  margin-left: -6px;
+  padding-left: 6px;
+}
+html[data-console-typography="large"] .arco-page-header-back-btn {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-page-header-title {
+  font-size: 24px;
+}
+html[data-console-typography="large"] .arco-page-header-subtitle {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-item {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-jumper > span {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-total {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-size-mini .arco-pagination-item {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-pagination-size-mini .arco-pagination-total {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-pagination-size-mini .arco-pagination-option {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-pagination-size-mini .arco-pagination-jumper > span {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-pagination-size-small .arco-pagination-item {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-size-small .arco-pagination-total {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-size-small .arco-pagination-option {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-size-small .arco-pagination-jumper > span {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-size-large .arco-pagination-item {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-size-large .arco-pagination-total {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-size-large .arco-pagination-option {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-pagination-size-large .arco-pagination-jumper > span {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-popconfirm-popup-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-popconfirm-popup-content .arco-popconfirm-body {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-popconfirm-popup-content .arco-popconfirm-body .arco-popconfirm-icon {
+  height: 28.287px;
+}
+html[data-console-typography="large"] .arco-popover-popup-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-popover-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-progress {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-progress-line-text,
+html[data-console-typography="large"] .arco-progress-steps-text {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-progress-size-small .arco-progress-line-text {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-progress-circle-text {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-progress-size-small .arco-progress-circle-text {
+  font-size: 17px;
+}
+html[data-console-typography="large"] .arco-radio {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-radio-button {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-radio-group-size-small.arco-radio-group-button,
+html[data-console-typography="large"] .arco-radio-group-size-small .arco-radio-button {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-radio-group-size-large.arco-radio-group-button,
+html[data-console-typography="large"] .arco-radio-group-size-large .arco-radio-button {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-radio-group-size-mini.arco-radio-group-button,
+html[data-console-typography="large"] .arco-radio-group-size-mini .arco-radio-button {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-rate {
+  font-size: 28px;
+}
+html[data-console-typography="large"] .arco-result-title {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-result-subtitle {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-dropdown .arco-select-option {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-select-dropdown .arco-select-group-title {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-slider-marks .arco-slider-mark {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-slider-dots .arco-slider-dot-wrapper {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-statistic-title {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-steps-item-node {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-steps-item-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-steps-item-description {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-steps-size-small .arco-steps-item-node {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-steps-size-small .arco-steps-item-title {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-steps-size-small .arco-steps-item-description {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-steps-mode-dot .arco-steps-item-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-steps-mode-dot .arco-steps-item-description {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-steps-mode-arrow .arco-steps-item-title {
+  font-size: 20px;
+}
+html[data-console-typography="large"] .arco-steps-mode-arrow .arco-steps-item-description {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-steps-mode-arrow.arco-steps-size-small .arco-steps-item-title {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-switch-text-holder {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-switch-text {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-table .arco-table-th {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-table .arco-table-td {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-table-size-medium .arco-table-th {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-table-size-medium .arco-table-td {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-table-size-small .arco-table-th {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-table-size-small .arco-table-td {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-table-size-mini .arco-table-th {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-table-size-mini .arco-table-td {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-tab {
+  padding: 1px 0;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-type-line .arco-tabs-tab {
+  padding: 5px 0;
+}
+html[data-console-typography="large"] .arco-tabs-nav-type-card .arco-tabs-tab,
+html[data-console-typography="large"] .arco-tabs-nav-type-card-gutter .arco-tabs-tab {
+  padding: 1px 16px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-type-text .arco-tabs-tab {
+  padding: 2px 0;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-type-rounded .arco-tabs-tab {
+  padding: 2px 0;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-type-capsule .arco-tabs-tab {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-line .arco-tabs-tab {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-card .arco-tabs-tab,
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-card-gutter .arco-tabs-tab {
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-card .arco-tabs-nav-extra,
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-card-gutter .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-capsule .arco-tabs-tab {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-capsule .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-rounded .arco-tabs-tab {
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-mini.arco-tabs-nav-type-rounded .arco-tabs-nav-extra {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-line .arco-tabs-tab {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-card .arco-tabs-tab,
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-card-gutter .arco-tabs-tab {
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-card .arco-tabs-nav-extra,
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-card-gutter .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-capsule .arco-tabs-tab {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-capsule .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-rounded .arco-tabs-tab {
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-small.arco-tabs-nav-type-rounded .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-line .arco-tabs-tab {
+  padding-top: 7px;
+  padding-bottom: 7px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-line .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-card .arco-tabs-tab,
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-card-gutter .arco-tabs-tab {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-card .arco-tabs-nav-extra,
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-card-gutter .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-capsule .arco-tabs-tab {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-capsule .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-rounded .arco-tabs-tab {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tabs-nav-size-large.arco-tabs-nav-type-rounded .arco-tabs-nav-extra {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-textarea-wrapper {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-textarea-wrapper .arco-textarea-word-limit {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-textarea {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-timepicker-footer-extra-wrapper {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-timeline-item {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-timeline-item-label {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-timeline-item-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-timeline-item-dot-wrapper .arco-timeline-item-dot-content {
+  height: 28.287px;
+  line-height: 28.287px;
+}
+html[data-console-typography="large"] .arco-timeline-item-dot-line {
+  top: 21.1435px;
+  bottom: -7.1435px;
+}
+html[data-console-typography="large"] .arco-tooltip-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tooltip-mini {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-transfer-view-header {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-transfer-view-header-clear-btn {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-transfer-view-header-count {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-transfer-list-item-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-transfer-list-item-remove-btn {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tree-node-title {
+  padding: 2px 0;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tree-size-mini .arco-tree-node-title {
+  padding-top: -1.5px;
+  padding-bottom: -1.5px;
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-tree-size-small .arco-tree-node-title {
+  padding-top: 0px;
+  padding-bottom: 0px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-tree-size-large .arco-tree-node-title {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-upload-tip {
+  font-size: 16px;
+}
+html[data-console-typography="large"] .arco-upload-drag-text {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-upload-list-item-content {
+  font-size: 18px;
+}
+html[data-console-typography="large"] .arco-upload-list-item-name {
+  font-size: 18px;
+}

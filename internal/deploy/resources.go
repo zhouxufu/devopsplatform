@@ -18,6 +18,8 @@ import (
 )
 
 type ResourceConnection struct {
+	Revision         string            `json:"revision,omitempty"`
+	LastCheck        *ResourceCheck    `json:"last_check,omitempty"`
 	Name             string            `json:"name"`
 	Kind             string            `json:"kind"` // git | maven | docker | aliyun-sae | mysql | zentao
 	Endpoint         string            `json:"endpoint"`
@@ -136,6 +138,11 @@ func validHostName(name string) bool {
 }
 
 func (s *Store) UpsertConnection(c ResourceConnection) error {
+	s.resourceConnectionMu.Lock()
+	defer s.resourceConnectionMu.Unlock()
+	return s.upsertConnection(c)
+}
+func (s *Store) upsertConnection(c ResourceConnection) error {
 	c.Name, c.Kind = strings.TrimSpace(c.Name), strings.TrimSpace(c.Kind)
 	current := s.GetConnection(c.Name)
 	if !validConnectionName(c.Name) {
@@ -149,6 +156,18 @@ func (s *Store) UpsertConnection(c ResourceConnection) error {
 	}
 	if c.Config == nil {
 		c.Config = map[string]string{}
+	}
+	if c.Kind == "mysql" {
+		if strings.TrimSpace(c.Config["database"]) != "" {
+			return fmt.Errorf("MySQL 连接只配置实例和凭据，请在应用或资源组绑定中选择数据库")
+		}
+		config := make(map[string]string, len(c.Config))
+		for key, value := range c.Config {
+			if key != "database" {
+				config[key] = value
+			}
+		}
+		c.Config = config
 	}
 	if c.Kind == "git" {
 		mode, err := normalizeGitAuthMode(c.Config["auth_mode"])
@@ -307,6 +326,13 @@ func (s *Store) Connections() []ResourceConnection {
 			out = append(out, c)
 		}
 	}
+	rows.Close()
+	for i := range out {
+		private := s.GetConnection(out[i].Name)
+		out[i].Revision = s.connectionCheckFingerprint(private)
+		out[i].LastCheck = s.readResourceCheck("resource_connection_check:"+out[i].Name, s.connectionCheckFingerprint(private))
+	}
+
 	return out
 }
 
@@ -334,6 +360,14 @@ func (s *Store) GetConnection(name string) *ResourceConnection {
 }
 
 func (s *Store) DeleteConnection(name string) error {
+	s.resourceConnectionMu.Lock()
+	defer s.resourceConnectionMu.Unlock()
+	if s.compositionUses("connection", name) {
+		return fmt.Errorf("连接仍被环境 Nacos 或应用自有资源使用")
+	}
+	if s.groupUses("connection", name) {
+		return fmt.Errorf("连接仍被资源组使用，请先调整资源组绑定")
+	}
 	var n int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM service_delivery WHERE git_connection=? OR maven_connection=? OR registry_connection=?`, name, name, name).Scan(&n)
 	var envRefs int
@@ -366,6 +400,9 @@ func (s *Store) DeleteConnection(name string) error {
 	if _, err = tx.Exec(`DELETE FROM resource_connections WHERE name=?`, name); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(`DELETE FROM deploy_meta WHERE key=?`, "mysql_direct_query_scope:"+name); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -374,39 +411,43 @@ func (s *Store) UpsertHostGroup(g HostGroup) error {
 	if !validResourceName(g.Name) || s.GetEnvironment(g.Environment) == nil {
 		return fmt.Errorf("主机组标识格式错误或环境不存在")
 	}
-	if current := s.GetHostGroup(g.Name); current != nil && current.Environment != g.Environment {
-		var refs int
-		_ = s.db.QueryRow(`SELECT COUNT(*) FROM service_environments WHERE host_group=?`, g.Name).Scan(&refs)
-		if refs > 0 {
-			return fmt.Errorf("主机组已被应用环境使用，不能直接变更所属环境")
-		}
-	}
-	if len(g.Hosts) == 0 {
-		var refs int
-		_ = s.db.QueryRow(`SELECT COUNT(*) FROM service_environments WHERE host_group=?`, g.Name).Scan(&refs)
-		if refs > 0 {
-			return fmt.Errorf("主机组已被应用环境使用，不能清空")
-		}
-	}
-	seen := map[string]bool{}
-	for _, h := range g.Hosts {
-		if seen[h] {
-			return fmt.Errorf("主机重复: %s", h)
-		}
-		seen[h] = true
-		host := s.GetHost(h)
-		if host == nil {
-			return fmt.Errorf("主机不存在: %s", h)
-		}
-		if host.Environment != g.Environment {
-			return fmt.Errorf("主机 %s 属于 %s 环境，不能加入 %s 环境的主机组", h, host.Environment, g.Environment)
-		}
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockArtifactLifecycle(tx); err != nil {
+		return err
+	}
+	var currentEnvironment string
+	err = tx.QueryRow(`SELECT environment FROM host_groups WHERE name=?`, g.Name).Scan(&currentEnvironment)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	var refs int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM service_environments WHERE host_group=?`, g.Name).Scan(&refs); err != nil {
+		return err
+	}
+	if refs > 0 && currentEnvironment != g.Environment {
+		return fmt.Errorf("主机组已被应用环境使用，不能直接变更所属环境")
+	}
+	if refs > 0 && len(g.Hosts) == 0 {
+		return fmt.Errorf("主机组已被应用环境使用，不能清空")
+	}
+	seen := map[string]bool{}
+	for _, name := range g.Hosts {
+		if seen[name] {
+			return fmt.Errorf("主机重复: %s", name)
+		}
+		seen[name] = true
+		var environment string
+		if err := tx.QueryRow(`SELECT environment FROM hosts WHERE name=?`, name).Scan(&environment); err != nil {
+			return fmt.Errorf("主机不存在: %s", name)
+		}
+		if environment != g.Environment {
+			return fmt.Errorf("主机 %s 属于 %s 环境，不能加入 %s 环境的主机组", name, environment, g.Environment)
+		}
+	}
 	now := time.Now().Unix()
 	if _, err = tx.Exec(`INSERT INTO host_groups(name,environment,description,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET environment=excluded.environment,description=excluded.description,updated_at=excluded.updated_at`, g.Name, g.Environment, g.Description, now, now); err != nil {
 		return err

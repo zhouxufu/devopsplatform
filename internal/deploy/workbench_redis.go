@@ -37,7 +37,8 @@ func redisReadKeys(a []string) ([]string, error) {
 			return a[1:2], nil
 		}
 	case "LRANGE", "ZRANGE":
-		if len(a) == 4 && number(a[2], 100000) && number(a[3], 100000) {
+		validLength := len(a) == 4 || (a[0] == "ZRANGE" && len(a) == 5 && strings.EqualFold(a[4], "WITHSCORES"))
+		if validLength && number(a[2], 100000) && number(a[3], 100000) {
 			start, _ := strconv.Atoi(a[2])
 			end, _ := strconv.Atoi(a[3])
 			if end >= start && end-start < 100 {
@@ -48,21 +49,25 @@ func redisReadKeys(a []string) ([]string, error) {
 	return nil, bad
 }
 func validateRedisReadScope(commands [][]string, c *ResourceConnection) error {
-	prefix := c.Config["key_prefix"]
-	if prefix == "" || strings.ContainsAny(prefix, "*?[]") {
-		return fmt.Errorf("资源必须配置准确 Key 前缀")
+	prefixes, err := redisAllowedPrefixes(c)
+	if err != nil {
+		return err
 	}
 	for _, a := range commands {
 		if _, e := redisReadKeys(a); e != nil {
 			return e
 		}
 		if a[0] == "SCAN" {
-			if strings.Contains(prefix, `\`) {
-				return fmt.Errorf("此资源前缀含转义字符，不支持 SCAN；请使用准确 Key 查询")
-			}
+			allowed := false
 			pattern := a[3]
-			if !strings.HasPrefix(pattern, prefix) || strings.ContainsAny(pattern[:len(prefix)], "*?[]") || len(pattern) > 512 {
-				return fmt.Errorf("SCAN MATCH 必须以资源的精确 Key 前缀开始")
+			for _, prefix := range prefixes {
+				if !strings.Contains(prefix, `\`) && strings.HasPrefix(pattern, prefix) && len(pattern) <= 512 {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("SCAN MATCH 必须以一个已授权的精确 Key 前缀开始")
 			}
 			continue
 		}
@@ -71,7 +76,7 @@ func validateRedisReadScope(commands [][]string, c *ResourceConnection) error {
 			return e
 		}
 		for _, key := range keys {
-			if !strings.HasPrefix(key, prefix) || strings.ContainsAny(key, "*?[]") {
+			if !redisKeyInPrefixes(key, prefixes, true) {
 				return fmt.Errorf("查询 Key 必须匹配资源前缀，精确 Key 不允许通配符")
 			}
 		}

@@ -1,12 +1,14 @@
 package platform
 
 import (
+	"context"
 	crand "crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"logplatform/internal/appcatalog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,9 +22,11 @@ import (
 
 // Registry 服务注册表：平台唯一共享库（服务/主机/标签/version——deploy 插件生产，其余消费）
 type Registry struct {
-	mu      sync.Mutex
-	db      *sql.DB
-	dialect string
+	applicationCreateMu  sync.Mutex
+	mu                   sync.Mutex
+	db                   *sql.DB
+	dialect              string
+	deploymentReferences func(context.Context) ([]appcatalog.ApplicationReference, error)
 }
 
 // RegistryConfig configures the shared application catalog database. SQLite is
@@ -36,6 +40,8 @@ type RegistryConfig struct {
 type Service struct {
 	ApplicationID string   `json:"application_id"`
 	Name          string   `json:"name"`
+	DisplayName   string   `json:"display_name"`
+	Identifier    string   `json:"identifier"`
 	Status        string   `json:"status"`
 	Sources       []string `json:"sources"`
 	Version       string   `json:"version,omitempty"`
@@ -120,6 +126,14 @@ func OpenRegistryDatabase(cfg RegistryConfig) (*Registry, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := r.migrateApplicationNames(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := r.migrateApplicationLifecycle(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := r.backfillApplicationIDs(); err != nil {
 		db.Close()
 		return nil, err
@@ -180,6 +194,11 @@ func (r *Registry) migrate() error {
 		userIdentityDDL += ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`
 	}
 	schema = append(schema, userIdentityDDL)
+	dutiesDDL := `CREATE TABLE IF NOT EXISTS platform_user_duties (username VARCHAR(64) PRIMARY KEY, document TEXT NOT NULL)`
+	if r.dialect == "mysql" {
+		dutiesDDL += ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`
+	}
+	schema = append(schema, dutiesDDL)
 	for _, ddl := range schema {
 		if _, err := r.db.Exec(ddl); err != nil {
 			return fmt.Errorf("migrate registry database: %w", err)
@@ -222,18 +241,19 @@ func (r *Registry) Snapshot() (RegistrySnapshot, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var snapshot RegistrySnapshot
-	rows, err := r.db.Query(`SELECT COALESCE(application_id,''),name,COALESCE(status,'discovered'),COALESCE(sources,'[]'),COALESCE(version,''),COALESCE(hosts,'[]'),COALESCE(tags,'[]'),updated FROM services ORDER BY name`)
+	rows, err := r.db.Query(`SELECT COALESCE(application_id,''),name,COALESCE(status,'discovered'),COALESCE(sources,'[]'),COALESCE(version,''),COALESCE(hosts,'[]'),COALESCE(tags,'[]'),updated,COALESCE(display_name,'') FROM services ORDER BY name`)
 	if err != nil {
 		return snapshot, err
 	}
 	for rows.Next() {
 		var item Service
 		var sources, hosts, tags string
-		if err := rows.Scan(&item.ApplicationID, &item.Name, &item.Status, &sources, &item.Version, &hosts, &tags, &item.Updated); err != nil {
+		if err := rows.Scan(&item.ApplicationID, &item.Name, &item.Status, &sources, &item.Version, &hosts, &tags, &item.Updated, &item.DisplayName); err != nil {
 			rows.Close()
 			return snapshot, err
 		}
 		_ = json.Unmarshal([]byte(sources), &item.Sources)
+		item.Identifier = appcatalog.Identifier(item.Name)
 		_ = json.Unmarshal([]byte(hosts), &item.Hosts)
 		_ = json.Unmarshal([]byte(tags), &item.Tags)
 		snapshot.Services = append(snapshot.Services, item)
@@ -321,6 +341,11 @@ func (r *Registry) Restore(snapshot RegistrySnapshot) error {
 		if _, err := tx.Exec(serviceQuery, item.Name, item.ApplicationID, item.Status, mustJSON(item.Sources), item.Version, mustJSON(item.Hosts), mustJSON(item.Tags), item.Updated); err != nil {
 			return rollback(fmt.Errorf("restore application %q: %w", item.Name, err))
 		}
+		if item.DisplayName != "" {
+			if _, err := tx.Exec(`UPDATE services SET display_name=? WHERE application_id=?`, item.DisplayName, item.ApplicationID); err != nil {
+				return rollback(err)
+			}
+		}
 	}
 	for _, item := range snapshot.Deployments {
 		if _, err := tx.Exec(deploymentQuery, item.Service, item.Environment, item.Version, mustJSON(item.Hosts), item.Digest, item.Updated); err != nil {
@@ -335,6 +360,17 @@ func (r *Registry) Restore(snapshot RegistrySnapshot) error {
 	for _, item := range snapshot.Users {
 		if _, err := tx.Exec(userQuery, item.Username, item.DisplayName, item.Role, item.PasswordHash, item.Enabled, item.CreatedAt, item.UpdatedAt); err != nil {
 			return rollback(fmt.Errorf("restore user %q: %w", item.Username, err))
+		}
+		if item.Duties != nil {
+			if _, err := normalizeDuties(item.Duties); err != nil {
+				return rollback(err)
+			}
+			if _, err := tx.Exec(`DELETE FROM platform_user_duties WHERE username=?`, item.Username); err != nil {
+				return rollback(err)
+			}
+			if _, err := tx.Exec(`INSERT INTO platform_user_duties(username,document) VALUES(?,?)`, item.Username, mustJSON(item.Duties)); err != nil {
+				return rollback(err)
+			}
 		}
 	}
 	for _, item := range snapshot.UserIdentities {
@@ -448,7 +484,7 @@ func (r *Registry) ListActive() ([]Service, error) {
 func (r *Registry) list(includeArchived bool) ([]Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	query := `SELECT COALESCE(application_id,''),name,COALESCE(status,'discovered'),COALESCE(sources,'[]'),COALESCE(version,''),COALESCE(hosts,'[]'),COALESCE(tags,'[]'),updated FROM services`
+	query := `SELECT COALESCE(application_id,''),name,COALESCE(status,'discovered'),COALESCE(sources,'[]'),COALESCE(version,''),COALESCE(hosts,'[]'),COALESCE(tags,'[]'),updated,COALESCE(display_name,'') FROM services`
 	if !includeArchived {
 		query += ` WHERE COALESCE(status,'discovered')<>'archived'`
 	}
@@ -462,7 +498,9 @@ func (r *Registry) list(includeArchived bool) ([]Service, error) {
 	for rows.Next() {
 		var s Service
 		var hosts, tags, sources string
-		if rows.Scan(&s.ApplicationID, &s.Name, &s.Status, &sources, &s.Version, &hosts, &tags, &s.Updated) == nil {
+		if rows.Scan(&s.ApplicationID, &s.Name, &s.Status, &sources, &s.Version, &hosts, &tags, &s.Updated, &s.DisplayName) == nil {
+			s.DisplayName = appcatalog.DisplayName(s.DisplayName, s.Name)
+			s.Identifier = appcatalog.Identifier(s.Name)
 			json.Unmarshal([]byte(hosts), &s.Hosts)
 			json.Unmarshal([]byte(tags), &s.Tags)
 			json.Unmarshal([]byte(sources), &s.Sources)
@@ -487,9 +525,9 @@ func (r *Registry) Observe(name, source, requestedID string) (*Service, error) {
 	now := time.Now().Unix()
 	var app Service
 	var sourcesJSON, hostsJSON, tagsJSON string
-	err := r.db.QueryRow(`SELECT COALESCE(application_id,''),name,COALESCE(status,'discovered'),COALESCE(sources,'[]'),COALESCE(version,''),COALESCE(hosts,'[]'),COALESCE(tags,'[]'),updated
+	err := r.db.QueryRow(`SELECT COALESCE(application_id,''),name,COALESCE(status,'discovered'),COALESCE(sources,'[]'),COALESCE(version,''),COALESCE(hosts,'[]'),COALESCE(tags,'[]'),updated,COALESCE(display_name,'')
 		FROM services WHERE application_id=(SELECT application_id FROM application_identities WHERE source=? AND identifier=?) OR name=? OR (?<>'' AND application_id=?) LIMIT 1`, source, name, name, requestedID, requestedID).
-		Scan(&app.ApplicationID, &app.Name, &app.Status, &sourcesJSON, &app.Version, &hostsJSON, &tagsJSON, &app.Updated)
+		Scan(&app.ApplicationID, &app.Name, &app.Status, &sourcesJSON, &app.Version, &hostsJSON, &tagsJSON, &app.Updated, &app.DisplayName)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
@@ -513,11 +551,18 @@ func (r *Registry) Observe(name, source, requestedID string) (*Service, error) {
 		_ = json.Unmarshal([]byte(sourcesJSON), &app.Sources)
 		_ = json.Unmarshal([]byte(hostsJSON), &app.Hosts)
 		_ = json.Unmarshal([]byte(tagsJSON), &app.Tags)
-		if !containsString(app.Sources, source) {
+		// Telemetry retains the identity of archived applications, but cannot
+		// undo an explicit directory deletion. Manual/deploy onboarding may
+		// deliberately adopt the same stable identity again.
+		archivedTelemetry := app.Status == "archived" && (source == "logs" || source == "otel")
+		if !archivedTelemetry && !containsString(app.Sources, source) {
 			app.Sources = append(app.Sources, source)
 		}
 		if source == "deploy" || source == "manual" {
 			app.Status = "managed"
+		}
+		if app.Status == "archived" && !archivedTelemetry {
+			app.Status = applicationStatus(app.Sources)
 		}
 		app.Updated = now
 		if _, err := r.db.Exec(`UPDATE services SET status=?,sources=?,updated=? WHERE application_id=?`, app.Status, mustJSON(app.Sources), now, app.ApplicationID); err != nil {
@@ -531,6 +576,8 @@ func (r *Registry) Observe(name, source, requestedID string) (*Service, error) {
 			ON DUPLICATE KEY UPDATE application_id=VALUES(application_id),last_seen=VALUES(last_seen)`
 	}
 	_, err = r.db.Exec(query, source, name, app.ApplicationID, now, now)
+	app.DisplayName = appcatalog.DisplayName(app.DisplayName, app.Name)
+	app.Identifier = appcatalog.Identifier(app.Name)
 	return &app, err
 }
 
@@ -628,6 +675,8 @@ func containsString(values []string, value string) bool {
 
 // HandleRoutes 注册表 HTTP API（经网关供壳与插件消费）
 func (r *Registry) HandleRoutes(mux *http.ServeMux) {
+	r.applicationNameRoutes(mux)
+	r.applicationLifecycleRoutes(mux)
 	mux.HandleFunc("GET /api/registry/services", func(w http.ResponseWriter, req *http.Request) {
 		list, _ := r.List()
 		writeJSON(w, list)
@@ -646,15 +695,54 @@ func (r *Registry) HandleRoutes(mux *http.ServeMux) {
 			Name          string `json:"name"`
 			Source        string `json:"source"`
 			ApplicationID string `json:"application_id"`
+			DisplayName   string `json:"display_name"`
+			Identifier    string `json:"identifier"`
+			CreateOnly    bool   `json:"create_only"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, req.Body, 16<<10)).Decode(&body) != nil {
 			http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
 			return
 		}
+		if body.Identifier != "" && body.Identifier != appcatalog.Identifier(body.Name) {
+			writeJSONStatus(w, 400, map[string]string{"error": "应用标识不可修改"})
+			return
+		}
+		if body.CreateOnly {
+			r.applicationCreateMu.Lock()
+			defer r.applicationCreateMu.Unlock()
+			if !appcatalog.ValidIdentifier(body.Name) {
+				writeJSONStatus(w, 400, map[string]string{"error": "应用标识以小写英文开头，只能包含小写英文、数字和短横线，最长 63 字符"})
+				return
+			}
+			var n int
+			if err := r.db.QueryRow(`SELECT COUNT(*) FROM services WHERE name=?`, body.Name).Scan(&n); err != nil {
+				writeJSONStatus(w, 500, map[string]string{"error": "读取应用失败"})
+				return
+			}
+			if n > 0 {
+				writeJSONStatus(w, 409, map[string]string{"error": "应用标识已存在"})
+				return
+			}
+		}
+		if body.DisplayName != "" {
+			if _, err := appcatalog.ValidateDisplayName(body.DisplayName); err != nil {
+				writeJSONStatus(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+		}
 		app, err := r.Observe(body.Name, body.Source, body.ApplicationID)
 		if err != nil {
 			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 			return
+		}
+		// An onboarding label initializes only an unset label. Telemetry and
+		// stale configuration submissions can never undo a deliberate rename.
+		if body.DisplayName != "" {
+			if _, err := r.db.Exec(`UPDATE services SET display_name=? WHERE application_id=? AND COALESCE(display_name,'')=''`, appcatalog.DisplayName(body.DisplayName, ""), app.ApplicationID); err != nil {
+				writeJSONStatus(w, 500, map[string]string{"error": "保存应用名称失败"})
+				return
+			}
+			_ = r.db.QueryRow(`SELECT COALESCE(NULLIF(display_name,''),name) FROM services WHERE application_id=?`, app.ApplicationID).Scan(&app.DisplayName)
 		}
 		writeJSON(w, app)
 	})

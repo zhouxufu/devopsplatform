@@ -6,12 +6,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
 
 // Store 指标存储（metrics.db，按分钟粒度）
-type Store struct{ db *monitorDB }
+type Store struct {
+	db              *monitorDB
+	arthasMu        sync.Mutex
+	arthas          *arthasConsole
+	arthasKeyMu     sync.Mutex
+	arthasSecretDir string
+	arthasDeployURL string
+}
+
+// ConfigureArthasDeploy sets the trusted internal deployment backend, never a browser URL.
+func (s *Store) ConfigureArthasDeploy(base string) { s.arthasDeployURL = strings.TrimRight(base, "/") }
 
 func Open(dir string) (*Store, error) {
 	return OpenDatabase(dir, DatabaseConfig{Driver: "sqlite"})
@@ -62,7 +73,13 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			return nil, err
 		}
 	}
-	return &Store{db}, nil
+	for _, ddl := range []string{arthasTargetDDL, arthasAuditDDL, arthasCredentialDDL} {
+		if _, err := db.Exec(ddl); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	return &Store{db: db, arthasSecretDir: filepath.Join(dir, "arthas-secrets")}, nil
 }
 
 // Point 一个分钟点的各级别计数（counts 为最终值，重复投递幂等覆盖）
@@ -164,7 +181,15 @@ func (s *Store) Services() ([]string, error) {
 	return out, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.arthasMu.Lock()
+	if s.arthas != nil {
+		s.arthas.close()
+		s.arthas = nil
+	}
+	s.arthasMu.Unlock()
+	return s.db.Close()
+}
 
 // DB 暴露底层连接（machine/alerts 等模块共用同库）
 func (s *Store) DB() *monitorDB { return s.db }

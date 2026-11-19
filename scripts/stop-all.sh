@@ -6,4 +6,4 @@ pkill -f 'bin/monitor' 2>/dev/null
 pkill -f 'bin/logserver' 2>/dev/null
 pkill -f 'bin/platform' 2>/dev/null
 sleep 1
-pgrep -fl 'bin/(platform|agent|logserver|monitor)' || echo "✅ 全部已停止"
+pgrep -fl 'bin/(platform|agent|logserver|monitor)' || echo "✅ 平台与采集组件已停止（VictoriaLogs 独立保留）"

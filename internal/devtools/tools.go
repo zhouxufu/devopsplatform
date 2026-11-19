@@ -30,8 +30,9 @@ type Upstreams struct {
 }
 
 type ToolService struct {
-	up     Upstreams
-	client *http.Client
+	actions *TokenStore
+	up      Upstreams
+	client  *http.Client
 }
 
 func NewToolService(up Upstreams) *ToolService {
@@ -57,7 +58,7 @@ func (s *ToolService) Tools() []Tool {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	integer := func(desc string) map[string]any { return map[string]any{"type": "integer", "description": desc} }
 	serviceEnv := map[string]any{"service": str("应用标识"), "environment": str("环境标识，如 dev、test、staging、prod")}
-	return []Tool{
+	return append([]Tool{
 		{Name: "list_applications", Title: "列出应用", Description: "列出当前令牌有权访问的应用及构建类型。", InputSchema: objectSchema(map[string]any{}), Annotations: readonly("列出应用")},
 		{Name: "list_environments", Title: "列出环境", Description: "列出当前令牌有权访问的部署环境。", InputSchema: objectSchema(map[string]any{}), Annotations: readonly("列出环境")},
 		{Name: "search_logs", Title: "查询日志", Description: "按应用和环境查询日志。必须明确应用与环境；默认最近 15 分钟，最长 24 小时，最多 200 条。", InputSchema: objectSchema(map[string]any{
@@ -74,12 +75,26 @@ func (s *ToolService) Tools() []Tool {
 		{Name: "get_recent_builds", Title: "查询构建记录", Description: "查询指定应用最近的构建结果和不可变制品摘要。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "limit": integer("返回条数，1 到 50")}, "service"), Annotations: readonly("查询构建记录"), Scope: "builds:read"},
 		{Name: "get_build_log", Title: "读取构建日志", Description: "读取指定应用的一次构建日志尾部，最多返回 30000 字符。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "build_id": integer("构建 ID"), "tail_lines": integer("尾部行数，默认 200，最大 500")}, "service", "build_id"), Annotations: readonly("读取构建日志"), Scope: "builds:read"},
 		{Name: "get_recent_releases", Title: "查询发布记录", Description: "查询指定应用和环境最近的发布单、版本、制品和结果。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "environment": serviceEnv["environment"], "limit": integer("返回条数，1 到 50")}, "service", "environment"), Annotations: readonly("查询发布记录"), Scope: "releases:read"},
-	}
+	}, append(append(platformTools(), arthasTools()...), workflowSkillMCPTools()...)...)
 }
 
 func (s *ToolService) VisibleTools(token *AccessToken) []Tool {
 	out := []Tool{}
 	for _, tool := range s.Tools() {
+		if strings.HasPrefix(tool.Scope, "resources:") {
+			if !token.verified || token.role != "admin" || token.Owner == "" || token.Owner == "local" {
+				continue
+			}
+			if tool.Name == "configure_resource_connection" && (!contains(token.Applications, "*") || !contains(token.Environments, "*")) {
+				continue
+			}
+		}
+		if isArthasTool(tool.Name) && (!hasArthasScope(token) || !token.verified || token.role != "admin" || token.Owner == "" || token.Owner == "local") {
+			continue
+		}
+		if tool.Name == "confirm_platform_action" && !hasWriteScopes(token) {
+			continue
+		}
 		if tool.Scope == "" || token.HasScope(tool.Scope) {
 			out = append(out, tool)
 		}
@@ -185,6 +200,26 @@ func (s *ToolService) Call(ctx context.Context, token *AccessToken, name string,
 	}
 	var result any
 	var err error
+	if name == "list_platform_skills" || name == "get_platform_skill" {
+		// Only immutable, allowlisted embedded text plus a permission summary.
+		// Do not run business-data redaction over file bytes used for integrity checks.
+		value, e := s.callWorkflowSkill(token, name, args)
+		return value, "", "", e
+	}
+	if isArthasTool(name) {
+		value, e := s.callArthas(ctx, token, name, args)
+		return scrubAny(value), service, environment, e
+	}
+	if isPlatformTool(name) {
+		value, e := s.callPlatform(ctx, token, name, args)
+		if name == "get_work_item_image" {
+			return value, service, environment, e
+		}
+		if strings.HasPrefix(tool.Scope, "apitests:") {
+			return testingOutput(cloneJSON(value)), service, environment, e
+		}
+		return scrubAny(cloneJSON(value)), service, environment, e
+	}
 	switch name {
 	case "list_applications":
 		result, err = s.listApplications(ctx, token)
@@ -497,9 +532,13 @@ func scrubAny(v any) any {
 			x[i] = scrubAny(x[i]).(map[string]any)
 		}
 	case map[string]any:
+		if key, ok := x["key"].(string); ok && sensitiveOutputKey(key) {
+			if _, ok := x["value"]; ok {
+				x["value"] = "[REDACTED]"
+			}
+		}
 		for k, value := range x {
-			lower := strings.ToLower(k)
-			if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") || strings.Contains(lower, "authorization") || strings.Contains(lower, "credential") || strings.Contains(lower, "access_key") || strings.Contains(lower, "apikey") || strings.Contains(lower, "api_key") {
+			if sensitiveOutputKey(k) {
 				x[k] = "[REDACTED]"
 			} else {
 				x[k] = scrubAny(value)
@@ -507,6 +546,16 @@ func scrubAny(v any) any {
 		}
 	}
 	return v
+}
+
+func sensitiveOutputKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, part := range []string{"password", "secret", "token", "authorization", "credential", "access_key", "apikey", "api_key"} {
+		if strings.Contains(lower, part) {
+			return true
+		}
+	}
+	return false
 }
 
 func toolNames(tools []Tool) []string {

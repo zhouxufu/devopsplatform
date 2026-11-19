@@ -30,6 +30,31 @@ func TestPrepareGradleBuildConfig(t *testing.T) {
 	}
 }
 
+func TestGradleRefreshDependencies(t *testing.T) {
+	for _, kind := range []string{"jar", "image"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			gradle := filepath.Join(dir, "gradle")
+			if err := os.WriteFile(gradle, []byte("#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			sv := Service{ArtifactType: kind, BuildTool: "gradle", GradleExecutable: gradle,
+				GradleTasks: "clean :estate-ai-seek-bootstrap:bootJar --refresh-dependencies", GradleExcludedTasks: "test"}
+			if err := prepareGradleBuildConfig(&sv); err != nil {
+				t.Fatal(err)
+			}
+			// Run only a temporary argument-printing executable, never real Gradle.
+			out, err := exec.Command("bash", "-c", sv.BuildCmd).CombinedOutput()
+			if err != nil {
+				t.Fatalf("generated command failed: %v %s", err, out)
+			}
+			if !strings.Contains(string(out), "<clean>\n<:estate-ai-seek-bootstrap:bootJar>\n<--refresh-dependencies>\n") || !strings.Contains(string(out), "<-x>\n<test>\n") {
+				t.Fatalf("wrong task/option arguments: %s", out)
+			}
+		})
+	}
+}
+
 func TestGradleBuildConfigRejectsUnsafeOrSensitiveParameters(t *testing.T) {
 	base := Service{ArtifactType: "jar", BuildTool: "gradle", GradleExecutable: "./gradlew", GradleTasks: "clean build"}
 	tests := []struct {
@@ -37,6 +62,11 @@ func TestGradleBuildConfigRejectsUnsafeOrSensitiveParameters(t *testing.T) {
 		mutate func(*Service)
 	}{
 		{"task option injection", func(s *Service) { s.GradleTasks = "build --init-script=/tmp/evil" }},
+		{"refresh does not allow init scripts", func(s *Service) { s.GradleTasks = "build --refresh-dependencies --init-script=/tmp/evil" }},
+		{"refresh does not allow project paths", func(s *Service) { s.GradleTasks = "build --refresh-dependencies --project-dir=/tmp/other" }},
+		{"refresh value is not supported", func(s *Service) { s.GradleTasks = "build --refresh-dependencies=true" }},
+		{"refresh shell syntax", func(s *Service) { s.GradleTasks = "build --refresh-dependencies;echo injected" }},
+		{"refresh cannot be an excluded task", func(s *Service) { s.GradleExcludedTasks = "--refresh-dependencies" }},
 		{"task shell syntax", func(s *Service) { s.GradleTasks = "build;curl" }},
 		{"exclude shell syntax", func(s *Service) { s.GradleExcludedTasks = "test;curl" }},
 		{"plaintext secret", func(s *Service) { s.GradleProjectProperties = "repo.password=secret" }},

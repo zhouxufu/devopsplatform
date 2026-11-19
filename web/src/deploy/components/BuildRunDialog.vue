@@ -1,38 +1,64 @@
 <script setup>
-import { ref, watch } from 'vue'
-import Modal from '../../shared/components/Modal.vue'
-import Sel from '../../shared/components/Sel.vue'
-import {ElButton,ElInput} from '../../shared/components/ui.js'
+
+
+
+import {computed, onBeforeUnmount, ref, watch} from 'vue'
+
+
+import ReleaseRecovery from './ReleaseRecovery.vue'
+import {blockingRelease} from '../releaseRecovery.js'
 import GitBranchSelect from './GitBranchSelect.vue'
-const props=defineProps({show:Boolean,service:Object,delivery:Object,targets:{type:Array,default:()=>[]},mode:{type:String,default:'build'},environment:{type:String,default:''}})
-const emit=defineEmits(['close','started'])
+import {deploymentTargetReady,buildDeployBlocker} from '../deploymentTarget.js'
+import {environmentBuildBranch} from '../buildVariant.js'
+const props=defineProps({show:Boolean,me:Object,releases:{type:Array,default:()=>[]},deploys:{type:Array,default:()=>[]},service:Object,delivery:Object,targets:{type:Array,default:()=>[]},mode:{type:String,default:'build'},environment:{type:String,default:''}})
+const emit=defineEmits(['close','started','refresh'])
+const blocker=computed(()=>props.mode==='deploy'?blockingRelease(props.releases,props.service?.name,selectedEnvironment.value):null)
+const rechecking=ref(false)
 const form=ref({}),busy=ref(false),error=ref(''),advanced=ref(false)
-watch(()=>props.show,opened=>{if(opened){const s=props.service||{};form.value={service:s.name,branch:s.branch||'',deploy_environment:props.mode==='deploy'?props.environment:'',reason:'',override_maven:false,override_gradle:false,maven_profiles:s.maven_profiles||'',maven_properties:s.maven_properties||'',gradle_tasks:s.gradle_tasks||'clean build',gradle_excluded_tasks:s.gradle_excluded_tasks||'',gradle_project_properties:s.gradle_project_properties||'',gradle_system_properties:s.gradle_system_properties||''};error.value='';advanced.value=false}})
+const variant=ref(null),variantLoading=ref(false),variantError=ref(''),branchHint=ref('')
+const documentEnvironments=ref([]),variantRequired=ref(false)
+const buildEnvironments=ref([]),environmentRequired=ref(false),environmentsLoading=ref(false),environmentsError=ref('')
+const javaBuild=computed(()=>['maven','gradle'].includes(props.service?.build_tool))
+const environmentOptions=computed(()=>buildEnvironments.value.map(t=>({value:t.environment,label:(t.display_name||t.environment)+(t.build_variant?' · '+t.build_variant:variantRequired.value?' · 未配置构建方案':''),disabled:variantRequired.value&&!t.build_variant})))
+const missingEnvironment=computed(()=>environmentRequired.value&&(!selectedEnvironment.value||(variantRequired.value&&!buildEnvironments.value.some(t=>t.environment===selectedEnvironment.value&&t.build_variant))))
+const buildBlocked=computed(()=>environmentsLoading.value||!!environmentsError.value||variantLoading.value||!!variantError.value||missingEnvironment.value||(variantRequired.value&&!form.value.branch?.trim()))
+const selectedEnvironment=computed(()=>props.mode==='deploy'?form.value.deploy_environment:form.value.build_environment)
+let variantSequence=0,variantController,environmentSequence=0,environmentController
+async function loadBuildEnvironments(){
+ const seq=++environmentSequence;environmentController?.abort();environmentsError.value='';buildEnvironments.value=[];environmentRequired.value=false;variantRequired.value=false;documentEnvironments.value=[];environmentsLoading.value=false
+ if(!props.show||!props.service?.name||!javaBuild.value)return
+ environmentController=new AbortController();environmentsLoading.value=true
+ try{const r=await fetch(`api/services/${encodeURIComponent(props.service.name)}/build-environments`,{signal:environmentController.signal});const data=await r.json();if(!r.ok||!Array.isArray(data.environments))throw Error(data.error||'构建环境读取失败');if(seq===environmentSequence){buildEnvironments.value=data.environments;variantRequired.value=data.environment_required===true;environmentRequired.value=variantRequired.value||data.documentation_environment_required===true;documentEnvironments.value=data.documentation_environments||[];if(variantRequired.value&&!selectedEnvironment.value)form.value.branch=''}}
+ catch(e){if(seq===environmentSequence&&e.name!=='AbortError')environmentsError.value=e.message}
+ finally{if(seq===environmentSequence)environmentsLoading.value=false}
+}
+watch(()=>[props.show,props.service?.name],loadBuildEnvironments)
+watch(()=>props.show,opened=>{if(opened){emit('refresh');const s=props.service||{};form.value={service:s.name,branch:s.branch||'',build_environment:props.mode==='build'?props.environment:'',deploy_environment:props.mode==='deploy'?(props.environment||(props.targets.length===1?props.targets[0].environment:'')):'',reason:'',override_maven:false,override_gradle:false,maven_profiles:s.maven_profiles||'',maven_properties:s.maven_properties||'',gradle_tasks:s.gradle_tasks||'clean build',gradle_excluded_tasks:s.gradle_excluded_tasks||'',gradle_project_properties:s.gradle_project_properties||'',gradle_system_properties:s.gradle_system_properties||''};error.value='';advanced.value=false}})
+watch(()=>[props.show,props.service?.name,selectedEnvironment.value],async([show,name,environment])=>{
+ const seq=++variantSequence;variantController?.abort();variant.value=null;variantError.value='';variantLoading.value=false;branchHint.value=''
+ if(show&&variantRequired.value)form.value.branch=''
+ if(!show||!environment||!name)return
+ variantController=new AbortController();variantLoading.value=true;overrides(false)
+ try{const r=await fetch(`api/services/${encodeURIComponent(name)}/environments/${encodeURIComponent(environment)}/delivery-default`,{signal:variantController.signal});const data=await r.json();if(!r.ok)throw Error(data.error||'构建方案读取失败');if(seq===variantSequence){variant.value=data.value?.build_variant||{};const selection=environmentBuildBranch(data.value);if(selection){form.value.branch=selection.branch;branchHint.value=selection.hint}}}
+ catch(e){if(seq===variantSequence&&e.name!=='AbortError')variantError.value=e.message}
+ finally{if(seq===variantSequence)variantLoading.value=false}
+})
+onBeforeUnmount(()=>{variantSequence++;variantController?.abort();environmentSequence++;environmentController?.abort()})
 function overrides(value){advanced.value=value;form.value.override_maven=value&&props.service?.build_tool==='maven';form.value.override_gradle=value&&props.service?.build_tool==='gradle'}
-async function start(){if(busy.value)return;busy.value=true;error.value='';try{
+async function start(){if(busy.value||rechecking.value||blocker.value||buildBlocked.value||deployBlocker.value)return;busy.value=true;error.value='';try{
  const body={...form.value};if(props.mode!=='deploy'){body.deploy_environment='';body.reason=''}
  const r=await fetch('api/pipeline/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),v=await r.json()
  if(!r.ok||!v.id)throw Error(v.error||'构建未能发起');emit('started',v.id)
-}catch(e){error.value=e.message}finally{busy.value=false}}
+}catch(e){error.value=e.message;emit('refresh')}finally{busy.value=false}}
 const target=()=>props.targets.find(t=>t.environment===form.value.deploy_environment)
-const targetReady=()=>{const t=target();return t&&(t.target_type==='aliyun-sae'?t.deploy_config?.connection&&t.deploy_config?.app_id&&t.deploy_config?.namespace_id&&t.deploy_config?.region:t.host_group&&t.hosts?.length)}
+const targetReady=()=>deploymentTargetReady(target())
+const deployBlocker=computed(()=>props.mode==='deploy'?buildDeployBlocker(target(),form.value.reason||''):'')
+
+import OptionPicker from '../../shared/components/OptionPicker.vue'
+
+
+
+import {Badge,Button,Checkbox,Dialog,DialogContent,DialogDescription,DialogFooter,DialogHeader,DialogTitle,Field,FieldLabel,Input,Spinner,Textarea} from '../../shared/shadcn-ui.js'
 </script>
-<template>
- <Modal :show="show" :busy="busy" :title="(mode==='deploy'?'构建并发布 ':'构建 ')+(service?.name||'')" wide @close="emit('close')">
-  <div class="build-launch">
-   <label>本次构建分支<GitBranchSelect v-model="form.branch" :repositories="service?.git_url?[{service:service.name}]:[]" :disabled="busy"/></label>
-   <small>只覆盖本次运行，不修改默认配置；源码解析后记录实际 Commit。</small>
-   <div class="build-launch-summary"><span>工具 {{service?.build_tool||service?.artifact_type}}</span><span>Runner {{delivery?.runner||'local'}}</span><span>{{delivery?.build_environment?.mode==='container'?'隔离容器 · '+(delivery.build_environment.preset||'自定义镜像'):'Runner 本机工具'}}</span></div>
-   <template v-if="mode==='deploy'"><label>目标环境<Sel v-model="form.deploy_environment" :options="targets.map(t=>({value:t.environment,label:t.display_name||t.environment}))" :disabled="busy" width="100%"/></label><label>发布原因<ElInput v-model="form.reason" :disabled="busy" placeholder="说明本次发布目的"/></label><p class="launch-warning">{{target()?.protected?'构建成功后提交审批，不直接发布。':'构建成功后将自动创建发布单；失败不会发布。'}} 使用本次生成的制品。</p></template>
-   <button v-if="['maven','gradle'].includes(service?.build_tool)" class="text-link" :disabled="busy" @click="overrides(!advanced)">{{advanced?'收起':'覆盖本次'}}构建参数</button>
-   <div v-if="advanced&&service?.build_tool==='maven'" class="launch-advanced"><label>Profiles<ElInput v-model="form.maven_profiles" :disabled="busy"/></label><label>-D 属性（每行 key=value）<ElInput v-model="form.maven_properties" type="textarea" :rows="3" :disabled="busy"/></label></div>
-   <div v-if="advanced&&service?.build_tool==='gradle'" class="launch-advanced"><label>Tasks<ElInput v-model="form.gradle_tasks" :disabled="busy"/></label><label>排除任务<ElInput v-model="form.gradle_excluded_tasks" :disabled="busy"/></label><label>-P 项目属性<ElInput v-model="form.gradle_project_properties" type="textarea" :rows="2" :disabled="busy"/></label><label>-D 系统属性<ElInput v-model="form.gradle_system_properties" type="textarea" :rows="2" :disabled="busy"/></label></div>
-   <p v-if="error" class="launch-error" role="alert">{{error}}</p>
-   <p v-if="mode==='deploy'&&form.deploy_environment&&!targetReady()" class="launch-warning">该环境发布资源不完整，请先配置环境。</p>
-   <footer><ElButton :disabled="busy" @click="emit('close')">取消</ElButton><ElButton type="primary" :loading="busy" :disabled="mode==='deploy'&&(!targetReady()||(target()?.require_reason&&!form.reason.trim())||(target()?.protected&&!target()?.approvers))" @click="start">{{mode==='deploy'?'确认构建并发布':'开始构建'}}</ElButton></footer>
-  </div>
- </Modal>
-</template>
-<style scoped>
-.build-launch,.launch-advanced{display:grid;gap:14px}.build-launch label{display:grid;gap:6px;font-size:13px}.build-launch small{font-size:12px;color:var(--muted)}.build-launch-summary{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);padding:8px;background:var(--panel2);border-radius:6px}.build-launch footer{display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--border);padding-top:12px}.text-link{border:0;background:none;color:var(--brand);text-align:left;cursor:pointer;padding:0}.launch-error{color:var(--error);font-size:13px}.launch-warning{margin:0;color:var(--warn);font-size:12px}
-</style>
+<template><Dialog :open="show" @update:open="async v=>{if(!v&&!busy&&!rechecking){emit('close')}}"><DialogContent class="flex max-h-[92dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[var(--editor-width)]" :class="false?'inset-0 h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 rounded-none sm:max-w-none':''" :style="{'--editor-width':typeof (&quot;min(720px, 92vw)&quot;)==='number'?(&quot;min(720px, 92vw)&quot;)+'px':(&quot;min(720px, 92vw)&quot;)}" :show-close-button="!(busy||rechecking)" @interact-outside="e=>{if(busy||rechecking)e.preventDefault()}" @escape-key-down="e=>{if(busy||rechecking)e.preventDefault()}"><DialogHeader class="shrink-0 border-b p-5 pr-12"><DialogTitle>{{(mode==='deploy'?'构建并发布 ':'构建 ')+(service?.display_name||service?.name||'')}}</DialogTitle><DialogDescription class="sr-only">详情与操作</DialogDescription></DialogHeader><div class="min-h-0 flex-1 overflow-auto p-5"><div class="build-launch"><Field v-if="mode!=='deploy'&&javaBuild" class="launch-field"><FieldLabel as="div">本次构建目标环境{{environmentsLoading||environmentsError?'':environmentRequired?'（必选）':'（可选）'}}</FieldLabel><OptionPicker v-model="form.build_environment" :options="environmentOptions" :all-label="environmentRequired||environmentsLoading||environmentsError?'':'公共制品（跨环境复用）'" placeholder="请选择构建目标环境" :disabled="busy||environmentsLoading||!!environmentsError" :style="{width:'100%',maxWidth:'100%'}"/></Field><small v-if="environmentsLoading" role="status">正在读取应用构建环境…</small><p v-if="environmentsError" role="alert" class="launch-error">{{environmentsError}}<Button @click="loadBuildEnvironments" variant="ghost" size="default" type="button">重试</Button></p><small v-if="environmentRequired&&!environmentsLoading">先选本次构建环境，再核对关联分支与生成步骤。</small><template v-if="mode==='deploy'"><Field class="launch-field"><FieldLabel as="div">目标环境</FieldLabel><OptionPicker v-model="form.deploy_environment" :options="targets.map(t=>({value:t.environment,label:(t.display_name||t.environment)+(t.target_type==='manual'?' · 手动发布':''),disabled:variantRequired&&!buildEnvironments.some(e=>e.environment===t.environment&&e.build_variant)}))" :disabled="busy||environmentsLoading||!!environmentsError" :style="{width:'100%',maxWidth:'100%'}"/></Field></template><Field v-if="!environmentsLoading&&!environmentsError" class="launch-field"><FieldLabel as="div">本次构建分支</FieldLabel><GitBranchSelect v-model="form.branch" :repositories="service?.git_url?[{service:service.name}]:[]" :disabled="busy||variantLoading||missingEnvironment" :placeholder="missingEnvironment?'请先选择构建目标环境':'选择或输入本次构建分支'"/></Field><small v-if="branchHint">{{branchHint}}</small><small>只覆盖本次运行，不修改默认配置；源码解析后记录实际 Commit。</small><small v-if="mode!=='deploy'">使用当前已保存的构建配置和所选分支的当前代码，不沿用旧构建的源码与配置快照；确认开始后只生成制品，不自动发布。</small><Badge v-if="documentEnvironments.includes(selectedEnvironment)" :variant="(&quot;blue&quot;)==='red'?'destructive':'secondary'">构建后自动执行：生成接口文档 → 同环境变更对比</Badge><div class="build-launch-summary"><span>工具 {{service?.build_tool||service?.artifact_type}}</span><span>Runner {{delivery?.runner||'local'}}</span><span>{{delivery?.build_environment?.mode==='container'?'隔离容器 · '+(delivery.build_environment.preset||'自定义镜像'):'Runner 本机工具'}}</span></div><small v-if="variantLoading" role="status">正在读取环境关联分支与构建方案…</small><small v-else-if="variant?.name">构建方案：{{variant.name}}。参数由应用环境策略解析；生成的 JAR／镜像只能用于兼容方案的环境。</small><small v-if="variant?.name&&service?.build_tool==='maven'">Maven Profiles：{{variant.maven_profiles||'不显式激活 Profile'}}；其他参数合并应用公共配置。</small><small v-if="variant?.name&&service?.build_tool==='gradle'">Gradle Tasks：{{variant.gradle_tasks||service?.gradle_tasks||'clean build'}}；-P／-D 属性按环境方案覆盖公共配置。</small><small v-if="selectedEnvironment&&!variant?.name&&!variantLoading&&!variantError">{{variantRequired?'此环境尚未配置构建方案，请先在应用环境配置中补齐。':'使用应用公共构建参数；运行时配置由发布目标环境提供。'}}</small><p v-if="variantError" role="alert" class="launch-error">{{variantError}}<Button @click="form.build_environment='';form.deploy_environment=''" variant="ghost" size="default" type="button">重新选择环境</Button></p><template v-if="mode==='deploy'"><Field class="launch-field"><FieldLabel as="div">发布原因</FieldLabel><Input v-model="form.reason" :disabled="busy" placeholder="说明本次发布目的"/></Field><p class="launch-warning">{{target()?.target_type==='manual'?(target()?.protected?'构建成功后提交审批，通过后由负责人下载制品并手动发布。':'构建成功后等待负责人下载制品并手动发布。'):target()?.protected?'构建成功后提交审批，不直接发布。':'构建成功后将自动创建发布单；失败不会发布。'}} 使用本次生成的制品。</p></template><FieldLabel class="flex items-center gap-2 font-normal" v-if="['maven','gradle'].includes(service?.build_tool)&&!variant?.name"><Checkbox  :model-value="advanced" :disabled="busy||buildBlocked" @update:model-value="overrides($event)"/>覆盖本次构建参数</FieldLabel><div v-if="advanced&&service?.build_tool==='maven'" class="launch-advanced"><Field class="launch-field"><FieldLabel as="div">Profiles</FieldLabel><Input v-model="form.maven_profiles" :disabled="busy"/></Field><Field class="launch-field"><FieldLabel as="div">-D 属性（每行 key=value）</FieldLabel><Textarea v-model="form.maven_properties" :disabled="busy" :rows="({minRows:(3),maxRows:Math.max((3),16)}).minRows||4"/></Field></div><div v-if="advanced&&service?.build_tool==='gradle'" class="launch-advanced"><Field class="launch-field"><FieldLabel as="div">Tasks</FieldLabel><Input v-model="form.gradle_tasks" :disabled="busy"/></Field><Field class="launch-field"><FieldLabel as="div">排除任务</FieldLabel><Input v-model="form.gradle_excluded_tasks" :disabled="busy"/></Field><Field class="launch-field"><FieldLabel as="div">-P 项目属性</FieldLabel><Textarea v-model="form.gradle_project_properties" :disabled="busy" :rows="({minRows:(2),maxRows:Math.max((2),16)}).minRows||4"/></Field><Field class="launch-field"><FieldLabel as="div">-D 系统属性</FieldLabel><Textarea v-model="form.gradle_system_properties" :disabled="busy" :rows="({minRows:(2),maxRows:Math.max((2),16)}).minRows||4"/></Field></div><ReleaseRecovery :order="blocker" :deploys="deploys" :me="me" @busy="rechecking=$event" @updated="emit('refresh')" @refresh="emit('refresh')"/><p v-if="error&&!blocker" role="alert" class="launch-error">{{error}}</p><p v-if="mode==='deploy'&&form.deploy_environment&&!targetReady()" class="launch-warning">该环境发布资源不完整，请先配置环境。</p><p v-if="mode==='deploy'&&deployBlocker" role="status" class="text-sm text-muted-foreground">{{deployBlocker}}</p></div></div><DialogFooter><Button @click="emit('close')" variant="outline" size="default" type="button" :disabled="(busy||rechecking)">取消</Button><Button @click="start" variant="default" size="default" type="button" :disabled="(!!blocker||rechecking||buildBlocked||(mode==='deploy'&amp;&amp;(!targetReady()||(target()?.require_reason&amp;&amp;!form.reason.trim())||(target()?.protected&amp;&amp;!target()?.approvers))))||(busy)"><Spinner v-if="busy"/>{{mode==='deploy'?'确认构建并发布':'开始构建'}}</Button></DialogFooter></DialogContent></Dialog></template>
+<style scoped>.build-launch,.launch-advanced{display:grid;gap:14px}.build-launch .launch-field{display:grid;gap:6px;font-size:.875rem}.build-launch small{font-size:.75rem;color:var(--muted-foreground)}.build-launch-summary{display:flex;gap:12px;flex-wrap:wrap;font-size:.75rem;color:var(--muted-foreground);padding:8px;background:var(--panel2);border-radius:var(--radius)}.text-link{border:0;background:none;color:var(--brand);text-align:left;cursor:pointer;padding:0}.launch-error{color:var(--error);font-size:.875rem}.launch-warning{margin:0;color:var(--warn);font-size:.75rem}</style>

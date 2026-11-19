@@ -45,7 +45,7 @@ func (m *ReleaseManager) continueSAERelease(o *ReleaseOrder, actor string) error
 func (m *ReleaseManager) cancelSAERelease(o *ReleaseOrder, actor string) error {
 	return m.controlSAERelease(o, actor, true)
 }
-func (m *ReleaseManager) controlSAERelease(o *ReleaseOrder, actor string, stop bool) error {
+func (m *ReleaseManager) controlSAERelease(o *ReleaseOrder, actor string, stop bool, expectedPipeline ...string) error {
 	ids := m.st.ReleaseDeployIDs(o.ID)
 	if len(ids) != 1 {
 		return fmt.Errorf("SAE 变更记录异常，禁止继续")
@@ -70,6 +70,9 @@ func (m *ReleaseManager) controlSAERelease(o *ReleaseOrder, actor string, stop b
 	}
 	if state.Status != 8 || state.SubStatus != 0 || state.PipelineID == "" {
 		return fmt.Errorf("SAE 批次状态已变化，请核对云端变更单，不会重复确认")
+	}
+	if len(expectedPipeline) > 0 && state.PipelineID != expectedPipeline[0] {
+		return fmt.Errorf("SAE 观察批次已变化，不会确认其他批次")
 	}
 	if e = m.st.compareReleaseStatus(o.ID, "waiting_next_batch", "running", "", false); e != nil {
 		return e

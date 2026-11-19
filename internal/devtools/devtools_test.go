@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -82,7 +83,7 @@ func TestMCPInitializeListAndScopeDenial(t *testing.T) {
 		t.Fatalf("unauthenticated status=%d", rec.Code)
 	}
 	initRec := call(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`, true)
-	if initRec.Code != http.StatusOK || !strings.Contains(initRec.Body.String(), "logplatform-devtools") || !strings.Contains(initRec.Body.String(), "instructions") {
+	if initRec.Code != http.StatusOK || !strings.Contains(initRec.Body.String(), "devOps") || !strings.Contains(initRec.Body.String(), "instructions") {
 		t.Fatalf("initialize status=%d body=%s", initRec.Code, initRec.Body.String())
 	}
 	listRec := call(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`, true)
@@ -114,18 +115,29 @@ func TestAdminCreateResponseNeverReturnsHash(t *testing.T) {
 	}
 }
 
-func TestTokenDialogCancelDoesNotSubmitRequiredForm(t *testing.T) {
+func TestMCPUIAndItsEmbeddedAssetsAreServed(t *testing.T) {
 	store, _ := OpenTokenStore(t.TempDir())
 	h := Routes(store, NewToolService(Upstreams{}))
-	req := httptest.NewRequest(http.MethodGet, "/ui", nil)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui", nil))
 	body := rec.Body.String()
-	if rec.Code != http.StatusOK || !strings.Contains(body, `id="cancelBtn"`) || !strings.Contains(body, `type="button"`) {
-		t.Fatalf("cancel button may still trigger form validation: status=%d", rec.Code)
+	if rec.Code != http.StatusOK || !strings.Contains(body, `type="module"`) || !strings.Contains(body, `id="app"`) {
+		t.Fatalf("MCP Vue entry unavailable: %d", rec.Code)
 	}
-	if strings.Contains(body, `<form method="dialog"`) || !strings.Contains(body, `$('cancelBtn').onclick=()=>$('dialog').close()`) {
-		t.Fatal("token dialog cancel is not wired to an unconditional close")
+	// Every linked asset must be available at the same path behind the plugin gateway.
+	matches := regexp.MustCompile(`(?:src|href)="(\.?/assets/[^" ]+)"`).FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		t.Fatal("MCP entry must reference bundled assets")
+	}
+	for _, match := range matches {
+		asset := httptest.NewRecorder()
+		h.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, strings.TrimPrefix(match[1], "."), nil))
+		if asset.Code != http.StatusOK || asset.Body.Len() == 0 {
+			t.Errorf("missing embedded asset %s: %d", match[1], asset.Code)
+		}
+	}
+	if strings.Contains(body, "lp_dev_") {
+		t.Fatal("secret must never be embedded in the UI document")
 	}
 }
 

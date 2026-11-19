@@ -69,6 +69,9 @@ func (s *Store) BuildList(kind string, f BuildListFilter) (BuildListPage, error)
 		return out, fmt.Errorf("记录类型无效")
 	}
 	where, args := []string{"1=1"}, []any{}
+	if kind == "artifacts" {
+		where = append(where, liveArtifactSQL)
+	}
 	add := func(expr string, value any) { where = append(where, expr); args = append(args, value) }
 	if f.Service != "" {
 		add("service=?", f.Service)
@@ -158,8 +161,9 @@ func (s *Store) BuildList(kind string, f BuildListFilter) (BuildListPage, error)
 				}
 				out.Items = append(out.Items, struct {
 					*Artifact
-					PublishedEnvironments []string `json:"published_environments"`
-				}{v, environments})
+					PublishedEnvironments []string            `json:"published_environments"`
+					CodeOrigin            *artifactCodeOrigin `json:"code_origin,omitempty"`
+				}{v, environments, s.artifactCodeOrigin(v)})
 			}
 		case "releases":
 			if v := s.GetReleaseOrder(id); v != nil {
@@ -180,7 +184,7 @@ type BuildApplicationSummary struct {
 }
 
 func (s *Store) BuildApplicationSummaries() ([]BuildApplicationSummary, error) {
-	rows, err := s.db.Query(`SELECT name,COALESCE((SELECT MAX(id) FROM pipeline_runs r WHERE r.service=services.name),0),COALESCE((SELECT MAX(id) FROM artifacts a WHERE a.service=services.name),0) FROM services ORDER BY name`)
+	rows, err := s.db.Query(`SELECT name,COALESCE((SELECT MAX(id) FROM pipeline_runs r WHERE r.service=services.name),0),COALESCE((SELECT MAX(id) FROM artifacts a WHERE a.service=services.name AND NOT EXISTS (SELECT 1 FROM artifact_cleanup c WHERE c.artifact_id=a.id)),0) FROM services ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +219,14 @@ func (s *Store) BuildApplicationSummaries() ([]BuildApplicationSummary, error) {
 			delete(item.LatestArtifact.Metadata, "build_command")
 		}
 		for _, t := range item.Environments {
-			ready := t.HostGroup != "" && len(t.Hosts) > 0
+			ready := len(t.Hosts) > 0
+			if t.ManualTarget() {
+				ready = t.DeployConfig["manual_instructions"] != ""
+			}
+			if t.ScriptTarget() {
+				_, err := s.validateScriptRunner(t.DeployConfig)
+				ready = err == nil && t.DeployConfig["script"] != ""
+			}
 			if t.ManagedTarget() {
 				ready = t.DeployConfig["connection"] != "" && t.DeployConfig["app_id"] != "" && t.DeployConfig["namespace_id"] != "" && t.DeployConfig["region"] != ""
 			}

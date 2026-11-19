@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	WorkItemOpen   = "open"
-	WorkItemClosed = "closed"
+	WorkItemOpen     = "open"
+	WorkItemActive   = "active"
+	WorkItemResolved = "resolved"
+	WorkItemClosed   = "closed"
 
 	ChangeDraft = "draft"
 	ChangeReady = "ready"
@@ -31,6 +33,15 @@ const (
 // WorkItem represents a requirement or bug. It may be synchronized from an
 // external system or entered manually. It has no release/environment owner.
 type WorkItem struct {
+	ResearchIssueFields
+	ReleaseOrigin     string `json:"release_origin,omitempty"`
+	ReleaseReason     string `json:"release_reason,omitempty"`
+	RuleRevision      int64  `json:"rule_revision,omitempty"`
+	Following         bool   `json:"following"`
+	Participating     bool   `json:"participating"`
+	ReleaseRequired   *bool  `json:"release_required"`
+	NoReleaseReason   string `json:"no_release_reason,omitempty"`
+	MetadataRevision  int64  `json:"metadata_revision"`
 	ID                int64  `json:"id"`
 	Source            string `json:"source"`
 	ExternalID        string `json:"external_id,omitempty"`
@@ -53,22 +64,23 @@ type WorkItem struct {
 // Change is an independent implementation change. The same record is promoted
 // through environments and is never copied for dev/test/prod.
 type Change struct {
-	ID           int64        `json:"id"`
-	Kind         string       `json:"kind"`
-	Title        string       `json:"title"`
-	Service      string       `json:"service,omitempty"`
-	Reference    string       `json:"reference,omitempty"`
-	Summary      string       `json:"summary,omitempty"`
-	RiskLevel    string       `json:"risk_level"`
-	RollbackPlan string       `json:"rollback_plan,omitempty"`
-	Status       string       `json:"status"`
-	Owner        string       `json:"owner,omitempty"`
-	CreatedAt    int64        `json:"created_at"`
-	UpdatedAt    int64        `json:"updated_at"`
-	WorkItems    []WorkItem   `json:"work_items,omitempty"`
-	SQL          *SQLChange   `json:"sql,omitempty"`
-	Nacos        *NacosChange `json:"nacos,omitempty"`
-	Redis        *RedisChange `json:"redis,omitempty"`
+	DeliveryOwnership *ChangeDeliveryOwnership `json:"delivery_ownership,omitempty"`
+	ID                int64                    `json:"id"`
+	Kind              string                   `json:"kind"`
+	Title             string                   `json:"title"`
+	Service           string                   `json:"service,omitempty"`
+	Reference         string                   `json:"reference,omitempty"`
+	Summary           string                   `json:"summary,omitempty"`
+	RiskLevel         string                   `json:"risk_level"`
+	RollbackPlan      string                   `json:"rollback_plan,omitempty"`
+	Status            string                   `json:"status"`
+	Owner             string                   `json:"owner,omitempty"`
+	CreatedAt         int64                    `json:"created_at"`
+	UpdatedAt         int64                    `json:"updated_at"`
+	WorkItems         []WorkItem               `json:"work_items,omitempty"`
+	SQL               *SQLChange               `json:"sql,omitempty"`
+	Nacos             *NacosChange             `json:"nacos,omitempty"`
+	Redis             *RedisChange             `json:"redis,omitempty"`
 }
 
 type ReleaseVersion struct {
@@ -98,11 +110,14 @@ type ReleasePromotion struct {
 }
 
 type ApplicationResourceRequirement struct {
-	Service     string `json:"service"`
-	Alias       string `json:"alias"`
-	Kind        string `json:"kind"`
-	Required    bool   `json:"required"`
-	Description string `json:"description,omitempty"`
+	Sources       map[string]ResourceSourceEvidence `json:"sources,omitempty"`
+	GroupName     string                            `json:"group_name,omitempty"`
+	GroupRevision int64                             `json:"group_revision,omitempty"`
+	Service       string                            `json:"service"`
+	Alias         string                            `json:"alias"`
+	Kind          string                            `json:"kind"`
+	Required      bool                              `json:"required"`
+	Description   string                            `json:"description,omitempty"`
 }
 
 type ApplicationEnvironmentResource struct {
@@ -115,17 +130,34 @@ type ApplicationEnvironmentResource struct {
 }
 
 type ApplicationResources struct {
-	Requirements []ApplicationResourceRequirement `json:"requirements"`
-	Bindings     []ApplicationEnvironmentResource `json:"bindings"`
+	NacosScopeVersion  int                              `json:"nacos_scope_version,omitempty"`
+	Revision           int64                            `json:"revision"`
+	Checks             []ResourceCheck                  `json:"checks,omitempty"`
+	ExpectedRevision   *int64                           `json:"-"`
+	CompositionVersion int                              `json:"composition_version,omitempty"`
+	ResourceGroups     []string                         `json:"resource_groups,omitempty"`
+	GroupRevisions     map[string]int64                 `json:"group_revisions,omitempty"`
+	OwnRequirements    []ApplicationResourceRequirement `json:"own_requirements,omitempty"`
+	OwnBindings        []ApplicationEnvironmentResource `json:"own_bindings,omitempty"`
+	NacosConfigs       []ApplicationNacosConfig         `json:"nacos_configs,omitempty"`
+	Error              string                           `json:"error,omitempty"`
+	ResourceGroup      string                           `json:"resource_group,omitempty"`
+	GroupRevision      int64                            `json:"group_revision,omitempty"`
+	Requirements       []ApplicationResourceRequirement `json:"requirements"`
+	Bindings           []ApplicationEnvironmentResource `json:"bindings"`
 }
 
 type rowScanner interface{ Scan(...any) error }
 
-const workItemSelect = `SELECT id,source,COALESCE(external_id,''),kind,title,COALESCE(url,''),COALESCE(external_status,''),COALESCE(description,''),status,COALESCE(owner,''),created_at,updated_at,COALESCE(assigned_to,''),COALESCE(opened_by,''),COALESCE(resolved_by,''),COALESCE(closed_by,''),COALESCE(description_format,'') FROM work_items`
+const workItemSelect = `SELECT id,source,COALESCE(external_id,''),kind,title,COALESCE(url,''),COALESCE(external_status,''),COALESCE(description,''),status,COALESCE(owner,''),created_at,updated_at,COALESCE(assigned_to,''),COALESCE(opened_by,''),COALESCE(resolved_by,''),COALESCE(closed_by,''),COALESCE(description_format,''),(SELECT release_required FROM research_work_metadata WHERE work_item_id=work_items.id),COALESCE((SELECT no_release_reason FROM research_work_metadata WHERE work_item_id=work_items.id),''),COALESCE((SELECT revision FROM research_work_metadata WHERE work_item_id=work_items.id),0),COALESCE((SELECT document FROM research_issue_fields WHERE work_item_id=work_items.id),'{}') FROM work_items`
 
 func scanWorkItem(row rowScanner) (WorkItem, error) {
 	var v WorkItem
-	err := row.Scan(&v.ID, &v.Source, &v.ExternalID, &v.Kind, &v.Title, &v.URL, &v.ExternalStatus, &v.Description, &v.Status, &v.Owner, &v.CreatedAt, &v.UpdatedAt, &v.AssignedTo, &v.OpenedBy, &v.ResolvedBy, &v.ClosedBy, &v.DescriptionFormat)
+	var fields string
+	err := row.Scan(&v.ID, &v.Source, &v.ExternalID, &v.Kind, &v.Title, &v.URL, &v.ExternalStatus, &v.Description, &v.Status, &v.Owner, &v.CreatedAt, &v.UpdatedAt, &v.AssignedTo, &v.OpenedBy, &v.ResolvedBy, &v.ClosedBy, &v.DescriptionFormat, &v.ReleaseRequired, &v.NoReleaseReason, &v.MetadataRevision, &fields)
+	if err == nil {
+		err = json.Unmarshal([]byte(fields), &v.ResearchIssueFields)
+	}
 	return v, err
 }
 
@@ -136,11 +168,25 @@ func normalizeWorkItem(v *WorkItem) error {
 	v.Source, v.ExternalID = strings.TrimSpace(v.Source), strings.TrimSpace(v.ExternalID)
 	v.Kind, v.Title, v.URL = strings.TrimSpace(v.Kind), strings.TrimSpace(v.Title), strings.TrimSpace(v.URL)
 	v.ExternalStatus, v.Description = strings.TrimSpace(v.ExternalStatus), strings.TrimSpace(v.Description)
+	v.AssignedTo = strings.TrimSpace(v.AssignedTo)
+	if (v.Source == "" || v.Source == "manual") && (len(v.AssignedTo) > 100 || strings.ContainsAny(v.AssignedTo, "\r\n\x00") || strings.EqualFold(v.AssignedTo, "closed")) {
+		return fmt.Errorf("请选择有效的负责人")
+	}
 	if v.Source == "" {
 		v.Source = "manual"
 	}
 	if v.Kind == "" {
 		v.Kind = "requirement"
+	}
+	if v.Kind != "requirement" && v.Kind != "bug" {
+		return fmt.Errorf("工作项类型仅支持需求或 Bug")
+	}
+	if v.Source == "manual" {
+		for name, value := range map[string]string{"严重程度": v.Severity, "优先级": v.Priority} {
+			if value != "" && value != "1" && value != "2" && value != "3" && value != "4" {
+				return fmt.Errorf("%s仅支持 1 至 4", name)
+			}
+		}
 	}
 	if v.Title == "" {
 		return fmt.Errorf("需求或缺陷标题必填")
@@ -152,18 +198,31 @@ func normalizeWorkItem(v *WorkItem) error {
 }
 
 func (s *Store) CreateWorkItem(v *WorkItem) error {
-	if err := normalizeWorkItem(v); err != nil {
-		return err
-	}
-	now := time.Now().Unix()
-	// External personnel is authoritative only when imported by its connector.
-	v.AssignedTo, v.OpenedBy, v.ResolvedBy, v.ClosedBy = "", "", "", ""
-	v.Status, v.CreatedAt, v.UpdatedAt = WorkItemOpen, now, now
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err = s.createWorkItemTx(tx, v); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) createWorkItemTx(tx *deployTx, v *WorkItem) error {
+	if err := normalizeWorkItem(v); err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	// External personnel is authoritative only when imported by its connector.
+	if v.Source != "manual" {
+		v.AssignedTo = ""
+	}
+	v.OpenedBy, v.ResolvedBy, v.ClosedBy = "", "", ""
+	if v.Source == "manual" {
+		v.OpenedBy = strings.TrimSpace(v.Owner)
+	}
+	v.Status, v.CreatedAt, v.UpdatedAt = WorkItemOpen, now, now
 	res, err := tx.Exec(`INSERT INTO work_items(source,external_id,kind,title,url,external_status,description,status,owner,created_at,updated_at,description_format) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		v.Source, v.ExternalID, v.Kind, v.Title, v.URL, v.ExternalStatus, v.Description, v.Status, strings.TrimSpace(v.Owner), now, now, v.DescriptionFormat)
 	if err != nil {
@@ -173,10 +232,32 @@ func (s *Store) CreateWorkItem(v *WorkItem) error {
 	if err != nil {
 		return err
 	}
+	if v.Source == "manual" {
+		if _, err = tx.Exec(`UPDATE work_items SET assigned_to=?,opened_by=? WHERE id=?`, v.AssignedTo, v.OpenedBy, v.ID); err != nil {
+			return err
+		}
+	}
 	if err = bindWorkAttachments(tx, v, v.Owner); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if v.ReleaseRequired != nil {
+		if err = saveResearchMetadata(tx, v.ID, ResearchMetadata{ReleaseRequired: v.ReleaseRequired, NoReleaseReason: v.NoReleaseReason}, v.Owner); err != nil {
+			return err
+		}
+		v.MetadataRevision = 1
+	}
+	if v.Source == "manual" {
+		if err = saveIssueFields(tx, v.ID, v.ResearchIssueFields); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO research_activity(work_item_id,actor,kind,content,created_at) VALUES(?,?,'created','',?)`, v.ID, v.Owner, now); err != nil {
+			return err
+		}
+		if err = recordResearchRelation(tx, v.ID, v.Owner, "participant"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) WorkItems(status, query string, limit int) []WorkItem {
@@ -215,6 +296,11 @@ func (s *Store) GetWorkItem(id int64) *WorkItem {
 	if err != nil {
 		return nil
 	}
+	if err = s.decorateResearchPolicy(&v); err != nil {
+		v.ReleaseRequired = nil
+		v.ReleaseOrigin = "unknown"
+		v.ReleaseReason = err.Error()
+	}
 	return &v
 }
 
@@ -222,33 +308,132 @@ func (s *Store) UpdateWorkItem(v *WorkItem) error {
 	return s.UpdateWorkItemAs(v, v.Owner)
 }
 func (s *Store) UpdateWorkItemAs(v *WorkItem, actor string) error {
-	current := s.GetWorkItem(v.ID)
-	if current == nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	query := workItemSelect + ` WHERE id=?`
+	if tx.dialect == "mysql" {
+		query += " FOR UPDATE"
+	}
+	current, err := scanWorkItem(tx.QueryRow(query, v.ID))
+	if err != nil {
 		return fmt.Errorf("需求或缺陷不存在")
 	}
 	if strings.HasPrefix(current.Source, "zentao:") && (v.Source != current.Source || v.ExternalID != current.ExternalID || v.Kind != current.Kind) {
 		return fmt.Errorf("同步的外部记录不能修改来源、编号或类型")
 	}
+	// General edits never own status. Keep the value read by the store so a
+	// concurrent dedicated status transition cannot be overwritten.
+	v.Status = current.Status
 	if v.DescriptionFormat == "" {
 		v.DescriptionFormat = current.DescriptionFormat
 	}
 	if err := normalizeWorkItem(v); err != nil {
 		return err
 	}
-	if v.Status != WorkItemOpen && v.Status != WorkItemClosed {
-		return fmt.Errorf("需求状态仅支持 open 或 closed")
+	if v.Status != WorkItemOpen && v.Status != WorkItemActive && v.Status != WorkItemResolved && v.Status != WorkItemClosed {
+		return fmt.Errorf("状态仅支持 open、active、resolved 或 closed")
+	}
+	_, err = tx.Exec(`UPDATE work_items SET source=?,external_id=?,kind=?,title=?,url=?,external_status=?,description=?,owner=?,updated_at=?,description_format=? WHERE id=?`,
+		v.Source, v.ExternalID, v.Kind, v.Title, v.URL, v.ExternalStatus, v.Description, strings.TrimSpace(v.Owner), time.Now().Unix(), v.DescriptionFormat, v.ID)
+	if err != nil {
+		return err
+	}
+	if err = bindWorkAttachments(tx, v, actor); err != nil {
+		return err
+	}
+	if current.Source == "manual" && v.Source == "manual" {
+		if _, err = tx.Exec(`UPDATE work_items SET assigned_to=? WHERE id=?`, v.AssignedTo, v.ID); err != nil {
+			return err
+		}
+		if err = saveIssueFields(tx, v.ID, v.ResearchIssueFields); err != nil {
+			return err
+		}
+		changes := map[string][2]string{}
+		if current.Status != v.Status {
+			changes["status"] = [2]string{current.Status, v.Status}
+		}
+		if current.AssignedTo != v.AssignedTo {
+			changes["assigned_to"] = [2]string{current.AssignedTo, v.AssignedTo}
+		}
+		if current.Title != v.Title {
+			changes["title"] = [2]string{current.Title, v.Title}
+		}
+		if current.Description != v.Description {
+			changes["description"] = [2]string{"已填写", "已更新"}
+		}
+		if current.Priority != v.Priority {
+			changes["priority"] = [2]string{current.Priority, v.Priority}
+		}
+		if current.Severity != v.Severity {
+			changes["severity"] = [2]string{current.Severity, v.Severity}
+		}
+		if current.Resolution != v.Resolution {
+			changes["resolution"] = [2]string{current.Resolution, v.Resolution}
+		}
+		if len(changes) > 0 {
+			kind := "work-item-updated"
+			if len(changes) == 1 {
+				if _, ok := changes["status"]; ok {
+					kind = "work-item-status"
+				} else if _, ok := changes["assigned_to"]; ok {
+					kind = "work-item-assigned"
+				}
+			}
+			raw, marshalErr := json.Marshal(changes)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			if _, err = tx.Exec(`INSERT INTO research_activity(work_item_id,actor,kind,content,created_at) VALUES(?,?,?,?,?)`, v.ID, actor, kind, string(raw), time.Now().Unix()); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SetManualWorkItemStatus(id, expectedUpdatedAt int64, expectedStatus, status, actor string, admin bool) error {
+	if status != WorkItemOpen && status != WorkItemActive && status != WorkItemResolved && status != WorkItemClosed {
+		return fmt.Errorf("状态仅支持 open、active、resolved 或 closed")
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`UPDATE work_items SET source=?,external_id=?,kind=?,title=?,url=?,external_status=?,description=?,status=?,owner=?,updated_at=?,description_format=? WHERE id=?`,
-		v.Source, v.ExternalID, v.Kind, v.Title, v.URL, v.ExternalStatus, v.Description, v.Status, strings.TrimSpace(v.Owner), time.Now().Unix(), v.DescriptionFormat, v.ID)
+	query := `SELECT source,status,owner,assigned_to,updated_at FROM work_items WHERE id=?`
+	if tx.dialect == "mysql" {
+		query += " FOR UPDATE"
+	}
+	var source, current, owner, assignee string
+	var updatedAt int64
+	if err = tx.QueryRow(query, id).Scan(&source, &current, &owner, &assignee, &updatedAt); err != nil {
+		return fmt.Errorf("需求或缺陷不存在")
+	}
+	if source != "manual" {
+		return fmt.Errorf("来源工作项状态须在来源平台维护")
+	}
+	if actor == "" || (!admin && actor != owner && actor != assignee) {
+		return fmt.Errorf("仅创建人、负责人或管理员可变更状态")
+	}
+	if expectedUpdatedAt <= 0 || expectedUpdatedAt != updatedAt || expectedStatus == "" || expectedStatus != current {
+		return fmt.Errorf("工作项已被其他人更新，请重新读取")
+	}
+	if status == current {
+		return tx.Commit()
+	}
+	now := time.Now().Unix()
+	result, err := tx.Exec(`UPDATE work_items SET status=?,updated_at=? WHERE id=? AND updated_at=? AND status=?`, status, now, id, expectedUpdatedAt, expectedStatus)
 	if err != nil {
 		return err
 	}
-	if err = bindWorkAttachments(tx, v, actor); err != nil {
+	if count, _ := result.RowsAffected(); count != 1 {
+		return fmt.Errorf("工作项已被其他人更新，请重新读取")
+	}
+	content, _ := json.Marshal(map[string][2]string{"status": {current, status}})
+	if _, err = tx.Exec(`INSERT INTO research_activity(work_item_id,actor,kind,content,created_at) VALUES(?,?,'work-item-status',?,?)`, id, actor, string(content), now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -304,6 +489,12 @@ func (s *Store) DeleteWorkItem(id int64) error {
 	if refs > 0 {
 		return fmt.Errorf("需求已关联变更，不能删除")
 	}
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM bug_evidence WHERE work_item_id=?`, id).Scan(&refs); err != nil {
+		return err
+	}
+	if refs > 0 {
+		return fmt.Errorf("Bug 已有关联证据，请关闭保留记录")
+	}
 	result, err := tx.Exec(`DELETE FROM work_items WHERE id=?`, id)
 	if err == nil {
 		if n, _ := result.RowsAffected(); n == 0 {
@@ -325,11 +516,20 @@ func scanChange(row rowScanner) (Change, error) {
 }
 
 func normalizeChange(v *Change) error {
+	return normalizeChangeForSave(v, false)
+}
+
+// Delivery drafts retain the author's SQL verbatim. Only metadata is saved;
+// readiness and execution still require the strict supported SQL dialect.
+func normalizeChangeForSave(v *Change, sqlDraft bool) error {
 	v.Kind, v.Title, v.Service = strings.TrimSpace(v.Kind), strings.TrimSpace(v.Title), strings.TrimSpace(v.Service)
 	v.Reference, v.Summary = strings.TrimSpace(v.Reference), strings.TrimSpace(v.Summary)
 	v.RiskLevel, v.RollbackPlan = strings.TrimSpace(v.RiskLevel), strings.TrimSpace(v.RollbackPlan)
 	if v.Kind == "" || v.Title == "" {
 		return fmt.Errorf("变更类型和标题必填")
+	}
+	if v.Kind == "manual" && (len(v.Reference) > 65536 || len(v.Summary) > 65536) {
+		return fmt.Errorf("自定义处理记录不能超过 64 KiB")
 	}
 	if v.RiskLevel == "" {
 		v.RiskLevel = "medium"
@@ -341,8 +541,17 @@ func normalizeChange(v *Change) error {
 		if v.Kind != "mysql" || v.Service == "" || !validResourceName(v.SQL.ResourceAlias) {
 			return fmt.Errorf("SQL 变更必须关联应用与资源别名")
 		}
-		if _, err := parseChangeSQL(v.SQL.Content); err != nil {
+		strictSQL := !sqlDraft || v.SQL.DataSync != nil
+		if err := normalizeSQLEnvironmentOverridesForSave(v.SQL, strictSQL); err != nil {
 			return err
+		}
+		if err := validateSQLDraftContent(v.SQL.Content); err != nil {
+			return err
+		}
+		if strictSQL {
+			if _, err := parseChangeSQL(v.SQL.Content); err != nil {
+				return err
+			}
 		}
 		if v.SQL.MaxAffectedRows < 1 || v.SQL.MaxAffectedRows > 10000 {
 			return fmt.Errorf("允许影响行数为 1–10000")
@@ -367,7 +576,7 @@ func normalizeChange(v *Change) error {
 }
 
 func (s *Store) CreateChange(v *Change) error {
-	if err := normalizeChange(v); err != nil {
+	if err := normalizeChangeForSave(v, true); err != nil {
 		return err
 	}
 	now := time.Now().Unix()
@@ -455,6 +664,11 @@ func (s *Store) ChangeWorkItems(changeID int64) []WorkItem {
 }
 
 func (s *Store) UpdateChange(v *Change) error {
+	if touched, err := s.changeExecutionTouched(v.ID); err != nil {
+		return err
+	} else if touched {
+		return fmt.Errorf("变更已有执行记录，不能覆盖修改；请新增后续变更并关联原需求 / Bug")
+	}
 	current := s.GetChange(v.ID)
 	if current == nil {
 		return fmt.Errorf("变更不存在")
@@ -465,7 +679,7 @@ func (s *Store) UpdateChange(v *Change) error {
 	if current.SQL != nil && current.SQL.DataSync != nil && (v.Kind != current.Kind || v.Service != current.Service || digestJSON(v.SQL) != digestJSON(current.SQL)) {
 		return fmt.Errorf("数据同步差异已冻结，请重新对比生成新计划，不可直接改写同步 SQL")
 	}
-	if err := normalizeChange(v); err != nil {
+	if err := normalizeChangeForSave(v, true); err != nil {
 		return err
 	}
 	tx, err := s.db.Begin()
@@ -497,6 +711,9 @@ func (s *Store) SetChangeWorkItems(changeID int64, ids []int64) error {
 	change := s.GetChange(changeID)
 	if change == nil {
 		return fmt.Errorf("变更不存在")
+	}
+	if change.DeliveryOwnership != nil {
+		return fmt.Errorf("此变更已区分来源和交付归属，请在原始工作项维护，不能覆盖关联关系")
 	}
 	if change.Status != ChangeDraft {
 		return fmt.Errorf("仅草稿变更可调整关联需求")
@@ -539,6 +756,9 @@ func (s *Store) SetChangeWorkItems(changeID int64, ids []int64) error {
 		if _, err := tx.Exec(`INSERT INTO work_item_changes(work_item_id,change_id) VALUES(?,?)`, id, changeID); err != nil {
 			return err
 		}
+		if err = recordResearchRelation(tx, id, change.Owner, "participant"); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE changes SET updated_at=? WHERE id=?`, time.Now().Unix(), changeID); err != nil {
 		return err
@@ -547,6 +767,13 @@ func (s *Store) SetChangeWorkItems(changeID int64, ids []int64) error {
 }
 
 func (s *Store) SetChangeReady(id int64, ready bool) (*Change, error) {
+	if !ready {
+		if touched, err := s.changeExecutionTouched(id); err != nil {
+			return nil, err
+		} else if touched {
+			return nil, fmt.Errorf("变更已有执行记录，不能退回修改；请新增后续变更")
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -559,8 +786,33 @@ func (s *Store) SetChangeReady(id int64, ready bool) (*Change, error) {
 	if err = tx.QueryRow(`SELECT status FROM changes WHERE id=?`, id).Scan(&current); err != nil {
 		return nil, fmt.Errorf("变更不存在")
 	}
+	if current != ChangeDraft && current != ChangeReady {
+		return nil, fmt.Errorf("归档变更不可就绪或重新打开")
+	}
 	status := ChangeDraft
 	if ready {
+		// The locked payload is authoritative: draft saving may retain SQL that
+		// is not executable. Direct ready endpoints must not bypass validation.
+		change, e := scanChange(tx.QueryRow(changeSelect+` WHERE id=?`, id))
+		if e != nil {
+			return nil, e
+		}
+		if change.Kind == "mysql" {
+			var doc string
+			var payload struct {
+				SQL *SQLChange `json:"sql"`
+			}
+			if e = tx.QueryRow(`SELECT document FROM change_payloads WHERE change_id=?`, id).Scan(&doc); e != nil {
+				return nil, fmt.Errorf("请补齐 SQL 变更内容")
+			}
+			if e = json.Unmarshal([]byte(doc), &payload); e != nil || payload.SQL == nil {
+				return nil, fmt.Errorf("SQL 变更内容无效，请重新核对草稿")
+			}
+			change.SQL = payload.SQL
+			if e = normalizeChange(&change); e != nil {
+				return nil, fmt.Errorf("SQL 尚未通过就绪校验：%w", e)
+			}
+		}
 		status = ChangeReady
 	} else {
 		var refs int
@@ -614,6 +866,9 @@ func (s *Store) DeleteChange(id int64) error {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM change_payloads WHERE change_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM change_delivery_ownership WHERE change_id=?`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -904,7 +1159,37 @@ func validApplicationResourceKind(kind string) bool {
 }
 
 func (s *Store) ApplicationResources(service string) ApplicationResources {
+	for attempt := 0; attempt < 3; attempt++ {
+		revision := s.applicationResourceRevision(service)
+		value := s.readApplicationResources(service)
+		if s.applicationResourceRevision(service) == revision {
+			value.Revision = revision
+			return value
+		}
+	}
+	return ApplicationResources{Revision: s.applicationResourceRevision(service), Error: "应用资源正在变化，请重新读取", Requirements: []ApplicationResourceRequirement{}, Bindings: []ApplicationEnvironmentResource{}}
+}
+
+func (s *Store) readApplicationResources(service string) ApplicationResources {
+	if out, ok := s.composedApplicationResources(service); ok {
+		return out
+	}
 	service = strings.TrimSpace(service)
+	if name := s.applicationResourceGroup(service); name != "" {
+		out := ApplicationResources{ResourceGroup: name, Requirements: []ApplicationResourceRequirement{}, Bindings: []ApplicationEnvironmentResource{}}
+		if g := s.ResourceGroup(name); g != nil {
+			out.GroupRevision = g.Revision
+			out.Requirements = g.Requirements
+			out.Bindings = g.Bindings
+			for i := range out.Requirements {
+				out.Requirements[i].Service = service
+			}
+			for i := range out.Bindings {
+				out.Bindings[i].Service = service
+			}
+		}
+		return out
+	}
 	out := ApplicationResources{Requirements: []ApplicationResourceRequirement{}, Bindings: []ApplicationEnvironmentResource{}}
 	rows, err := s.db.Query(`SELECT service,alias,kind,required,COALESCE(description,'') FROM application_resource_requirements WHERE service=? ORDER BY alias`, service)
 	if err == nil {
@@ -932,58 +1217,72 @@ func (s *Store) ApplicationResources(service string) ApplicationResources {
 }
 
 func (s *Store) SaveApplicationResources(service string, resources ApplicationResources) error {
+	if resources.CompositionVersion != 2 && resources.ResourceGroup == "" {
+		for _, r := range resources.Requirements {
+			if len(r.Sources) > 0 {
+				resources.CompositionVersion = 2
+				resources.OwnRequirements, resources.OwnBindings = resources.Requirements, resources.Bindings
+				break
+			}
+		}
+	}
+	if resources.CompositionVersion == 2 {
+		return s.saveComposedResources(service, resources)
+	}
+	var composed int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM deploy_meta WHERE key=?`, "application_resources_v2:"+service).Scan(&composed)
+	if composed > 0 {
+		return fmt.Errorf("应用已使用多资源组配置，请刷新页面后保存")
+	}
 	service = strings.TrimSpace(service)
 	if !s.hasResourceApplication(service) {
 		return fmt.Errorf("应用不存在")
 	}
-	requirements := map[string]ApplicationResourceRequirement{}
-	for _, requirement := range resources.Requirements {
-		requirement.Service = service
-		requirement.Alias, requirement.Kind = strings.TrimSpace(requirement.Alias), strings.TrimSpace(requirement.Kind)
-		requirement.Description = strings.TrimSpace(requirement.Description)
-		if !validResourceName(requirement.Alias) {
-			return fmt.Errorf("资源别名支持字母、数字、点、短横线和下划线")
+	resources.ResourceGroup = strings.TrimSpace(resources.ResourceGroup)
+	if resources.ResourceGroup != "" {
+		g := s.ResourceGroup(resources.ResourceGroup)
+		if g == nil {
+			return fmt.Errorf("资源组不存在")
 		}
-		if !validApplicationResourceKind(requirement.Kind) {
-			return fmt.Errorf("应用资源类型仅支持 mysql、nacos 或 redis")
+		if resources.GroupRevision != 0 && resources.GroupRevision != g.Revision {
+			return fmt.Errorf("资源组已变化，请重新读取后确认")
 		}
-		if _, exists := requirements[requirement.Alias]; exists {
-			return fmt.Errorf("资源别名不能重复")
-		}
-		requirements[requirement.Alias] = requirement
+		// Group members have one authority, never accept hidden app overrides.
+		resources.Requirements, resources.Bindings = g.Requirements, g.Bindings
+		resources.GroupRevision = g.Revision
 	}
-	seenBindings := map[string]bool{}
-	for i := range resources.Bindings {
-		binding := &resources.Bindings[i]
-		binding.Service, binding.Environment = service, strings.TrimSpace(binding.Environment)
-		binding.Alias, binding.Connection = strings.TrimSpace(binding.Alias), strings.TrimSpace(binding.Connection)
-		requirement, ok := requirements[binding.Alias]
-		if !ok {
-			return fmt.Errorf("资源绑定引用了未声明的别名 %s", binding.Alias)
-		}
-		if s.GetEnvironment(binding.Environment) == nil {
-			return fmt.Errorf("资源绑定的环境不存在")
-		}
-		connection := s.GetConnection(binding.Connection)
-		if connection == nil || connection.Kind != requirement.Kind {
-			return fmt.Errorf("资源 %s 必须绑定 %s 类型连接", binding.Alias, requirement.Kind)
-		}
-		if requirement.Kind == "nacos" {
-			if err := normalizeNacosBindingConfig(binding.Config); err != nil {
-				return err
-			}
-		}
-		key := binding.Environment + "\x00" + binding.Alias
-		if seenBindings[key] {
-			return fmt.Errorf("同一环境的资源别名不能重复绑定")
-		}
-		seenBindings[key] = true
+	requirements, err := s.normalizeApplicationResources(service, &resources)
+	if err != nil {
+		return err
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err = s.advanceApplicationResourceRevision(tx, service, resources.ExpectedRevision); err != nil {
+		return err
+	}
+	if resources.ResourceGroup != "" {
+		var raw string
+		var current ResourceGroup
+		if err = tx.QueryRow(s.resourceGroupLockQuery(), "resource_group:"+resources.ResourceGroup).Scan(&raw); err != nil {
+			return fmt.Errorf("资源组已删除，请重新读取")
+		}
+		if json.Unmarshal([]byte(raw), &current) != nil || current.Revision != resources.GroupRevision {
+			return fmt.Errorf("资源组已变化，请重新确认")
+		}
+		if _, err = tx.Exec(`INSERT OR IGNORE INTO resource_applications(name) VALUES(?)`, service); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO deploy_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, "application_resource_group:"+service, resources.ResourceGroup); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if _, err = tx.Exec(`DELETE FROM deploy_meta WHERE key=?`, "application_resource_group:"+service); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM application_environment_resources WHERE service=?`, service); err != nil {
 		return err
 	}

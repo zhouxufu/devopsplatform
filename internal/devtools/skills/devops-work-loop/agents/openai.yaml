@@ -1,0 +1,9 @@
+interface:
+  display_name: "需求与 Bug 自动跟进"
+  short_description: "在任务授权内开发、登记变更、交付开发测试环境并核对回归与来源回写"
+  default_prompt: "使用 $devops-work-loop 接续当前需求或 Bug 的跟进任务，核对授权后完成本轮开发交付。"
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "devOps"
+      description: "用户已连接的研发效能平台 MCP"

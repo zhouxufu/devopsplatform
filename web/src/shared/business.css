@@ -1,0 +1,24 @@
+/* Domain layout and chart semantics. Component geometry and colors come from shadcn. */
+html,body,#app{height:100%;min-width:0;margin:0}
+body{overflow:hidden;font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+#app{height:100dvh}
+:root{
+ --bg:var(--background);--panel:var(--card);--panel2:var(--muted);--text:var(--foreground);--dim:var(--muted-foreground);
+ --brand:var(--primary);--brand-soft:var(--accent);--brand-ink:var(--accent-foreground);--input-bg:var(--background);
+ --error:var(--destructive);--warn:oklch(.7 .14 65);--ok:oklch(.6 .13 155);--info:var(--primary);--trace:var(--chart-3);
+ --mono:ui-monospace,SFMono-Regular,Menlo,monospace;--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+.layout,.research-layout,.workbench-layout{display:flex;min-width:0;min-height:0;width:100%;height:100dvh}
+:is(.layout,.research-layout,.workbench-layout)>main{flex:1;min-width:0;min-height:0;overflow:auto}
+.console-content{min-width:0}
+.table-footer,.table-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:16px}
+.table-summary{margin-right:auto}
+.cell-actions{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+.table-scroll,.record-scroll,.records-scroll,.application-table-scroll,.evidence-scroll,.sync-table-scroll,.config-results{min-width:0;max-width:100%;overflow:auto}
+.console-table small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted-foreground);font-size:.75rem;line-height:1.5}
+.lp-grid{stroke:var(--border)}.lp-axis{fill:var(--muted-foreground)}
+.st-ok{color:var(--ok)}.st-fail{color:var(--destructive)}.st-run{color:var(--warn)}
+.fld{display:grid;gap:.5rem;margin-bottom:1rem}
+.fld>label{font-size:.875rem;font-weight:500}
+.op{color:var(--primary)}.op.del{color:var(--destructive)}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}

@@ -13,7 +13,7 @@ import (
 )
 
 func TestMultipleLevelsAgreeForSearchCountsAndLive(t *testing.T) {
-	st, err := Open(t.TempDir(), 7, 1)
+	st, err := openTestLogStorage(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +46,7 @@ func TestMultipleLevelsAgreeForSearchCountsAndLive(t *testing.T) {
 		{"unknown literal", "ERROR') OR 1=1 --", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			awaitTestLogDelivery(t, st)
 			resp, err := st.Search("orders", "test", "", tc.levels, now-1, now+100, tc.query, "", "", 50)
 			if err != nil {
 				t.Fatal(err)

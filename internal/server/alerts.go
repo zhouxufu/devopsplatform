@@ -86,7 +86,7 @@ func NewAlertEngine(st *Storage) *AlertEngine {
 	e.ensureTables()
 	e.migrateLegacy()
 	e.reload()
-	go e.Run(make(chan struct{}))
+	go e.Run(st.stop)
 	return e
 }
 

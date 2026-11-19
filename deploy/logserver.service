@@ -1,9 +1,10 @@
 [Unit]
 Description=LogPlatform Server
-After=network-online.target
+After=network-online.target victorialogs.service
+Wants=victorialogs.service
 
 [Service]
-ExecStart=/usr/local/bin/logserver -addr :9801 -data /data/logplatform -token CHANGE_ME -retention-days 7 -disk-gb 200 -rules /etc/logplatform/rules.json
+ExecStart=/usr/local/bin/logserver -addr :9801 -data /data/logplatform -token CHANGE_ME -retention-days 7 -disk-gb 2 -victorialogs-url http://127.0.0.1:9428 -rules /etc/logplatform/rules.json
 Restart=always
 RestartSec=5
 LimitNOFILE=65536

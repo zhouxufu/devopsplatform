@@ -1,0 +1,6 @@
+name: research
+display: 研发工作台
+version: 0.1.0
+backend: delivery-core
+ui_path: /ui/research
+nav_icon: "research"

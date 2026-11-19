@@ -11,9 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"logplatform/internal/appcatalog"
+	"logplatform/pkg/apidoc"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -21,9 +24,24 @@ import (
 
 // Store deploy 数据（服务配置/构建历史/构建日志/制品）
 type Store struct {
-	db        *deployDB
-	secretKey []byte
-	dataDir   string
+	deploymentAgentOnce     sync.Once
+	javaRecheckOnce         sync.Once
+	deploymentAgentStopOnce sync.Once
+	deploymentAgentStop     chan struct{}
+	deploymentAgentWG       sync.WaitGroup
+	apiDocumentMu           sync.Mutex
+	serviceConfigMu         sync.Mutex
+	resourceConnectionMu    sync.Mutex
+	apiTestOnce             sync.Once
+	apiTests                *apiTestManager
+	pipelineRunner          *PipelineRunner
+	db                      *deployDB
+	secretKey               []byte
+	dataDir                 string
+	zentaoSessionsMu        sync.Mutex
+	zentaoSessions          map[zentaoSessionKey]*zentaoSession
+	researchPeopleMu        sync.Mutex
+	researchDisplayPeople   map[zentaoSessionKey]researchPeopleSnapshot
 }
 
 var ErrRunConflict = errors.New("operation already running")
@@ -61,7 +79,7 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			build_host TEXT DEFAULT '', build_cmd TEXT DEFAULT '',
 			build_tool TEXT DEFAULT 'command', maven_executable TEXT DEFAULT 'auto',
 			maven_goals TEXT DEFAULT 'clean package', maven_profiles TEXT DEFAULT '',
-			maven_properties TEXT DEFAULT '', maven_settings_path TEXT DEFAULT '',
+			maven_properties TEXT DEFAULT '', maven_arguments TEXT DEFAULT '', maven_threads TEXT DEFAULT '', maven_update_snapshots INTEGER DEFAULT 0, maven_settings_path TEXT DEFAULT '',
 			gradle_executable TEXT DEFAULT 'auto', gradle_tasks TEXT DEFAULT 'clean build',
 			gradle_excluded_tasks TEXT DEFAULT '', gradle_project_properties TEXT DEFAULT '',
 			gradle_system_properties TEXT DEFAULT '',
@@ -190,6 +208,9 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			"maven_goals":               `ALTER TABLE services ADD COLUMN maven_goals TEXT DEFAULT 'clean package'`,
 			"maven_profiles":            `ALTER TABLE services ADD COLUMN maven_profiles TEXT DEFAULT ''`,
 			"maven_properties":          `ALTER TABLE services ADD COLUMN maven_properties TEXT DEFAULT ''`,
+			"maven_arguments":           `ALTER TABLE services ADD COLUMN maven_arguments TEXT DEFAULT ''`,
+			"maven_threads":             `ALTER TABLE services ADD COLUMN maven_threads TEXT DEFAULT ''`,
+			"maven_update_snapshots":    `ALTER TABLE services ADD COLUMN maven_update_snapshots INTEGER DEFAULT 0`,
 			"maven_settings_path":       `ALTER TABLE services ADD COLUMN maven_settings_path TEXT DEFAULT ''`,
 			"gradle_executable":         `ALTER TABLE services ADD COLUMN gradle_executable TEXT DEFAULT 'auto'`,
 			"gradle_tasks":              `ALTER TABLE services ADD COLUMN gradle_tasks TEXT DEFAULT 'clean build'`,
@@ -236,6 +257,7 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			{"deploys", "artifact_uri", `ALTER TABLE deploys ADD COLUMN artifact_uri TEXT DEFAULT ''`},
 			{"deploys", "external_id", `ALTER TABLE deploys ADD COLUMN external_id TEXT DEFAULT ''`},
 			{"environments", "approvers", `ALTER TABLE environments ADD COLUMN approvers TEXT DEFAULT ''`},
+			{"environments", "purpose", `ALTER TABLE environments ADD COLUMN purpose VARCHAR(32) NOT NULL DEFAULT ''`},
 			{"service_environments", "host_group", `ALTER TABLE service_environments ADD COLUMN host_group TEXT DEFAULT ''`},
 			{"service_environments", "batch_size", `ALTER TABLE service_environments ADD COLUMN batch_size INTEGER DEFAULT 1`},
 			{"service_environments", "pause_between_batches", `ALTER TABLE service_environments ADD COLUMN pause_between_batches INTEGER DEFAULT 0`},
@@ -252,12 +274,38 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			}
 		}
 	}
+	if _, err := db.Exec(instanceOperationSchema); err != nil {
+		db.Close()
+		return nil, err
+	}
 	secretKey, err := loadCredentialKey(dir)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{db: db, secretKey: secretKey, dataDir: dir}
+	s := &Store{db: db, secretKey: secretKey, dataDir: dir, deploymentAgentStop: make(chan struct{})}
+	documentType := "TEXT"
+	if db.dialect == "mysql" {
+		documentType = "LONGTEXT"
+	}
+	for _, q := range deploymentAgentSchema(documentType) {
+		if _, err := db.Exec(q); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	if err := s.initPipelineRunNumbers(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.initReleaseOrderNumbers(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.initArtifactRetention(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS build_run_snapshots(run_id BIGINT PRIMARY KEY,config_cipher LONGTEXT NOT NULL,commit_ref VARCHAR(64) NOT NULL DEFAULT '',created_at BIGINT NOT NULL)`); err != nil {
 		db.Close()
 		return nil, err
@@ -273,7 +321,7 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 	if db.dialect == "sqlite" {
 		for _, q := range []string{
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_services_application_id ON services(application_id) WHERE application_id<>''`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_source ON artifacts(source,source_id) WHERE source<>'' AND source_id>0`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_outputs ON artifacts(source,source_id,kind,digest) WHERE source<>'' AND source_id>0`,
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_builds_pipeline_run ON builds(pipeline_run_id) WHERE pipeline_run_id>0`,
 			`CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status,updated_at)`,
 			`CREATE INDEX IF NOT EXISTS idx_work_items_assigned ON work_items(assigned_to,updated_at)`,
@@ -290,6 +338,9 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 				return nil, err
 			}
 		}
+	}
+	if err := s.migrateApplicationNames(); err != nil {
+		return nil, err
 	}
 	if err := s.backfillArtifacts(); err != nil {
 		return nil, err
@@ -323,7 +374,7 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_builds_one_running ON builds(service) WHERE status='running'`,
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_one_active ON pipeline_runs(service) WHERE status IN ('running','waiting_deploy')`,
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_one_running ON deploys(service,host) WHERE status='running'`,
-			`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_source ON artifacts(source,source_id) WHERE source<>'' AND source_id>0`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_outputs ON artifacts(source,source_id,kind,digest) WHERE source<>'' AND source_id>0`,
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_builds_pipeline_run ON builds(pipeline_run_id) WHERE pipeline_run_id>0`,
 		} {
 			if _, err := db.Exec(q); err != nil {
@@ -333,6 +384,18 @@ func OpenDatabase(dir string, cfg DatabaseConfig) (*Store, error) {
 		}
 	}
 	if err := s.initDeliverySchema(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateMySQLInstanceConnections(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateLegacyNacosResourceScopes(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.backfillResearchParticipants(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -405,7 +468,7 @@ func (s *Store) recoverInterrupted() error {
 	for _, q := range []string{
 		`UPDATE builds SET status='interrupted', ended_at=strftime('%s','now'), log=substr(COALESCE(log,'') || char(10) || '进程重启，构建已中断', -20000) WHERE status='running'`,
 		`UPDATE pipeline_runs SET status='interrupted', ended_at=strftime('%s','now'), log=substr(COALESCE(log,'') || char(10) || '进程重启，流水线已中断', -40000) WHERE status='running'`,
-		`UPDATE deploys SET status='interrupted', ended_at=strftime('%s','now'), log=substr(COALESCE(log,'') || char(10) || '进程重启，部署结果未知，请人工确认', -20000) WHERE status='running'`,
+		`UPDATE deploys SET status='interrupted', ended_at=strftime('%s','now'), log=substr(COALESCE(log,'') || char(10) || '进程重启，部署结果未知，请人工确认', -20000) WHERE status='running' AND id NOT IN (SELECT deploy_id FROM agent_deployment_tasks)`,
 	} {
 		if _, err := tx.Exec(q); err != nil {
 			return err
@@ -416,7 +479,14 @@ func (s *Store) recoverInterrupted() error {
 
 // Service 一个可构建/部署的服务配置
 type Service struct {
+	// Resolved only by the Runner; encrypted in immutable build snapshots.
+	APIDocumentation    *apidoc.Frozen `json:"api_documentation,omitempty"`
+	DocumentEnvironment string         `json:"document_environment,omitempty"`
+	// Server-assigned per-run provenance; not stored as mutable app settings.
+	BuildVariant            string   `json:"build_variant,omitempty"`
 	Name                    string   `json:"name"`
+	DisplayName             string   `json:"display_name"`
+	Identifier              string   `json:"identifier"`
 	ApplicationID           string   `json:"application_id"`
 	Tags                    []string `json:"tags,omitempty"`
 	GitURL                  string   `json:"git_url"`       // 配置后插件自管源码（clone/pull），与 workdir 二选一
@@ -431,6 +501,9 @@ type Service struct {
 	MavenGoals              string   `json:"maven_goals,omitempty"`
 	MavenProfiles           string   `json:"maven_profiles,omitempty"`
 	MavenProperties         string   `json:"maven_properties,omitempty"`
+	MavenThreads            string   `json:"maven_threads,omitempty"`
+	MavenArguments          string   `json:"maven_arguments,omitempty"`
+	MavenUpdateSnapshots    bool     `json:"maven_update_snapshots,omitempty"`
 	MavenSettingsPath       string   `json:"maven_settings_path,omitempty"`
 	GradleExecutable        string   `json:"gradle_executable,omitempty"`
 	GradleTasks             string   `json:"gradle_tasks,omitempty"`
@@ -459,6 +532,13 @@ type Service struct {
 }
 
 func (s *Store) UpsertService(sv Service) error {
+	if sv.DisplayName != "" {
+		var err error
+		sv.DisplayName, err = appcatalog.ValidateDisplayName(sv.DisplayName)
+		if err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(sv.ApplicationID) == "" {
 		_ = s.db.QueryRow(`SELECT application_id FROM services WHERE name=?`, sv.Name).Scan(&sv.ApplicationID)
 	}
@@ -471,22 +551,22 @@ func (s *Store) UpsertService(sv Service) error {
 	}
 	sv.Tags = normalizeServiceTags(sv.Tags)
 	tagsJSON, _ := json.Marshal(sv.Tags)
-	_, err := s.db.Exec(`INSERT INTO services(name,application_id,git_url,branch,workdir,artifact_type,tags,build_mode,build_host,build_cmd,build_tool,maven_executable,maven_goals,maven_profiles,maven_properties,maven_settings_path,gradle_executable,gradle_tasks,gradle_excluded_tasks,gradle_project_properties,gradle_system_properties,artifact_glob,image_name,pre_cmd,target_type,remote_dir,start_cmd,stop_cmd,health_url,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,strftime('%s','now'))
+	_, err := s.db.Exec(`INSERT INTO services(name,application_id,git_url,branch,workdir,artifact_type,tags,build_mode,build_host,build_cmd,build_tool,maven_executable,maven_goals,maven_profiles,maven_properties,maven_arguments,maven_threads,maven_update_snapshots,maven_settings_path,gradle_executable,gradle_tasks,gradle_excluded_tasks,gradle_project_properties,gradle_system_properties,artifact_glob,image_name,pre_cmd,target_type,remote_dir,start_cmd,stop_cmd,health_url,display_name,created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,strftime('%s','now'))
 		ON CONFLICT(name) DO UPDATE SET application_id=excluded.application_id,git_url=excluded.git_url,branch=excluded.branch,workdir=excluded.workdir,
 			artifact_type=excluded.artifact_type,tags=excluded.tags,build_mode=excluded.build_mode,build_host=excluded.build_host,
 			build_cmd=excluded.build_cmd,build_tool=excluded.build_tool,maven_executable=excluded.maven_executable,maven_goals=excluded.maven_goals,
-			maven_profiles=excluded.maven_profiles,maven_properties=excluded.maven_properties,maven_settings_path=excluded.maven_settings_path,
+			maven_profiles=excluded.maven_profiles,maven_properties=excluded.maven_properties,maven_arguments=excluded.maven_arguments,maven_threads=excluded.maven_threads,maven_update_snapshots=excluded.maven_update_snapshots,maven_settings_path=excluded.maven_settings_path,
 			gradle_executable=excluded.gradle_executable,gradle_tasks=excluded.gradle_tasks,gradle_excluded_tasks=excluded.gradle_excluded_tasks,
 			gradle_project_properties=excluded.gradle_project_properties,gradle_system_properties=excluded.gradle_system_properties,
 			artifact_glob=excluded.artifact_glob,image_name=excluded.image_name,pre_cmd=excluded.pre_cmd,
 			target_type=excluded.target_type,remote_dir=excluded.remote_dir,start_cmd=excluded.start_cmd,
 			stop_cmd=excluded.stop_cmd,health_url=excluded.health_url`,
 		sv.Name, sv.ApplicationID, sv.GitURL, sv.Branch, sv.Workdir, sv.ArtifactType, string(tagsJSON), sv.BuildMode, sv.BuildHost, sv.BuildCmd,
-		sv.BuildTool, sv.MavenExecutable, sv.MavenGoals, sv.MavenProfiles, sv.MavenProperties, sv.MavenSettingsPath,
+		sv.BuildTool, sv.MavenExecutable, sv.MavenGoals, sv.MavenProfiles, sv.MavenProperties, sv.MavenArguments, sv.MavenThreads, sv.MavenUpdateSnapshots, sv.MavenSettingsPath,
 		sv.GradleExecutable, sv.GradleTasks, sv.GradleExcludedTasks, sv.GradleProjectProperties, sv.GradleSystemProperties,
 		sv.ArtifactGlob, sv.ImageName, sv.PreCmd,
-		sv.TargetType, sv.RemoteDir, sv.StartCmd, sv.StopCmd, sv.HealthURL)
+		sv.TargetType, sv.RemoteDir, sv.StartCmd, sv.StopCmd, sv.HealthURL, sv.DisplayName)
 	if sv.Steps == nil || len(sv.Steps) == 0 {
 		sv.Steps = ExpandTemplate(sv)
 	}
@@ -517,18 +597,27 @@ func normalizeServiceTags(tags []string) []string {
 
 func (s *Store) DeleteService(name string) error {
 	if release := s.ActiveReleaseForServiceEnvironment(name, ""); release != nil {
-		return fmt.Errorf("应用存在进行中的发布单 #%d，不能删除", release.ID)
+		return fmt.Errorf("应用存在进行中的发布单 %s，不能删除", release.DisplayLabel())
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockArtifactLifecycle(tx); err != nil {
+		return err
+	}
+	if err := instanceOperationBusy(tx, name, "", ""); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(`DELETE FROM service_environment_hosts WHERE service=?`, name); err == nil {
 		_, err = tx.Exec(`DELETE FROM service_environments WHERE service=?`, name)
 	}
 	if err == nil {
 		_, err = tx.Exec(`DELETE FROM service_delivery WHERE service=?`, name)
+	}
+	if err == nil {
+		_, err = tx.Exec(`DELETE FROM artifact_retention_policies WHERE service=?`, name)
 	}
 	if err == nil {
 		_, err = tx.Exec(`DELETE FROM services WHERE name=?`, name)
@@ -540,7 +629,7 @@ func (s *Store) DeleteService(name string) error {
 }
 
 func (s *Store) Services() []Service {
-	rows, err := s.db.Query(`SELECT name,COALESCE(application_id,''),git_url,branch,workdir,artifact_type,COALESCE(tags,'[]'),build_mode,build_host,build_cmd,build_tool,maven_executable,maven_goals,maven_profiles,maven_properties,maven_settings_path,gradle_executable,gradle_tasks,gradle_excluded_tasks,gradle_project_properties,gradle_system_properties,artifact_glob,image_name,pre_cmd,target_type,remote_dir,start_cmd,stop_cmd,health_url,COALESCE(steps,'[]') FROM services ORDER BY name`)
+	rows, err := s.db.Query(`SELECT name,COALESCE(application_id,''),git_url,branch,workdir,artifact_type,COALESCE(tags,'[]'),build_mode,build_host,build_cmd,build_tool,maven_executable,maven_goals,maven_profiles,maven_properties,maven_arguments,maven_threads,maven_update_snapshots,maven_settings_path,gradle_executable,gradle_tasks,gradle_excluded_tasks,gradle_project_properties,gradle_system_properties,artifact_glob,image_name,pre_cmd,target_type,remote_dir,start_cmd,stop_cmd,health_url,COALESCE(steps,'[]'),COALESCE(display_name,'') FROM services ORDER BY name`)
 	out := []Service{}
 	if err != nil {
 		return out
@@ -548,15 +637,19 @@ func (s *Store) Services() []Service {
 	defer rows.Close()
 	for rows.Next() {
 		var sv Service
-		var gitURL, br, wd, at, bm, bh, bc, bt, me, mg, mp, mprop, msp, ge, gt, get, gpp, gsp, ag, in, pc, tt, rd, sc, stc, hu sql.NullString
+		var gitURL, br, wd, at, bm, bh, bc, bt, me, mg, mp, mprop, margs, mthreads, msp, ge, gt, get, gpp, gsp, ag, in, pc, tt, rd, sc, stc, hu sql.NullString
 		var stepsJ, tagsJ string
-		if rows.Scan(&sv.Name, &sv.ApplicationID, &gitURL, &br, &wd, &at, &tagsJ, &bm, &bh, &bc, &bt, &me, &mg, &mp, &mprop, &msp, &ge, &gt, &get, &gpp, &gsp, &ag, &in, &pc, &tt, &rd, &sc, &stc, &hu, &stepsJ) == nil {
+		var mupdate sql.NullBool
+		if rows.Scan(&sv.Name, &sv.ApplicationID, &gitURL, &br, &wd, &at, &tagsJ, &bm, &bh, &bc, &bt, &me, &mg, &mp, &mprop, &margs, &mthreads, &mupdate, &msp, &ge, &gt, &get, &gpp, &gsp, &ag, &in, &pc, &tt, &rd, &sc, &stc, &hu, &stepsJ, &sv.DisplayName) == nil {
+			sv.DisplayName = appcatalog.DisplayName(sv.DisplayName, sv.Name)
+			sv.Identifier = appcatalog.Identifier(sv.Name)
 			json.Unmarshal([]byte(stepsJ), &sv.Steps)
 			json.Unmarshal([]byte(tagsJ), &sv.Tags)
 			sv.GitURL, sv.Branch, sv.Workdir, sv.ArtifactType, sv.BuildMode = gitURL.String, br.String, wd.String, at.String, bm.String
 			sv.BuildHost, sv.BuildCmd, sv.ArtifactGlob, sv.ImageName, sv.PreCmd = bh.String, bc.String, ag.String, in.String, pc.String
 			sv.BuildTool, sv.MavenExecutable, sv.MavenGoals = bt.String, me.String, mg.String
-			sv.MavenProfiles, sv.MavenProperties, sv.MavenSettingsPath = mp.String, mprop.String, msp.String
+			sv.MavenProfiles, sv.MavenProperties, sv.MavenArguments, sv.MavenThreads, sv.MavenSettingsPath = mp.String, mprop.String, margs.String, mthreads.String, msp.String
+			sv.MavenUpdateSnapshots = mupdate.Bool
 			sv.GradleExecutable, sv.GradleTasks, sv.GradleExcludedTasks = ge.String, gt.String, get.String
 			sv.GradleProjectProperties, sv.GradleSystemProperties = gpp.String, gsp.String
 			sv.TargetType, sv.RemoteDir, sv.StartCmd, sv.StopCmd, sv.HealthURL = tt.String, rd.String, sc.String, stc.String, hu.String
@@ -715,7 +808,18 @@ func (s *Store) BuildLog(id int64) string {
 	return log
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.deploymentAgentStopOnce.Do(func() {
+		if s.deploymentAgentStop != nil {
+			close(s.deploymentAgentStop)
+		}
+	})
+	s.deploymentAgentWG.Wait()
+	if s.apiTests != nil {
+		s.apiTests.close()
+	}
+	return s.db.Close()
+}
 
 // Driver reports the relational metadata backend used by the deployment
 // plugin. Workspaces, artifacts and encryption material remain in dataDir.
@@ -738,50 +842,71 @@ func (s *Store) UpsertHost(h Host) error {
 	}
 	if current := s.GetHost(h.Name); current != nil {
 		if release := s.ActiveReleaseForHost(h.Name); release != nil {
-			return fmt.Errorf("主机存在进行中的发布单 #%d，暂不能修改", release.ID)
-		}
-	}
-	if current := s.GetHost(h.Name); current != nil && current.Environment != h.Environment {
-		var refs int
-		_ = s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM host_group_hosts WHERE host=?)+(SELECT COUNT(*) FROM service_environment_hosts WHERE host=?)`, h.Name, h.Name).Scan(&refs)
-		if refs > 0 {
-			return fmt.Errorf("主机已被主机组或应用环境使用，不能直接变更环境")
+			return fmt.Errorf("主机存在应用 %s 的进行中发布单 %s，暂不能修改", release.Service, release.DisplayLabel())
 		}
 	}
 	password, err := s.encryptSecret(h.Password)
 	if err != nil {
 		return err
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockArtifactLifecycle(tx); err != nil {
+		return err
+	}
+	var currentEnvironment string
+	err = tx.QueryRow(`SELECT environment FROM hosts WHERE name=?`, h.Name).Scan(&currentEnvironment)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil && currentEnvironment != h.Environment {
+		var refs int
+		if err := tx.QueryRow(`SELECT (SELECT COUNT(*) FROM host_group_hosts WHERE host=?)+(SELECT COUNT(*) FROM service_environment_hosts WHERE host=?)`, h.Name, h.Name).Scan(&refs); err != nil {
+			return err
+		}
+		if refs > 0 {
+			return fmt.Errorf("主机已被主机组或应用环境使用，不能直接变更环境")
+		}
+	}
 	// 编辑时空密码代表保留已有凭据，防止表单脱敏后意外清空。
-	_, err = s.db.Exec(`INSERT INTO hosts(name,addr,user,key_path,password,host_key,environment) VALUES(?,?,?,?,?,?,?)
+	_, err = tx.Exec(`INSERT INTO hosts(name,addr,user,key_path,password,host_key,environment) VALUES(?,?,?,?,?,?,?)
 		ON CONFLICT(name) DO UPDATE SET addr=excluded.addr,user=excluded.user,key_path=excluded.key_path,
 		password=CASE WHEN excluded.password='' THEN hosts.password ELSE excluded.password END,host_key=excluded.host_key,environment=excluded.environment`,
 		h.Name, h.Addr, h.User, h.KeyPath, password, h.HostKey, h.Environment)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteHost(name string) error {
 	if release := s.ActiveReleaseForHost(name); release != nil {
-		return fmt.Errorf("主机存在进行中的发布单 #%d，不能删除", release.ID)
-	}
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM service_environment_hosts WHERE host=?`, name).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return fmt.Errorf("主机仍被 %d 个服务环境使用，请先解除关联", n)
-	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM host_group_hosts WHERE host=?`, name).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return fmt.Errorf("主机仍被 %d 个主机组使用，请先解除关联", n)
+		return fmt.Errorf("主机存在应用 %s 的进行中发布单 %s，不能删除", release.Service, release.DisplayLabel())
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockArtifactLifecycle(tx); err != nil {
+		return err
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM service_environment_hosts WHERE host=?`, name).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("主机仍被 %d 个服务环境使用，请先解除关联", n)
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM host_group_hosts WHERE host=?`, name).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("主机仍被 %d 个主机组使用，请先解除关联", n)
+	}
 	if _, err = tx.Exec(`DELETE FROM agent_configs WHERE host_name=?`, name); err == nil {
 		_, err = tx.Exec(`DELETE FROM hosts WHERE name=?`, name)
 	}
@@ -947,20 +1072,54 @@ func (s *Store) CreateDeploy(d *Deploy) error {
 	if active := s.ActiveDeploy(d.Service, d.Host); active != nil {
 		return fmt.Errorf("%w: %s 在 %s 已有部署 #%d", ErrRunConflict, d.Service, d.Host, active.ID)
 	}
-	res, err := s.db.Exec(`INSERT INTO deploys(service,version,host,environment,artifact_id,artifact_kind,artifact_uri,artifact_digest,reason,status,actor,started_at) VALUES(?,?,?,?,?,?,?,?,?,'running',?,?)`,
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = lockArtifactReferences(tx, d.ArtifactID); err != nil {
+		return err
+	}
+	var activeCount int
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM deploys WHERE service=? AND host=? AND status IN ('running','waiting_next_batch','needs_review')`, d.Service, d.Host).Scan(&activeCount); err != nil {
+		return err
+	}
+	if activeCount > 0 {
+		return ErrRunConflict
+	}
+	if err := instanceOperationBusy(tx, d.Service, d.Environment, d.Host); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`INSERT INTO deploys(service,version,host,environment,artifact_id,artifact_kind,artifact_uri,artifact_digest,reason,status,actor,started_at) VALUES(?,?,?,?,?,?,?,?,?,'running',?,?)`,
 		d.Service, d.Version, d.Host, d.Environment, d.ArtifactID, d.ArtifactKind, d.ArtifactURI, d.ArtifactDigest, d.Reason, d.Actor, d.StartedAt)
 	if err != nil {
+		tx.Rollback()
 		if active := s.ActiveDeploy(d.Service, d.Host); active != nil {
 			return fmt.Errorf("%w: %s 在 %s 已有部署 #%d", ErrRunConflict, d.Service, d.Host, active.ID)
 		}
 		return err
 	}
 	d.ID, _ = res.LastInsertId()
-	return nil
+	return tx.Commit()
 }
 
-func (s *Store) FinishDeploy(id int64, status string) {
-	s.db.Exec(`UPDATE deploys SET status=?,ended_at=strftime('%s','now'),log=(SELECT COALESCE(log,'') FROM deploys WHERE id=?) WHERE id=?`, status, id, id)
+func (s *Store) FinishDeploy(id int64, status string) error {
+	// Do not select the updated table in a subquery (MySQL error 1093).
+	// A late worker must not overwrite a timeout/interruption decision.
+	ended := time.Now().Unix()
+	if status == "needs_review" {
+		ended = 0
+	}
+	result, err := s.db.Exec(`UPDATE deploys SET status=?,ended_at=? WHERE id=? AND status IN ('running','waiting_next_batch')`, status, ended, id)
+	if err != nil {
+		return err
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return err
+	} else if n != 1 {
+		return ErrRunConflict
+	}
+	return nil
 }
 
 func (s *Store) AppendDeployLog(id int64, tail string) {
@@ -1010,7 +1169,7 @@ func (s *Store) GetDeploy(id int64) *Deploy {
 
 func (s *Store) ActiveDeploy(service, host string) *Deploy {
 	var d Deploy
-	if s.db.QueryRow(`SELECT id,service,version,host,status,actor,started_at FROM deploys WHERE service=? AND host=? AND status IN ('running','waiting_next_batch') ORDER BY id DESC LIMIT 1`, service, host).
+	if s.db.QueryRow(`SELECT id,service,version,host,status,actor,started_at FROM deploys WHERE service=? AND host=? AND status IN ('running','waiting_next_batch','needs_review') ORDER BY id DESC LIMIT 1`, service, host).
 		Scan(&d.ID, &d.Service, &d.Version, &d.Host, &d.Status, &d.Actor, &d.StartedAt) == nil {
 		return &d
 	}
@@ -1055,25 +1214,27 @@ type Stage struct {
 
 // PipelineRun 一次流水线运行（commit→产物→部署 全关联）
 type PipelineRun struct {
-	ID                int64   `json:"id"`
-	Service           string  `json:"service"`
-	Trigger           string  `json:"trigger"` // manual|api
-	Branch            string  `json:"branch,omitempty"`
-	Version           string  `json:"version,omitempty"`
-	BuildCommand      string  `json:"build_command,omitempty"`
-	Status            string  `json:"status"`
-	AutoDeploy        bool    `json:"auto_deploy"`
-	DeployHost        string  `json:"deploy_host,omitempty"` // deploy 阶段目标
-	DeployEnvironment string  `json:"deploy_environment,omitempty"`
-	Artifact          string  `json:"artifact,omitempty"`
-	ArtifactID        int64   `json:"artifact_id,omitempty"`
-	ArtifactKind      string  `json:"artifact_kind,omitempty"`
-	ArtifactDigest    string  `json:"artifact_digest,omitempty"`
-	ArtifactSize      int64   `json:"artifact_size,omitempty"`
-	Actor             string  `json:"actor,omitempty"`
-	Stages            []Stage `json:"stages"`
-	StartedAt         int64   `json:"started_at"`
-	EndedAt           int64   `json:"ended_at,omitempty"`
+	Number            int64      `json:"number,omitempty"`
+	Artifacts         []Artifact `json:"artifacts,omitempty"`
+	ID                int64      `json:"id"`
+	Service           string     `json:"service"`
+	Trigger           string     `json:"trigger"` // manual|api
+	Branch            string     `json:"branch,omitempty"`
+	Version           string     `json:"version,omitempty"`
+	BuildCommand      string     `json:"build_command,omitempty"`
+	Status            string     `json:"status"`
+	AutoDeploy        bool       `json:"auto_deploy"`
+	DeployHost        string     `json:"deploy_host,omitempty"` // deploy 阶段目标
+	DeployEnvironment string     `json:"deploy_environment,omitempty"`
+	Artifact          string     `json:"artifact,omitempty"`
+	ArtifactID        int64      `json:"artifact_id,omitempty"`
+	ArtifactKind      string     `json:"artifact_kind,omitempty"`
+	ArtifactDigest    string     `json:"artifact_digest,omitempty"`
+	ArtifactSize      int64      `json:"artifact_size,omitempty"`
+	Actor             string     `json:"actor,omitempty"`
+	Stages            []Stage    `json:"stages"`
+	StartedAt         int64      `json:"started_at"`
+	EndedAt           int64      `json:"ended_at,omitempty"`
 }
 
 func defaultStages() []Stage {
@@ -1081,23 +1242,46 @@ func defaultStages() []Stage {
 }
 
 func (s *Store) CreateRun(r *PipelineRun) error {
-	if active := s.ActiveRun(r.Service); active != nil {
-		return fmt.Errorf("%w: 服务 %s 已有流水线 #%d", ErrRunConflict, r.Service, active.ID)
-	}
 	if len(r.Stages) == 0 {
 		r.Stages = defaultStages()
 	}
 	stJ, _ := json.Marshal(r.Stages)
-	res, err := s.db.Exec(`INSERT INTO pipeline_runs(service,trigger,branch,build_command,auto_deploy,deploy_host,deploy_environment,status,stages,actor,started_at)
-		VALUES(?,?,?,?,?,?,?,'running',?,?,?)`,
-		r.Service, r.Trigger, r.Branch, r.BuildCommand, r.AutoDeploy, r.DeployHost, r.DeployEnvironment, string(stJ), r.Actor, r.StartedAt)
+	tx, err := s.db.Begin()
 	if err != nil {
-		if active := s.ActiveRun(r.Service); active != nil {
-			return fmt.Errorf("%w: 服务 %s 已有流水线 #%d", ErrRunConflict, r.Service, active.ID)
-		}
 		return err
 	}
-	r.ID, _ = res.LastInsertId()
+	defer tx.Rollback()
+	if err = lockPipelineCounter(tx, r.Service); err != nil {
+		return err
+	}
+	var active int64
+	err = tx.QueryRow(`SELECT id FROM pipeline_runs WHERE service=? AND status IN ('running','waiting_deploy') ORDER BY id DESC LIMIT 1`, r.Service).Scan(&active)
+	if err == nil {
+		return fmt.Errorf("%w: 服务 %s 已有运行中的流水线", ErrRunConflict, r.Service)
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	number, err := advancePipelineCounter(tx, r.Service)
+	if err != nil {
+		return err
+	}
+	res, err := tx.Exec(`INSERT INTO pipeline_runs(service,trigger,branch,build_command,auto_deploy,deploy_host,deploy_environment,status,stages,actor,started_at)
+ VALUES(?,?,?,?,?,?,?,'running',?,?,?)`, r.Service, r.Trigger, r.Branch, r.BuildCommand, r.AutoDeploy, r.DeployHost, r.DeployEnvironment, string(stJ), r.Actor, r.StartedAt)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO pipeline_run_numbers(run_id,service,number) VALUES(?,?,?)`, id, r.Service, number); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	r.ID, r.Number = id, number
 	return nil
 }
 
@@ -1199,7 +1383,7 @@ func (s *Store) Runs(service string, limit int) []PipelineRun {
 	return s.runsWhere(service, limit, 0)
 }
 func (s *Store) runsWhere(service string, limit int, id int64) []PipelineRun {
-	q := `SELECT id,service,trigger,branch,version,build_command,status,auto_deploy,deploy_host,deploy_environment,artifact,artifact_id,artifact_kind,artifact_digest,artifact_size,actor,stages,started_at,ended_at FROM pipeline_runs`
+	q := `SELECT id,service,trigger,branch,version,build_command,status,auto_deploy,deploy_host,deploy_environment,artifact,artifact_id,artifact_kind,artifact_digest,artifact_size,actor,stages,started_at,ended_at,COALESCE((SELECT number FROM pipeline_run_numbers n WHERE n.run_id=pipeline_runs.id),0) FROM pipeline_runs`
 	args := []any{}
 	if id > 0 {
 		q += ` WHERE id=?`
@@ -1221,7 +1405,7 @@ func (s *Store) runsWhere(service string, limit int, id int64) []PipelineRun {
 		var br, ver, dh, de, art sql.NullString
 		var ended sql.NullInt64
 		var stages string
-		if rows.Scan(&r.ID, &r.Service, &r.Trigger, &br, &ver, &r.BuildCommand, &r.Status, &r.AutoDeploy, &dh, &de, &art, &r.ArtifactID, &r.ArtifactKind, &r.ArtifactDigest, &r.ArtifactSize, &r.Actor, &stages, &r.StartedAt, &ended) == nil {
+		if rows.Scan(&r.ID, &r.Service, &r.Trigger, &br, &ver, &r.BuildCommand, &r.Status, &r.AutoDeploy, &dh, &de, &art, &r.ArtifactID, &r.ArtifactKind, &r.ArtifactDigest, &r.ArtifactSize, &r.Actor, &stages, &r.StartedAt, &ended, &r.Number) == nil {
 			r.Branch, r.Version, r.DeployHost, r.DeployEnvironment, r.Artifact = br.String, ver.String, dh.String, de.String, art.String
 			r.EndedAt = ended.Int64
 			json.Unmarshal([]byte(stages), &r.Stages)
@@ -1235,6 +1419,7 @@ func (s *Store) ActiveRun(service string) *PipelineRun {
 	var r PipelineRun
 	if s.db.QueryRow(`SELECT id,service,status,actor,started_at FROM pipeline_runs WHERE service=? AND status IN ('running','waiting_deploy') ORDER BY id DESC LIMIT 1`, service).
 		Scan(&r.ID, &r.Service, &r.Status, &r.Actor, &r.StartedAt) == nil {
+		r.Number = s.PipelineRunNumber(r.ID, r.Service)
 		return &r
 	}
 	return nil
@@ -1243,6 +1428,7 @@ func (s *Store) ActiveRun(service string) *PipelineRun {
 func (s *Store) GetRun(id int64) *PipelineRun {
 	for _, r := range s.runsWhere("", 1, id) {
 		if r.ID == id {
+			r.Artifacts = s.ArtifactsForRun(id)
 			return &r
 		}
 	}
@@ -1260,13 +1446,25 @@ func ExpandTemplate(sv Service) []StepInst {
 	}
 	base := []StepInst{P("git-checkout", "GIT_URL", sv.GitURL, "BRANCH", sv.Branch)}
 	switch sv.ArtifactType {
+	case ArtifactJavaBundle:
+		base = append(base, P("java-build", "COMMAND", sv.BuildCmd, "PRE", sv.PreCmd), StepInst{Step: javaBundleStep, Params: bundlePackageParams(&sv)})
 	case "static":
 		base = append(base,
 			P("npm-build", "COMMAND", sv.BuildCmd),
 			P("package-static", "GLOB", sv.ArtifactGlob))
 	case "image":
-		base = append(base,
-			P("docker-build", "IMAGE_NAME", sv.ImageName, "CONTEXT", ".", "DOCKERFILE", "Dockerfile", "PUSH", "true"))
+		if sv.BuildTool == "maven" || sv.BuildTool == "gradle" {
+			glob := sv.ArtifactGlob
+			if glob == "" {
+				glob = "target/*.jar"
+				if sv.BuildTool == "gradle" {
+					glob = "build/libs/*.jar"
+				}
+			}
+			base = append(base, P("java-build", "COMMAND", sv.BuildCmd, "PRE", sv.PreCmd), P("docker-build", "IMAGE_NAME", sv.ImageName, "CONTEXT", ".", "DOCKERFILE_SOURCE", "template", "DOCKERFILE_TEMPLATE", "java21", "DOCKERFILE_ARTIFACT_PATH", glob, "PUSH", "true"))
+		} else {
+			base = append(base, P("docker-build", "IMAGE_NAME", sv.ImageName, "CONTEXT", ".", "DOCKERFILE", "Dockerfile", "PUSH", "true"))
+		}
 	default:
 		base = append(base,
 			P("java-build", "COMMAND", sv.BuildCmd, "PRE", sv.PreCmd),

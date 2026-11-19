@@ -1,14 +1,32 @@
 apiVersion: deploy.logplatform.io/v1
 id: docker-build
-name: Docker 构建并推送
-description: 使用 buildx 构建镜像，推送镜像仓库并输出不可变 digest
+name: Docker 镜像构建
+description: 将前置编译产物打包为镜像；仓库 Dockerfile 也可自行多阶段编译；支持推送或导出文件
 category: 打包
 kind: package
 produces: oci-image
 params:
-  - {name: IMAGE_NAME, type: input, label: 镜像名称（含 registry/repository）}
+  - {name: IMAGE_NAME, type: input, label: 镜像名称（仓库交付时含 registry/repository）}
   - {name: CONTEXT, type: input, label: 构建上下文, default: "."}
+  - name: DOCKERFILE_SOURCE
+    type: select
+    label: Dockerfile 来源
+    default: repository
+    options:
+      - {value: template, label: 平台运行时模板（需前置编译）}
+      - {value: repository, label: 仓库文件}
+      - {value: platform, label: 自定义 Dockerfile}
+  - name: DOCKERFILE_TEMPLATE
+    type: select
+    label: 基础模板
+    default: java21
+    options:
+      - {value: java21, label: Java 21 JAR 运行时}
+      - {value: nginx, label: Nginx 静态站点运行时}
+  - {name: DOCKERFILE_ARTIFACT_PATH, type: input, label: 前置编译产物路径（相对构建上下文）, default: ""}
   - {name: DOCKERFILE, type: input, label: Dockerfile, default: "Dockerfile"}
+  - {name: DOCKERFILE_CONTENT, type: shell, label: Dockerfile 内容（平台托管时填写）, default: ""}
+  - {name: EXPORT_JAR_GLOB, type: input, label: 同时保留 JAR（相对上下文路径，可选）, default: ""}
   - {name: PLATFORMS, type: input, label: 目标平台（可选）, default: ""}
   - name: PUSH
     type: select
@@ -16,4 +34,4 @@ params:
     default: "true"
     options:
       - {value: "true", label: 是（可部署）}
-      - {value: "false", label: 否（仅本机验证）}
+      - {value: "false", label: 否（导出镜像文件，可部署到主机）}

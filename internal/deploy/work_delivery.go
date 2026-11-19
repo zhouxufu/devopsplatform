@@ -82,15 +82,21 @@ type WorkDelivery struct {
 	Changes []Change `json:"changes"`
 }
 type WorkDeliverySave struct {
+	loopReceiptKey      string // server-only; committed with the same transaction
+	loopCommitAttempted bool   // distinguish validation rollback from uncertain commit
+	loopReceiptValue    string
+
 	Digest  string   `json:"digest"`
 	Changes []Change `json:"changes"`
+	// Metadata readiness only; never performs environment preflight or execution.
+	MarkReady bool `json:"mark_ready,omitempty"`
 	// Extra links only apply to newly created changes. Existing associations are
 	// preserved, so editing a shared implementation cannot silently unlink bugs.
 	AlsoWorkItemIDs []int64 `json:"also_work_item_ids"`
 }
 
 func loadWorkDelivery(tx *deployTx, id int64) (*WorkDelivery, error) {
-	rows, err := tx.Query(changeSelect+` WHERE id IN (SELECT change_id FROM work_item_changes WHERE work_item_id=?) ORDER BY id`, id)
+	rows, err := tx.Query(changeSelect+` WHERE status<>'archived' AND id IN (SELECT change_id FROM work_item_changes WHERE work_item_id=?) ORDER BY id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +116,9 @@ func loadWorkDelivery(tx *deployTx, id int64) (*WorkDelivery, error) {
 	}
 	for i := range out.Changes {
 		c := &out.Changes[i]
+		if err = loadChangeOwnership(tx, c); err != nil {
+			return nil, err
+		}
 		var doc string
 		if e := tx.QueryRow(`SELECT document FROM change_payloads WHERE change_id=?`, c.ID).Scan(&doc); e == nil {
 			var p struct {
@@ -179,7 +188,7 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		default:
 			return fmt.Errorf("第 %d 项：不支持的变更类型", i+1)
 		}
-		if err := normalizeChange(c); err != nil {
+		if err := normalizeChangeForSave(c, !req.MarkReady); err != nil {
 			return fmt.Errorf("第 %d 项：%w", i+1, err)
 		}
 		if c.Kind == "code" && (c.Service == "" || c.Reference == "") {
@@ -190,6 +199,15 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		}
 		if c.Kind == "redis" && c.Redis == nil {
 			return fmt.Errorf("第 %d 项：请填写结构化 Redis 命令", i+1)
+		}
+		if c.Kind == "nacos" && c.Nacos == nil {
+			return fmt.Errorf("第 %d 项：请填写 Nacos 配置项", i+1)
+		}
+		if req.MarkReady && c.Kind == "manual" && c.Reference == "" && c.Summary == "" {
+			return fmt.Errorf("第 %d 项：请填写自定义处理记录", i+1)
+		}
+		if req.MarkReady && c.Kind == "artifact" && (c.Service == "" || c.Reference == "") {
+			return fmt.Errorf("第 %d 项：制品引用需要应用和引用信息", i+1)
 		}
 	}
 	tx, err := s.db.Begin()
@@ -262,10 +280,29 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 	for _, c := range current.Changes {
 		existing[c.ID] = c
 	}
+	resourceKinds := map[string]map[string]string{}
+	services := []string{}
+	for _, c := range req.Changes {
+		if c.Service != "" && (c.SQL != nil || c.Nacos != nil || c.Redis != nil) {
+			if _, found := resourceKinds[c.Service]; !found {
+				services = append(services, c.Service)
+				resourceKinds[c.Service] = nil
+			}
+		}
+	}
+	sort.Strings(services)
+	for _, service := range services {
+		kinds, e := s.workDeliveryResourceKinds(tx, service)
+		if e != nil {
+			return e
+		}
+		resourceKinds[service] = kinds
+	}
 	submitted := map[int64]bool{}
 	now := time.Now().Unix()
 	for i := range req.Changes {
 		c := &req.Changes[i]
+		created := c.ID == 0
 		if c.ID != 0 {
 			old, ok := existing[c.ID]
 			if !ok || submitted[c.ID] {
@@ -281,9 +318,25 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 			if !admin && old.Owner != actor {
 				return fmt.Errorf("第 %d 项：仅创建人或管理员可编辑", i+1)
 			}
+			if old.DeliveryOwnership != nil && old.DeliveryOwnership.OriginWorkItemID != id {
+				return fmt.Errorf("第 %d 项：请在原始工作项维护此变更", i+1)
+			}
+			var touched int
+			if err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?)`, c.ID, c.ID).Scan(&touched); err != nil {
+				return err
+			}
+			if touched > 0 {
+				return fmt.Errorf("第 %d 项：变更已有执行记录，请新增后续变更", i+1)
+			}
 			c.Owner, c.Status, c.CreatedAt = old.Owner, old.Status, old.CreatedAt
+			if c.DeliveryOwnership == nil {
+				c.DeliveryOwnership = old.DeliveryOwnership
+			}
 		} else {
 			c.Owner, c.Status, c.CreatedAt = actor, ChangeDraft, now
+		}
+		if req.MarkReady {
+			c.Status = ChangeReady
 		}
 		if c.Service != "" {
 			var service string
@@ -302,8 +355,7 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 			alias, kind = c.Redis.ResourceAlias, "redis"
 		}
 		if alias != "" {
-			var actual string
-			if err = tx.QueryRow(`SELECT kind FROM application_resource_requirements WHERE service=? AND alias=?`, c.Service, alias).Scan(&actual); err != nil || actual != kind {
+			if resourceKinds[c.Service][alias] != kind {
 				return fmt.Errorf("第 %d 项：应用未声明该资源，请先配置资源", i+1)
 			}
 		}
@@ -323,7 +375,7 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 				}
 			}
 		} else {
-			_, err = tx.Exec(`UPDATE changes SET kind=?,title=?,service=?,reference=?,summary=?,risk_level=?,rollback_plan=?,updated_at=? WHERE id=?`, c.Kind, c.Title, c.Service, c.Reference, c.Summary, c.RiskLevel, c.RollbackPlan, now, c.ID)
+			_, err = tx.Exec(`UPDATE changes SET kind=?,title=?,service=?,reference=?,summary=?,risk_level=?,rollback_plan=?,status=?,updated_at=? WHERE id=?`, c.Kind, c.Title, c.Service, c.Reference, c.Summary, c.RiskLevel, c.RollbackPlan, c.Status, now, c.ID)
 			if err != nil {
 				return err
 			}
@@ -331,7 +383,31 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		if err = saveSQLPayload(tx, c); err != nil {
 			return err
 		}
+		if err = saveChangeOwnership(tx, c, id, actor); err != nil {
+			return fmt.Errorf("第 %d 项：%w", i+1, err)
+		}
+		for _, wid := range ids {
+			if err = recordResearchRelation(tx, wid, actor, "participant"); err != nil {
+				return err
+			}
+			kind := "change-updated"
+			if created {
+				kind = "change-created"
+			} else if req.MarkReady {
+				kind = "change-ready"
+			}
+			raw, _ := json.Marshal(map[string]any{"change_id": c.ID, "kind": c.Kind, "title": c.Title, "status": c.Status})
+			if _, err = tx.Exec(`INSERT INTO research_activity(work_item_id,actor,kind,content,created_at) VALUES(?,?,?,?,?)`, wid, actor, kind, string(raw), now); err != nil {
+				return err
+			}
+		}
 	}
+	if req.loopReceiptKey != "" {
+		if _, err = tx.Exec(`INSERT INTO deploy_meta(key,value) VALUES(?,?)`, req.loopReceiptKey, req.loopReceiptValue); err != nil {
+			return err
+		}
+	}
+	req.loopCommitAttempted = true
 	return tx.Commit()
 }
 

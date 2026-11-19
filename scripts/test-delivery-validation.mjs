@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {validateDeliveryChange,locateDeliveryServerError} from '../web/src/deploy/deliveryValidation.js'
-import {expandDeliveryRows} from '../web/src/deploy/deliveryContent.js'
+import {deliveryRows,expandDeliveryRows} from '../web/src/deploy/deliveryContent.js'
 const valid={kind:'nacos',service:'api',nacos:{resource_alias:'config',group:'DEFAULT_GROUP',format:'yaml',entries:[{key:'feature.enabled',action:'set',value:'true'}]}}
 const clone=x=>JSON.parse(JSON.stringify(x))
 assert.equal(validateDeliveryChange(valid,'nacos-1'),null)
@@ -17,4 +17,10 @@ assert.equal(locateDeliveryServerError('网络异常',items,origins),null)
 assert.equal(locateDeliveryServerError('第 99 项：未声明资源',items,origins),null)
 assert.equal(locateDeliveryServerError('第 1 项：第 2 个配置项：期望值不能超过 64 KiB',[valid],['nacos-1']).field,'value')
 assert.throws(()=>expandDeliveryRows([{...code,services:[]}],'QA'),e=>e.rowKey==='shared-code'&&e.field==='services')
+// Go omits an empty service from JSON. It must still match the existing identity.
+const unbound={id:17,kind:'manual',title:'记录',reference:'步骤',status:'draft',owner:'alice'}
+for(let i=0;i<4;i++)assert.deepEqual(expandDeliveryRows(deliveryRows([unbound],()=>true),'QA'),[])
+const edited=deliveryRows([unbound],()=>true);edited[0].reference='修改后的步骤'
+assert.equal(expandDeliveryRows(edited,'QA')[0].id,17)
+assert.equal(expandDeliveryRows([{key:'new',kind:'manual',originals:[],reference:'新记录'}],'QA')[0].id,0)
 console.log(JSON.stringify({ok:true,checks:['exact Nacos entry','duplicate and parent path','flattened multi-app mapping','unchanged records excluded','global errors do not invent location','code selection location']}))

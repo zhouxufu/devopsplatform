@@ -86,7 +86,14 @@ func (s *Store) SaveReleaseDraft(v *ReleaseVersion, scope VersionScope) error {
 		if err = tx.QueryRow(q, id).Scan(&exists); err != nil {
 			return fmt.Errorf("所选需求或 Bug 不存在，请刷新")
 		}
-		rows, e := tx.Query(`SELECT change_id FROM work_item_changes WHERE work_item_id=?`, id)
+		var noRelease int
+		if err = tx.QueryRow(`SELECT COUNT(*) FROM work_items WHERE id=? AND `+s.researchIntentExpr("work_items")+`=0`, id).Scan(&noRelease); err != nil {
+			return err
+		}
+		if noRelease > 0 {
+			return fmt.Errorf("工作项 #%d 不需要上线，不能纳入版本", id)
+		}
+		rows, e := tx.Query(deliveryOwnedChanges("?"), id)
 		if e != nil {
 			return e
 		}
@@ -206,7 +213,7 @@ func (s *Store) freezeReleaseVersion(id int64) error {
 			if count == 0 {
 				return fmt.Errorf("需求 / Bug #%d 尚无纳入版本的变更，请补充或移出范围", wid)
 			}
-			if err = tx.QueryRow(`SELECT COUNT(*) FROM work_item_changes WHERE work_item_id=? AND change_id NOT IN (SELECT change_id FROM release_version_changes WHERE release_version_id=?)`, wid, id).Scan(&count); err != nil {
+			if err = tx.QueryRow(`SELECT COUNT(*) FROM changes WHERE id IN (`+deliveryOwnedChanges("?")+`) AND id NOT IN (SELECT change_id FROM release_version_changes WHERE release_version_id=?)`, wid, id).Scan(&count); err != nil {
 				return err
 			}
 			if count > 0 {

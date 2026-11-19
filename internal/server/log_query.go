@@ -279,65 +279,6 @@ func (p *logQueryParser) parsePrimary() (logExpr, error) {
 	return term, nil
 }
 
-func ftsQuote(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
-func (q *LogQuery) SQL(table string) (string, []any) {
-	if q == nil || q.root == nil {
-		return "", nil
-	}
-	return compileLogExpr(q.root, table, "")
-}
-
-func compileLogExpr(expr logExpr, table, scopedField string) (string, []any) {
-	switch node := expr.(type) {
-	case logAnd:
-		left, la := compileLogExpr(node.left, table, scopedField)
-		right, ra := compileLogExpr(node.right, table, scopedField)
-		return "(" + left + " AND " + right + ")", append(la, ra...)
-	case logOr:
-		left, la := compileLogExpr(node.left, table, scopedField)
-		right, ra := compileLogExpr(node.right, table, scopedField)
-		return "(" + left + " OR " + right + ")", append(la, ra...)
-	case logNot:
-		child, args := compileLogExpr(node.child, table, scopedField)
-		return "NOT (" + child + ")", args
-	case logField:
-		return compileLogExpr(node.child, table, node.name)
-	case logTerm:
-		field := scopedField
-		if field == "" {
-			field = "message"
-		}
-		if field == "message" {
-			match := ftsQuote(node.value)
-			if node.prefix {
-				match += "*"
-			}
-			clause := "rowid IN (SELECT rowid FROM " + table + "_fts WHERE " + table + "_fts MATCH ?)"
-			args := []any{match}
-			if node.phrase {
-				clause = "(" + clause + " AND instr(lower(message), lower(?)) > 0)"
-				args = append(args, node.value)
-			}
-			return clause, args
-		}
-		column := field
-		if node.prefix {
-			return "lower(" + column + ") LIKE lower(?) ESCAPE '\\'", []any{escapeLike(node.value) + "%"}
-		}
-		return column + " = ? COLLATE NOCASE", []any{node.value}
-	default:
-		panic("unknown log query node")
-	}
-}
-
-func escapeLike(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return r.Replace(s)
-}
-
 func (q *LogQuery) Match(h types.Hit) bool {
 	return q == nil || q.root == nil || matchLogExpr(q.root, h, "")
 }

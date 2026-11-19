@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
@@ -25,6 +26,9 @@ func main() {
 		log.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
+	retentionContext, stopRetention := context.WithCancel(context.Background())
+	defer stopRetention()
+	go st.RunArtifactRetention(retentionContext)
 
 	hub := deploy.NewLogHub()
 	builder := deploy.NewBuilder(st, *data, hub)

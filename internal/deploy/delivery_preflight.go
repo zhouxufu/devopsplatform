@@ -66,3 +66,47 @@ func (s *Store) verifyDeliveryPreflight(req DeliveryRequest, p *DeliveryPlan, se
 	}
 	return claim.Nonce, nil
 }
+
+func deliveryRequestDigest(req DeliveryRequest) string {
+	req.PreflightToken = ""
+	req.previewDrafts = false
+	return digestJSON(req)
+}
+
+// Recover a lost submit response before resolving new remote baselines. A valid
+// signed token, same actor and exact original input identify just one snapshot.
+func (s *Store) submittedPreflightRun(req DeliveryRequest, actor string) (*DeliveryRun, error) {
+	if req.PreflightToken == "" {
+		return nil, nil
+	}
+	parts := strings.Split(req.PreflightToken, ".")
+	if len(parts) != 2 {
+		return nil, nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, nil
+	}
+	sig, err := hex.DecodeString(parts[1])
+	if err != nil {
+		return nil, nil
+	}
+	mac := hmac.New(sha256.New, s.secretKey)
+	mac.Write(raw)
+	if !hmac.Equal(sig, mac.Sum(nil)) {
+		return nil, nil
+	}
+	var claim deliveryPreflight
+	if json.Unmarshal(raw, &claim) != nil || claim.Actor != actor {
+		return nil, nil
+	}
+	var id int64
+	if s.db.QueryRow(`SELECT run_id FROM delivery_preflight_uses WHERE nonce=?`, claim.Nonce).Scan(&id) != nil {
+		return nil, nil
+	}
+	run := s.DeliveryRun(id)
+	if run == nil || run.Owner != actor || run.Plan.RequestDigest == "" || run.Plan.RequestDigest != deliveryRequestDigest(req) {
+		return nil, fmt.Errorf("该预检已提交；请求内容不同，请打开原执行单核对")
+	}
+	return run, nil
+}

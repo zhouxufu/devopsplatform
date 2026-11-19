@@ -11,6 +11,7 @@ type WorkItemSourceCapability struct {
 	ConnectionKind  string                 `json:"connection_kind"`
 	Kinds           []string               `json:"kinds"`
 	DefaultStatus   string                 `json:"default_status"`
+	LiveQuery       bool                   `json:"live_query"`
 	StatusConfigKey string                 `json:"status_config_key"`
 	Statuses        []WorkItemSourceStatus `json:"statuses"`
 }
@@ -28,7 +29,7 @@ type workItemSourceAdapter struct {
 var workItemSources = map[string]workItemSourceAdapter{
 	"zentao": {
 		Capability: WorkItemSourceCapability{
-			ConnectionKind: "zentao", Kinds: []string{"bug"}, DefaultStatus: "closed", StatusConfigKey: "bug_status",
+			ConnectionKind: "zentao", LiveQuery: true, Kinds: []string{"bug"}, DefaultStatus: "closed", StatusConfigKey: "bug_status",
 			Statuses: []WorkItemSourceStatus{{"closed", "已关闭"}, {"active", "激活（未解决）"}, {"resolved", "已解决（未关闭）"}, {"unclosed", "未关闭（激活 + 已解决）"}, {"all", "全部状态"}},
 		},
 		Sync: func(s *Store, ctx context.Context, name, baseline, actor, status string) (IssueSyncState, error) {
@@ -49,6 +50,9 @@ func (s *Store) syncWorkItems(ctx context.Context, name, baseline, actor, status
 	connection := s.GetConnection(name)
 	if connection == nil {
 		return IssueSyncState{}, fmt.Errorf("来源连接不存在")
+	}
+	if connection.Kind == "zentao" {
+		return IssueSyncState{}, fmt.Errorf("来源已切换实时查询，不再全量同步 Bug；请打开研发工作台查询并关联交付内容")
 	}
 	adapter, ok := workItemSources[connection.Kind]
 	if !ok {

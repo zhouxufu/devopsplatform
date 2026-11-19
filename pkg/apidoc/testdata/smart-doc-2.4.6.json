@@ -1,0 +1,104 @@
+{
+  "components": {
+    "schemas": {
+      "_api_eventsrequest": {},
+      "_api_eventsresponse": {},
+      "_api_orders__id_response": {
+        "properties": {
+          "id": {
+            "format": "string",
+            "description": "订单编号",
+            "type": "string"
+          },
+          "amount": {
+            "description": "订金金额"
+          }
+        }
+      },
+      "_api_orders__id_request": {}
+    }
+  },
+  "servers": [
+    {
+      "url": ""
+    }
+  ],
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/events": {
+      "get": {
+        "summary": "订单事件流",
+        "deprecated": false,
+        "description": "订单事件流",
+        "tags": [
+          "OrderController"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string"
+                },
+                "examples": {
+                  "json": {
+                    "summary": "test data",
+                    "value": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "events",
+        "parameters": []
+      }
+    },
+    "/api/orders/{id}": {
+      "get": {
+        "summary": "查询订单",
+        "deprecated": false,
+        "description": "查询订单",
+        "tags": [
+          "OrderController"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/_api_orders__id_response"
+                },
+                "examples": {
+                  "json": {
+                    "summary": "test data",
+                    "value": "{\n  \"id\": \"73\",\n  \"amount\": 355\n}"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "find",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "description": "订单编号",
+            "required": true,
+            "example": "73",
+            "name": "id"
+          }
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "真实 smart-doc 临时验证",
+    "version": "1.0.0"
+  }
+}

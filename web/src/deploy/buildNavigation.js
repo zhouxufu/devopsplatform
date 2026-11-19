@@ -1,10 +1,10 @@
 import { ref, watch, onBeforeUnmount, nextTick } from 'vue'
-export function buildState(key, defaults) {
-  const storageKey='lp-build-ui:'+key
-  let stored
-  try { stored=JSON.parse(sessionStorage.getItem(storageKey)||'null') } catch {}
-  const state=ref({...defaults,...stored})
-  watch(state,value=>{try{sessionStorage.setItem(storageKey,JSON.stringify(value))}catch{}},{deep:true})
+import {browserView} from '../shared/viewMemory.js'
+export function buildState(key, defaults, actor) {
+  const state=ref({...defaults})
+  let memory,restoring=false
+  watch(actor||(()=>''),value=>{if(!value)return;restoring=true;memory=browserView('build:'+key,value);state.value=memory.read(defaults);restoring=false},{immediate:true,flush:'sync'})
+  watch(state,value=>{if(!restoring)memory?.write(value,defaults)},{deep:true,flush:'sync'})
   return state
 }
 export function buildScroll(key) {

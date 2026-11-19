@@ -83,6 +83,17 @@ func (b *Builder) syncGit(buildID int64, sv *Service) error {
 
 // Start 触发一次构建（异步执行，立即返回 buildID）
 func (b *Builder) Start(sv *Service, actor string) (int64, error) {
+	if sv.ArtifactType == ArtifactJavaBundle {
+		return 0, fmt.Errorf("Java 整包请使用应用构建入口 POST /api/pipeline/runs，旧版接口不支持完整归档")
+	}
+	environments, err := b.st.automaticDocumentEnvironments(sv)
+	if err != nil {
+		return 0, err
+	}
+	if len(environments) > 0 {
+		return 0, fmt.Errorf("已启用按环境生成接口文档，请使用应用构建入口（POST /api/pipeline/runs）并指定 build_environment；旧版 builds 接口无法保存环境和文档阶段")
+	}
+
 	if b.st.GetServiceDelivery(sv.Name).BuildEnvironment.isolated() {
 		return 0, fmt.Errorf("隔离构建请使用应用的构建入口（POST /api/pipeline/runs），旧版 builds 接口不支持容器环境")
 	}

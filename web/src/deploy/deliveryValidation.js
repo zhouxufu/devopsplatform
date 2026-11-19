@@ -5,6 +5,10 @@ const resourceName = /^[A-Za-z0-9_.-]+$/
 const nacosKey = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/
 export function validateDeliveryChange(change, rowKey) {
   const fail = (field, message, entry) => ({rowKey, field, message, entry})
+  if(change.kind==='manual'){
+    if(!text(change.reference)&&!text(change.summary))return fail('reference','请填写自定义处理记录')
+    if(new TextEncoder().encode(String(change.reference??'')).length>65536)return fail('reference','处理记录不能超过 64 KiB')
+  }
   if(change.kind==='code'){
     if(!text(change.service))return fail('services','请选择至少一个影响应用')
     if(!text(change.reference))return fail('reference','请填写关联分支')
@@ -16,6 +20,16 @@ export function validateDeliveryChange(change, rowKey) {
   }
   if(change.sql){
     if(!text(change.sql.content))return fail('sql','请填写 SQL 脚本')
+    const exceptions=change.sql.environment_overrides||[],seen=new Set()
+    if(exceptions.length>20)return fail('sql_environment_overrides','SQL 环境例外最多 20 项')
+    for(const [index,e] of exceptions.entries()){
+      const prefix=`第 ${index+1} 个 SQL 环境例外：`
+      if(!text(e.environment)||seen.has(e.environment))return fail('sql_environment_overrides',prefix+'请选择不重复的目标环境')
+      if(!text(e.reason))return fail('sql_environment_overrides',prefix+'请填写原因')
+      if(!e.skip&&!text(e.content))return fail('sql_environment_overrides',prefix+'请填写专用 SQL')
+      seen.add(e.environment)
+    }
+
     if(!Number.isInteger(Number(change.sql.max_affected_rows))||Number(change.sql.max_affected_rows)<1||Number(change.sql.max_affected_rows)>10000)return fail('max_affected_rows','允许影响行数须为 1–10000 的整数')
   }
   if(change.redis&&!text(change.redis.commands))return fail('commands','请填写 Redis 命令')
@@ -48,6 +62,7 @@ export function locateDeliveryServerError(message, changes, origins) {
   let field=({code:'reference',mysql:'sql',nacos:'entries',redis:'commands'})[c.kind]||'reference'
   if(/应用不存在/.test(message))field=c.kind==='code'?'services':'service'
   else if(/未声明.*资源|资源别名|请选择.*资源/.test(message))field='resource'
+  else if(/SQL 环境|环境专用脚本/.test(message))field='sql_environment_overrides'
   else if(/影响行数/.test(message))field='max_affected_rows'
   else if(/Data ID/.test(message))field='data_id'
   else if(/Group/.test(message))field='group'

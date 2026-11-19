@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -19,9 +20,13 @@ type Deployer struct {
 	busURL          string
 	mu              sync.Mutex
 	logs            map[int64]*logTail
+	logSecrets      map[int64][]string
+	contexts        map[int64]context.Context
+	cancellations   map[int64]context.CancelFunc
 	drivers         map[string]DeployDriver
 	saeFactory      saeProviderFactory
 	saePollInterval time.Duration
+	observedDeploy  func(int64)
 }
 
 func NewDeployer(st *Store, hub *logHub, busURL string) *Deployer {
@@ -34,22 +39,23 @@ func NewDeployer(st *Store, hub *logHub, busURL string) *Deployer {
 
 // Deploy 部署执行记录
 type Deploy struct {
-	ID             int64  `json:"id"`
-	Service        string `json:"service"`
-	Version        string `json:"version"`
-	Host           string `json:"host"`
-	Environment    string `json:"environment,omitempty"`
-	ArtifactDigest string `json:"artifact_digest,omitempty"`
-	ArtifactID     int64  `json:"artifact_id,omitempty"`
-	ArtifactKind   string `json:"artifact_kind,omitempty"`
-	ArtifactURI    string `json:"artifact_uri,omitempty"`
-	ExternalID     string `json:"external_id,omitempty"`
-	Reason         string `json:"reason,omitempty"`
-	Status         string `json:"status"` // running|success|failed|rolled-back
-	Actor          string `json:"actor,omitempty"`
-	Steps          string `json:"steps,omitempty"`
-	StartedAt      int64  `json:"started_at"`
-	EndedAt        int64  `json:"ended_at"`
+	AutoRecheck    *JavaAutoRecheck `json:"auto_recheck,omitempty"`
+	ID             int64            `json:"id"`
+	Service        string           `json:"service"`
+	Version        string           `json:"version"`
+	Host           string           `json:"host"`
+	Environment    string           `json:"environment,omitempty"`
+	ArtifactDigest string           `json:"artifact_digest,omitempty"`
+	ArtifactID     int64            `json:"artifact_id,omitempty"`
+	ArtifactKind   string           `json:"artifact_kind,omitempty"`
+	ArtifactURI    string           `json:"artifact_uri,omitempty"`
+	ExternalID     string           `json:"external_id,omitempty"`
+	Reason         string           `json:"reason,omitempty"`
+	Status         string           `json:"status"` // running|success|failed|rolled-back
+	Actor          string           `json:"actor,omitempty"`
+	Steps          string           `json:"steps,omitempty"`
+	StartedAt      int64            `json:"started_at"`
+	EndedAt        int64            `json:"ended_at"`
 }
 
 // Start 对一台主机发起部署（异步）
@@ -67,6 +73,12 @@ func (d *Deployer) StartRelease(sv *Service, host Host, artifact, version, envir
 }
 
 func (d *Deployer) StartArtifactRelease(sv *Service, host Host, artifact Artifact, environment, reason, actor string) (int64, error) {
+	if deploymentAgentTarget(sv.DeployConfig) {
+		return 0, fmt.Errorf("Agent 部署必须通过冻结发布单发起，不能绕过审批及批次调度")
+	}
+	if err := d.st.validateArtifactBuildVariant(&artifact, environment); err != nil {
+		return 0, err
+	}
 	if err := d.validateRelease(sv, host, artifact); err != nil {
 		return 0, err
 	}
@@ -109,11 +121,31 @@ func validateRelease(sv *Service, host Host, artifact, digest string) (string, e
 }
 
 func (d *Deployer) validateRelease(sv *Service, host Host, artifact Artifact) error {
-	if sv.TargetType != TargetAliyunSAE && (strings.TrimSpace(host.Name) == "" || strings.TrimSpace(host.Addr) == "") {
+	if deploymentAgentTarget(sv.DeployConfig) {
+		if err := d.st.validateDeploymentAgent(sv, host); err != nil {
+			return err
+		}
+	}
+
+	if sv.TargetType != TargetAliyunSAE && sv.TargetType != TargetScript && (strings.TrimSpace(host.Name) == "" || strings.TrimSpace(host.Addr) == "") {
 		return fmt.Errorf("目标主机配置不完整")
 	}
 	if strings.TrimSpace(host.Name) == "" {
 		return fmt.Errorf("执行目标配置不完整")
+	}
+	if sv.TargetType == TargetScript {
+		if sv.RuntimeEnvironment == "" {
+			return fmt.Errorf("脚本发布必须经应用环境冻结执行上下文")
+		}
+		if _, err := d.st.validateScriptRunner(sv.DeployConfig); err != nil {
+			return err
+		}
+		if err := d.st.scriptScopeBusy(sv.Name, sv.RuntimeEnvironment); err != nil {
+			return err
+		}
+		if err := d.st.scriptPublicationBusy(sv.Name, sv.RuntimeEnvironment, sv.DeployConfig); err != nil {
+			return err
+		}
 	}
 	driver := d.drivers[sv.TargetType]
 	if driver == nil {
@@ -132,6 +164,12 @@ func (d *Deployer) StartReleaseBatch(sv *Service, hosts []Host, artifact, versio
 }
 
 func (d *Deployer) StartArtifactReleaseBatch(sv *Service, hosts []Host, artifact Artifact, environment, reason, actor string, maxParallel int) ([]int64, error) {
+	if deploymentAgentTarget(sv.DeployConfig) {
+		return nil, fmt.Errorf("Agent 批次必须通过发布单调度")
+	}
+	if err := d.st.validateArtifactBuildVariant(&artifact, environment); err != nil {
+		return nil, err
+	}
 	if len(hosts) == 0 {
 		return nil, fmt.Errorf("环境未配置执行目标")
 	}
@@ -191,6 +229,13 @@ func (d *Deployer) StartArtifactReleaseBatch(sv *Service, hosts []Host, artifact
 }
 
 func (d *Deployer) emit(id int64, line string) { // 部署日志用负数 key 区分构建；同时累积落库
+	d.mu.Lock()
+	secrets := append([]string{}, d.logSecrets[id]...)
+	d.mu.Unlock()
+	for _, secret := range secrets {
+		line = strings.ReplaceAll(line, secret, "[REDACTED]")
+	}
+	line = redactDeploymentText(line)
 	d.hub.emit(-id, line)
 	d.mu.Lock()
 	if d.logs == nil {
@@ -206,47 +251,121 @@ func (d *Deployer) emit(id int64, line string) { // 部署日志用负数 key �
 }
 
 func (d *Deployer) run(id int64, sv *Service, host Host, artifact Artifact, version string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if sv.TargetType == "docker-host" {
+		cancel()
+		ctx, cancel = context.WithTimeout(context.Background(), 25*time.Minute)
+	}
+	d.mu.Lock()
+	if d.contexts == nil {
+		d.contexts = map[int64]context.Context{}
+		d.cancellations = map[int64]context.CancelFunc{}
+	}
+	d.contexts[id] = ctx
+	d.cancellations[id] = cancel
+	d.mu.Unlock()
+	defer func() { cancel(); d.mu.Lock(); delete(d.contexts, id); delete(d.cancellations, id); d.mu.Unlock() }()
+	secrets := []string{}
+	for _, value := range sv.RuntimeEnv {
+		if value != "" {
+			secrets = append(secrets, value)
+		}
+	}
+	if host.Password != "" {
+		secrets = append(secrets, host.Password)
+	}
+	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	d.mu.Lock()
+	if d.logSecrets == nil {
+		d.logSecrets = map[int64][]string{}
+	}
+	d.logSecrets[id] = secrets
+	d.mu.Unlock()
+	defer func() { d.mu.Lock(); delete(d.logSecrets, id); d.mu.Unlock() }()
 	d.emit(id, fmt.Sprintf("▶ 部署 %s v%s → %s (%s)\n", sv.Name, version, host.Name, host.Addr))
 	runtimeService := *sv
 	status := "failed"
-	if err := d.prepareRuntimeEnvironment(id, &runtimeService, host); err != nil {
+	defer func() {
+		if runtimeService.TargetType == "docker-host" && runtimeService.RuntimeEnvFile != "" {
+			file := runtimeService.RuntimeEnvFile
+			if _, err := SSHExec(host, "rm -f -- "+shellQuote(file)+" "+shellQuote(file+".new"), 15*time.Second); err != nil {
+				d.st.Audit("system", "cleanup-failed", "deploy", fmt.Sprint(id), nil)
+			}
+		}
+	}()
+	if err := d.prepareRuntimeEnvironmentContext(ctx, id, &runtimeService, host); err != nil {
 		d.emit(id, "✗ 写入应用环境变量失败: "+err.Error()+"\n")
 	} else {
 		status = d.deploySteps(id, &runtimeService, host, artifact, version)
 	}
-	d.emit(id, fmt.Sprintf("\n%s 部署结束：%s\n", statusIcon(status), status))
+	if ctx.Err() != nil {
+		status = "timed_out"
+		d.emit(id, "✗ 发布执行超时或已中断，停止后续操作；远端结果须人工核对，不会自动重放\n")
+	}
+	if status == "agent_dispatched" {
+		d.mu.Lock()
+		tail := d.logs[id]
+		delete(d.logs, id)
+		d.mu.Unlock()
+		if tail != nil {
+			d.st.AppendDeployLog(id, tail.String())
+		}
+		// A durable Agent task owns completion now. No SSH waiter, completion
+		// event or terminal state is fabricated by the dispatching goroutine.
+		return
+	}
+	if err := d.st.FinishDeploy(id, status); err != nil {
+		d.emit(id, "✗ 实例终态保存失败，不能认定发布完成；请检查元数据库\n")
+		d.st.Audit("system", "persist-failed", "deploy", fmt.Sprint(id), map[string]any{"status": status})
+	} else {
+		d.finishScriptPublication(id, &runtimeService, status)
+		if status == "needs_review" {
+			d.emit(id, "\n⏳ 部署结果待核对，保留运行进程与执行保护\n")
+		} else {
+			d.emit(id, fmt.Sprintf("\n%s 部署结束：%s\n", statusIcon(status), status))
+		}
+	}
 	d.mu.Lock()
 	lt := d.logs[id]
-	delete(d.logs, id)
 	d.mu.Unlock()
 	if lt != nil {
 		d.st.AppendDeployLog(id, lt.String())
 	}
-	d.st.FinishDeploy(id, status)
+	d.mu.Lock()
+	delete(d.logs, id)
+	d.mu.Unlock()
 	d.hub.Close(-id)
 	// 发布事件进总线（monitor 图表标注发布时刻）
 	dp := d.st.GetDeploy(id)
 	environment, digest := "", ""
 	if dp != nil {
 		environment, digest = dp.Environment, dp.ArtifactDigest
+		status = dp.Status
 	}
 	d.publishEvent(sv.Name, version, host.Name, environment, digest, status)
+	if d.observedDeploy != nil {
+		d.observedDeploy(id)
+	}
 }
 
 func (d *Deployer) prepareRuntimeEnvironment(id int64, sv *Service, host Host) error {
+	return d.prepareRuntimeEnvironmentContext(context.Background(), id, sv, host)
+}
+
+func (d *Deployer) prepareRuntimeEnvironmentContext(ctx context.Context, id int64, sv *Service, host Host) error {
 	// Standard Java releases carry their own environment snapshot, so a failed
 	// release can restore the previous code AND configuration together.
 	if managedJava(sv) {
 		return nil
 	}
-	if sv.TargetType == TargetAliyunSAE || sv.TargetType == "ssh-static" {
+	if sv.TargetType == TargetAliyunSAE || sv.TargetType == TargetScript || sv.TargetType == "ssh-static" {
 		return nil
 	}
 	file := ""
 	shellFormat := sv.TargetType == "ssh-jar"
 	if shellFormat {
 		file = strings.TrimSuffix(sv.RemoteDir, "/") + "/.devopsplatform.env"
-		if _, err := SSHExec(host, "mkdir -p "+shellQuote(sv.RemoteDir), time.Minute); err != nil {
+		if _, err := SSHExecContext(ctx, host, "mkdir -p "+shellQuote(sv.RemoteDir), time.Minute); err != nil {
 			return err
 		}
 	} else {
@@ -254,10 +373,10 @@ func (d *Deployer) prepareRuntimeEnvironment(id int64, sv *Service, host Host) e
 		if name == "" {
 			name = "application"
 		}
-		file = "/tmp/.devopsplatform-" + name + ".env"
+		file = fmt.Sprintf("/tmp/.devopsplatform-%s-%d.env", name, id)
 	}
 	if len(sv.RuntimeEnv) == 0 {
-		_, err := SSHExec(host, "rm -f "+shellQuote(file), time.Minute)
+		_, err := SSHExecContext(ctx, host, "rm -f "+shellQuote(file), time.Minute)
 		return err
 	}
 	keys := make([]string, 0, len(sv.RuntimeEnv))
@@ -277,10 +396,13 @@ func (d *Deployer) prepareRuntimeEnvironment(id int64, sv *Service, host Host) e
 		content.WriteByte('\n')
 	}
 	temporary := file + ".new"
-	if err := SSHUploadContent(host, []byte(content.String()), temporary); err != nil {
+	if sv.TargetType == "docker-host" {
+		sv.RuntimeEnvFile = file
+	}
+	if err := SSHUploadContentContext(ctx, host, []byte(content.String()), temporary); err != nil {
 		return err
 	}
-	if _, err := SSHExec(host, "chmod 600 "+shellQuote(temporary)+" && mv "+shellQuote(temporary)+" "+shellQuote(file), time.Minute); err != nil {
+	if _, err := SSHExecContext(ctx, host, "chmod 600 "+shellQuote(temporary)+" && mv "+shellQuote(temporary)+" "+shellQuote(file), time.Minute); err != nil {
 		return err
 	}
 	sv.RuntimeEnvFile = file
@@ -427,6 +549,9 @@ func (d *Deployer) healthCheck(id int64, url string, max time.Duration) bool {
 }
 
 func (d *Deployer) publishEvent(service, version, host, environment, digest, status string) {
+	if status == "needs_review" {
+		return
+	}
 	if d.busURL == "" {
 		return
 	}
@@ -455,6 +580,9 @@ func (d *Deployer) RollbackWithTarget(deployID int64, reason, actor string, snap
 	dp := d.st.GetDeploy(deployID)
 	if dp == nil {
 		return 0, fmt.Errorf("deploy not found")
+	}
+	if strings.HasPrefix(dp.Host, "runner:") {
+		return 0, fmt.Errorf("脚本发布不支持自动回滚，请另建经过审核的发布单")
 	}
 	prev := d.st.PrevSuccess(dp.Service, dp.Host, deployID)
 	if prev == nil {

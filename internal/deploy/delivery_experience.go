@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -30,15 +31,19 @@ func deliveryManage(r *http.Request, owner string) bool {
 }
 
 type VersionArtifactBinding struct {
-	Service       string `json:"service"`
-	ArtifactID    int64  `json:"artifact_id"`
-	Digest        string `json:"digest"`
-	Version       string `json:"version"`
-	Branch        string `json:"branch"`
-	BuildID       int64  `json:"build_id"`
-	CodeConfirmed bool   `json:"code_confirmed"`
+	ArtifactKind         string `json:"artifact_kind,omitempty"`
+	BuildVariant         string `json:"build_variant,omitempty"`
+	BuildIncompatibility string `json:"build_incompatibility,omitempty"`
+	Service              string `json:"service"`
+	ArtifactID           int64  `json:"artifact_id"`
+	Digest               string `json:"digest"`
+	Version              string `json:"version"`
+	Branch               string `json:"branch"`
+	BuildID              int64  `json:"build_id"`
+	CodeConfirmed        bool   `json:"code_confirmed"`
 }
 type VersionArtifacts struct {
+	Environment string                   `json:"environment,omitempty"`
 	VersionID   int64                    `json:"version_id"`
 	Bindings    []VersionArtifactBinding `json:"bindings"`
 	ScopeDigest string                   `json:"scope_digest"`
@@ -56,18 +61,57 @@ func versionCodeScope(v *ReleaseVersion) string {
 	}
 	return digestJSON(code)
 }
-func (s *Store) VersionArtifacts(id int64) VersionArtifacts {
+func versionArtifactStorage(id int64, environment string) (string, string, []any) {
+	if environment == "" {
+		return "delivery_version_artifacts", "version_id=?", []any{id}
+	}
+	return "delivery_environment_artifacts", "version_id=? AND environment=?", []any{id, environment}
+}
+func (s *Store) VersionArtifacts(id int64, environments ...string) VersionArtifacts {
+	environment := ""
+	if len(environments) > 0 {
+		environment = environments[0]
+	}
 	out := VersionArtifacts{VersionID: id, Bindings: []VersionArtifactBinding{}}
+	out.Environment = environment
 	var raw string
 	var used int
-	if s.db.QueryRow(`SELECT document,used FROM delivery_version_artifacts WHERE version_id=?`, id).Scan(&raw, &used) == nil {
+	table, where, args := versionArtifactStorage(id, environment)
+	if s.db.QueryRow(`SELECT document,used FROM `+table+` WHERE `+where, args...).Scan(&raw, &used) == nil {
 		json.Unmarshal([]byte(raw), &out)
 		out.Locked = used == 1
+	} else if environment != "" {
+		legacy := s.VersionArtifacts(id)
+		if len(legacy.Bindings) > 0 {
+			compatible := true
+			for _, b := range legacy.Bindings {
+				if s.validateArtifactBuildVariant(s.GetArtifact(b.ArtifactID), environment) != nil {
+					compatible = false
+					break
+				}
+			}
+			if compatible {
+				return legacy
+			}
+		}
 	}
 	return out
 }
-func (s *Store) SaveVersionArtifacts(id int64, bindings []VersionArtifactBinding, actor string) (VersionArtifacts, error) {
+func (s *Store) SaveVersionArtifacts(id int64, bindings []VersionArtifactBinding, actor string, environments ...string) (VersionArtifacts, error) {
+	environment := ""
+	if len(environments) > 0 {
+		environment = environments[0]
+	}
 	out := VersionArtifacts{}
+	if environment != "" && s.GetEnvironment(environment) == nil {
+		return out, fmt.Errorf("目标环境不存在")
+	}
+	if environment != "" {
+		previous := s.VersionArtifacts(id, environment)
+		if previous.Environment == "" && previous.Locked {
+			return out, fmt.Errorf("此环境沿用的版本制品已锁定，请创建新版本")
+		}
+	}
 	v := s.GetReleaseVersion(id)
 	if v == nil || v.Status == ReleaseVersionCanceled {
 		return out, fmt.Errorf("发布版本不可用")
@@ -85,10 +129,17 @@ func (s *Store) SaveVersionArtifacts(id int64, bindings []VersionArtifactBinding
 	for i, b := range bindings {
 		a := s.GetArtifact(b.ArtifactID)
 		sv := s.GetService(b.Service)
-		if seen[b.Service] || !expected[b.Service] || a == nil || sv == nil || a.Service != b.Service || a.Digest == "" || a.Kind != artifactKindForService(sv.ArtifactType) || !b.CodeConfirmed {
+		if seen[b.Service] || !expected[b.Service] || a == nil || sv == nil || a.Service != b.Service || a.Digest == "" || !s.artifactMatchesEnvironment(a, sv, environment) || !b.CodeConfirmed {
 			return out, fmt.Errorf("请核对应用制品并人工确认包含本版本代码变更")
 		}
 		seen[b.Service] = true
+		if environment != "" {
+			if err := s.validateArtifactBuildVariant(a, environment); err != nil {
+				return out, err
+			}
+		}
+		b.ArtifactKind = a.Kind
+		b.BuildVariant, b.BuildIncompatibility = a.Metadata["build_variant"], ""
 		b.Digest, b.Version = a.Digest, a.Version
 		b.BuildID = 0
 		b.Branch = ""
@@ -101,25 +152,39 @@ func (s *Store) SaveVersionArtifacts(id int64, bindings []VersionArtifactBinding
 		}
 		bindings[i] = b
 	}
-	out = VersionArtifacts{VersionID: id, Bindings: bindings, ScopeDigest: versionCodeScope(v), Owner: actor, UpdatedAt: time.Now().Unix()}
+	out = VersionArtifacts{VersionID: id, Environment: environment, Bindings: bindings, ScopeDigest: versionCodeScope(v), Owner: actor, UpdatedAt: time.Now().Unix()}
 	raw, _ := json.Marshal(out)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return out, err
 	}
 	defer tx.Rollback()
+	artifactIDs := []int64{}
+	for _, binding := range bindings {
+		artifactIDs = append(artifactIDs, binding.ArtifactID)
+	}
+	if err := lockArtifactReferences(tx, artifactIDs...); err != nil {
+		return out, err
+	}
 	var existing string
 	var used int
-	err = tx.QueryRow(`SELECT document,used FROM delivery_version_artifacts WHERE version_id=?`, id).Scan(&existing, &used)
+	table, where, args := versionArtifactStorage(id, environment)
+	err = tx.QueryRow(`SELECT document,used FROM `+table+` WHERE `+where, args...).Scan(&existing, &used)
 	if err == nil && used == 1 {
 		return out, fmt.Errorf("此版本已生成交付单，制品映射已锁定；变更制品请创建新版本")
 	}
 	// Upsert does not overwrite a mapping concurrently locked by a submission.
-	if err != nil {
-		_, err = tx.Exec(`INSERT INTO delivery_version_artifacts(version_id,document,used) VALUES(?,?,0)`, id, string(raw))
+	if err == sql.ErrNoRows {
+		if environment == "" {
+			_, err = tx.Exec(`INSERT INTO delivery_version_artifacts(version_id,document,used) VALUES(?,?,0)`, id, string(raw))
+		} else {
+			_, err = tx.Exec(`INSERT INTO delivery_environment_artifacts(version_id,environment,document,used) VALUES(?,?,?,0)`, id, environment, string(raw))
+		}
+	} else if err != nil {
+		return out, err
 	} else {
 		var n int64
-		r, e := tx.Exec(`UPDATE delivery_version_artifacts SET document=? WHERE version_id=? AND used=0`, string(raw), id)
+		r, e := tx.Exec(`UPDATE `+table+` SET document=? WHERE `+where+` AND used=0`, append([]any{string(raw)}, args...)...)
 		err = e
 		if err == nil {
 			n, _ = r.RowsAffected()
@@ -139,6 +204,14 @@ func (s *Store) SaveVersionArtifacts(id int64, bindings []VersionArtifactBinding
 }
 
 type DeliveryRunSummary struct {
+	Preparation   bool   `json:"preparation"`
+	CurrentKind   string `json:"current_kind,omitempty"`
+	NextAction    string `json:"next_action,omitempty"`
+	BlockedReason string `json:"blocked_reason,omitempty"`
+	UpdatedAt     int64  `json:"updated_at"`
+
+	ScopeSummary    string `json:"scope_summary,omitempty"`
+	SourceType      string `json:"source_type,omitempty"`
 	ID              int64  `json:"id"`
 	TemplateID      int64  `json:"template_id"`
 	Name            string `json:"name"`
@@ -174,13 +247,13 @@ func (s *Store) DeliveryRunPage(q, status, environment, version, owner string, s
 		return "json_extract(plan,'" + p + "')"
 	}
 	where, args := []string{"1=1"}, []any{}
-	for _, f := range [][2]string{{"status", status}, {"owner", owner}, {field("$.environment.name"), environment}} {
+	for _, f := range [][2]string{{"owner", owner}, {field("$.environment.name"), environment}} {
 		if f[1] != "" {
 			where = append(where, f[0]+"=?")
 			args = append(args, f[1])
 		}
 	}
-	if version != "" {
+	if version != "" && version != "0" {
 		id, err := strconv.ParseInt(version, 10, 64)
 		if err != nil || id <= 0 {
 			return out, fmt.Errorf("版本筛选参数无效")
@@ -202,38 +275,111 @@ func (s *Store) DeliveryRunPage(q, status, environment, version, owner string, s
 			args = append(args, "%"+q+"%")
 		}
 	}
+	if status != "" {
+		where = append(where, "(status=? OR status IN ('running','blocked'))")
+		args = append(args, status)
+	}
 	clause := strings.Join(where, " AND ")
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM delivery_runs WHERE `+clause, args...).Scan(&out.Total); err != nil {
-		return out, err
-	}
-	rows, err := s.db.Query(deliveryRunSelect+` WHERE `+clause+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, size, (page-1)*size)...)
-	if err != nil {
-		return out, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		r, e := scanDeliveryRun(rows)
-		if e != nil {
-			return out, e
+	project := func(r *DeliveryRun) DeliveryRunSummary {
+		t := s.researchSummary(r)
+		v := DeliveryRunSummary{ID: r.ID, TemplateID: r.Plan.Template.ID, Name: r.Plan.Template.Name, Environment: r.Plan.Environment.Name, EnvironmentName: r.Plan.Environment.DisplayName, Owner: r.Owner, Approver: r.Approver, Status: r.Status, CreatedAt: r.CreatedAt, Applications: len(r.Plan.Services), TotalSteps: len(r.Steps), Preparation: r.Plan.PreparationRequest != nil, NextAction: t.NextAction, BlockedReason: t.BlockedReason, UpdatedAt: t.UpdatedAt}
+		if r.Plan.Scope != nil {
+			v.SourceType = r.Plan.Scope.Type
+			if v.SourceType == "work_items" {
+				v.ScopeSummary = fmt.Sprintf("需求 / Bug · %d 项", len(r.Plan.Scope.WorkItems))
+			}
+			if v.SourceType == "changes" {
+				v.ScopeSummary = fmt.Sprintf("所选变更 · %d 项", len(r.Plan.Scope.Changes))
+			}
 		}
-		v := DeliveryRunSummary{ID: r.ID, TemplateID: r.Plan.Template.ID, Name: r.Plan.Template.Name, Environment: r.Plan.Environment.Name, EnvironmentName: r.Plan.Environment.DisplayName, Owner: r.Owner, Approver: r.Approver, Status: r.Status, CreatedAt: r.CreatedAt, Applications: len(r.Plan.Services), TotalSteps: len(r.Steps)}
+		if v.Applications == 0 && r.Plan.Scope != nil {
+			apps := map[string]bool{}
+			for _, c := range r.Plan.Scope.Changes {
+				if (c.Kind == "code" || c.Kind == "artifact") && c.Service != "" {
+					apps[c.Service] = true
+				}
+			}
+			v.Applications = len(apps)
+		}
 		if r.Plan.Version != nil {
 			v.VersionID = r.Plan.Version.ID
 			v.Version = r.Plan.Version.Version
 		}
 		for _, step := range r.Steps {
-			if step.Status == "success" {
+			if step.Status == "success" || step.Status == "skipped" {
 				v.Completed++
 			} else if v.CurrentNode == "" {
 				v.CurrentNode = step.Name
+				v.CurrentKind = step.Kind
 			}
 		}
-		out.Items = append(out.Items, v)
+		return v
 	}
-	return out, rows.Err()
+	readBatch := func(query string, params []any) ([]*DeliveryRun, error) {
+		rows, err := s.db.Query(query, params...)
+		if err != nil {
+			return nil, err
+		}
+		items := []*DeliveryRun{}
+		for rows.Next() {
+			r, e := scanDeliveryRun(rows)
+			if e != nil {
+				rows.Close()
+				return nil, e
+			}
+			items = append(items, r)
+		}
+		err = rows.Err()
+		rows.Close()
+		return items, err
+	}
+	if status == "" {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM delivery_runs WHERE `+clause, args...).Scan(&out.Total); err != nil {
+			return out, err
+		}
+		rows, err := readBatch(deliveryRunSelect+` WHERE `+clause+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(append([]any{}, args...), size, (page-1)*size))
+		if err != nil {
+			return out, err
+		}
+		for _, r := range rows {
+			out.Items = append(out.Items, project(r))
+		}
+		return out, nil
+	}
+	// Filter the same effective status that detail/tracking reads, before counting
+	// and pagination. Keyset batches keep memory bounded and do not revisit new IDs.
+	var before int64
+	for {
+		query := deliveryRunSelect + ` WHERE ` + clause
+		params := append([]any{}, args...)
+		if before > 0 {
+			query += ` AND id<?`
+			params = append(params, before)
+		}
+		rows, err := readBatch(query+` ORDER BY id DESC LIMIT 100`, params)
+		if err != nil {
+			return out, err
+		}
+		for _, r := range rows {
+			v := project(r)
+			if v.Status != status {
+				continue
+			}
+			out.Total++
+			if out.Total > (page-1)*size && len(out.Items) < size {
+				out.Items = append(out.Items, v)
+			}
+		}
+		if len(rows) < 100 {
+			break
+		}
+		before = rows[len(rows)-1].ID
+	}
+	return out, nil
 }
 
 func registerDeliveryExperienceRoutes(mux *http.ServeMux, s *Store, m *ReleaseManager) {
+	registerReleaseReadinessRoutes(mux, s)
 	mux.HandleFunc("GET /api/delivery/runs/{id}/rollback-candidate", func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		releaseID, _ := strconv.ParseInt(r.URL.Query().Get("release_id"), 10, 64)
@@ -329,7 +475,7 @@ func registerDeliveryExperienceRoutes(mux *http.ServeMux, s *Store, m *ReleaseMa
 			deliveryWriteError(w, 404, "版本不存在")
 			return
 		}
-		deliveryJSON(w, s.VersionArtifacts(id))
+		deliveryJSON(w, s.VersionArtifacts(id, r.URL.Query().Get("environment")))
 	})
 	mux.HandleFunc("PUT /api/release-versions/{id}/artifacts", func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -339,13 +485,14 @@ func registerDeliveryExperienceRoutes(mux *http.ServeMux, s *Store, m *ReleaseMa
 			return
 		}
 		var body struct {
-			Bindings []VersionArtifactBinding `json:"bindings"`
+			Environment string                   `json:"environment"`
+			Bindings    []VersionArtifactBinding `json:"bindings"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body) != nil {
 			deliveryWriteError(w, 400, "制品关联格式错误")
 			return
 		}
-		out, err := s.SaveVersionArtifacts(id, body.Bindings, deliveryActor(r))
+		out, err := s.SaveVersionArtifacts(id, body.Bindings, deliveryActor(r), body.Environment)
 		if err != nil {
 			deliveryWriteError(w, 409, err)
 			return
@@ -368,7 +515,7 @@ func registerDeliveryExperienceRoutes(mux *http.ServeMux, s *Store, m *ReleaseMa
 			deliveryWriteError(w, 400, "制品筛选参数无效")
 			return
 		}
-		where := "a.service=? AND (a.source<>'pipeline-run' OR (r.status='success' AND r.artifact_id=a.id))"
+		where := "a.service=? AND NOT EXISTS (SELECT 1 FROM artifact_cleanup c WHERE c.artifact_id=a.id) AND (a.source<>'pipeline-run' OR (r.status='success' AND (r.artifact_id=a.id OR EXISTS (SELECT 1 FROM build_artifact_outputs o WHERE o.run_id=r.id AND o.artifact_id=a.id AND o.digest=a.digest AND o.parent_artifact_id=r.artifact_id AND o.role='compilation'))))"
 		args := []any{service}
 		if term := q.Get("q"); term != "" {
 			where += " AND (a.version LIKE ? OR r.branch LIKE ?)"
@@ -394,6 +541,22 @@ func registerDeliveryExperienceRoutes(mux *http.ServeMux, s *Store, m *ReleaseMa
 			}
 			out = append(out, b)
 		}
+		rows.Close() // release SQLite's cursor before provenance lookups
+		for i := range out {
+			a := s.GetArtifact(out[i].ArtifactID)
+			if a != nil {
+				out[i].BuildVariant = a.Metadata["build_variant"]
+				out[i].ArtifactKind = a.Kind
+			}
+			if environment := q.Get("environment"); environment != "" {
+				if !s.artifactMatchesEnvironment(a, s.GetService(service), environment) {
+					out[i].BuildIncompatibility = "制品类型与目标环境发布方式不匹配"
+				}
+				if err := s.validateArtifactBuildVariant(a, environment); err != nil {
+					out[i].BuildIncompatibility = err.Error()
+				}
+			}
+		}
 		if err := rows.Err(); err != nil {
 			deliveryWriteError(w, 500, err)
 			return
@@ -412,6 +575,11 @@ func registerDeliveryExperienceRoutes(mux *http.ServeMux, s *Store, m *ReleaseMa
 		for _, step := range run.Steps {
 			if step.ReleaseID == releaseID && releaseID > 0 {
 				allowed = true
+			}
+			for _, previous := range step.PreviousReleaseIDs {
+				if previous == releaseID && releaseID > 0 {
+					allowed = true
+				}
 			}
 		}
 		if !allowed {

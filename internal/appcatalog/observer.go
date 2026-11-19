@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -14,8 +15,61 @@ import (
 type Application struct {
 	ApplicationID string   `json:"application_id"`
 	Name          string   `json:"name"`
+	DisplayName   string   `json:"display_name"`
+	Identifier    string   `json:"identifier"`
 	Status        string   `json:"status"`
 	Sources       []string `json:"sources"`
+}
+
+// Presentation is deliberately not cached with ingestion identities. A rename
+// must become visible without invalidating or replacing any source identity.
+func (o *Observer) Presentations(cookie string) ([]Application, error) {
+	if o.baseURL == "" {
+		return nil, nil
+	}
+	var apps []Application
+	err := o.presentationRequest(http.MethodGet, "/api/registry/applications?include_archived=true", nil, cookie, &apps)
+	return apps, err
+}
+
+func (o *Observer) InitializePresentation(name, id, label, cookie string) (*Application, error) {
+	if o.baseURL == "" {
+		return nil, nil
+	}
+	var app Application
+	err := o.presentationRequest(http.MethodPost, "/api/registry/applications/observe", map[string]string{"name": name, "source": "deploy", "application_id": id, "display_name": label}, cookie, &app)
+	return &app, err
+}
+
+func (o *Observer) RenamePresentation(id, label, expected, cookie string) error {
+	if o.baseURL == "" {
+		return nil
+	}
+	return o.presentationRequest(http.MethodPut, "/api/registry/applications/"+url.PathEscape(id)+"/display-name", map[string]string{"display_name": label, "expected_display_name": expected}, cookie, nil)
+}
+
+func (o *Observer) presentationRequest(method, path string, body any, cookie string, result any) error {
+	raw, _ := json.Marshal(body)
+	req, err := http.NewRequest(method, o.baseURL+path, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("应用目录请求结果未确认，请刷新核对后重试: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("应用目录返回 %s，请刷新核对后重试", resp.Status)
+	}
+	if result == nil {
+		return nil
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(result)
 }
 
 // Observer resolves source-specific service names through the platform catalog.
@@ -110,6 +164,11 @@ func (o *Observer) ResolveWithSession(name, source, requestedID, cookie string) 
 // Detach removes an active source from the catalog while retaining the stable
 // application identity for historical logs and future re-adoption.
 func (o *Observer) Detach(name, source, applicationID string) error {
+	return o.DetachWithSession(name, source, applicationID, "")
+}
+
+// Interactive deletion must use the same administrator session as onboarding.
+func (o *Observer) DetachWithSession(name, source, applicationID, cookie string) error {
 	if o == nil || o.baseURL == "" {
 		return nil
 	}
@@ -123,6 +182,9 @@ func (o *Observer) Detach(name, source, applicationID string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
 	resp, err := o.client.Do(req)
 	if err != nil {
 		return err

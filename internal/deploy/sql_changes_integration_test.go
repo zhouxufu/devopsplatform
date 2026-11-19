@@ -26,14 +26,20 @@ func sqlTargetFixture(t *testing.T) (*Store, *ReleaseManager, *sql.DB, string) {
 	if err := st.UpsertEnvironment(env); err != nil {
 		t.Fatal(err)
 	}
-	c := ResourceConnection{Name: "qa-mysql", Kind: "mysql", Endpoint: addr, Username: "root", Password: os.Getenv("DEVOPS_SQL_TEST_PASSWORD"), Config: map[string]string{"database": "delivery_qa", "tls": "false"}}
+	c := ResourceConnection{Name: "qa-mysql", Kind: "mysql", Endpoint: addr, Username: "root", Password: os.Getenv("DEVOPS_SQL_TEST_PASSWORD"), Config: map[string]string{"tls": "false"}}
 	if e := st.UpsertConnection(c); e != nil {
 		t.Fatal(e)
 	}
-	if e := st.SaveApplicationResources("orders", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: c.Name}, {Alias: "db", Environment: "prod", Connection: c.Name}}}); e != nil {
+	if e := st.SaveApplicationResources("orders", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: c.Name, Config: map[string]string{"database": "delivery_qa"}}, {Alias: "db", Environment: "prod", Connection: c.Name, Config: map[string]string{"database": "delivery_qa"}}}}); e != nil {
 		t.Fatal(e)
 	}
-	db, e := openChangeMySQL(context.Background(), &c)
+	db, e := func() (*sql.DB, error) {
+		target, err := st.sqlBinding("orders", "test", "db")
+		if err != nil {
+			return nil, err
+		}
+		return openChangeMySQL(context.Background(), target)
+	}()
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -109,8 +115,8 @@ func TestSQLMySQLDDLPreviewExecuteAndDedup(t *testing.T) {
 	if e != nil || got.Status != "success" {
 		t.Fatalf("run not complete: %v %+v", e, got)
 	}
-	if _, e = st.prepareSQLNode(context.Background(), "sql", []int64{c.ID}, "test"); e == nil {
-		t.Fatal("did not block repeated execution")
+	if repeat, err := st.prepareSQLNode(context.Background(), "sql", []int64{c.ID}, "test"); err != nil || len(repeat.ChangeIDs) != 0 || len(repeat.Applied) != 1 {
+		t.Fatal("did not reuse successful execution", err)
 	}
 	// A new identical add-column change is safely skipped, not re-executed.
 	skip := sqlChangeFixture(t, st, fmt.Sprintf("ALTER TABLE %s ADD COLUMN enabled int NOT NULL DEFAULT 1", table))
@@ -121,6 +127,88 @@ func TestSQLMySQLDDLPreviewExecuteAndDedup(t *testing.T) {
 	conflict := sqlChangeFixture(t, st, fmt.Sprintf("ALTER TABLE %s ADD COLUMN enabled varchar(32)", table))
 	if _, e = st.prepareSQLNode(context.Background(), "preview", []int64{conflict.ID}, "test"); e == nil {
 		t.Fatal("conflicting column passed preflight")
+	}
+}
+
+func TestSQLMySQLResourceGroupMultipleDatabases(t *testing.T) {
+	if os.Getenv("DEVOPS_RESOURCE_GROUP_SQL_TEST") != "1" {
+		t.Skip("enable only on disposable delivery_qa + delivery_qa_groups schemas")
+	}
+	st, m, firstDB, table := sqlTargetFixture(t)
+	c := *st.GetConnection("qa-mysql")
+	c.Name = "qa-mysql-groups"
+	c.Config = map[string]string{"database": "delivery_qa_groups", "tls": "false"}
+	if err := st.UpsertConnection(c); err != nil {
+		t.Fatal(err)
+	}
+	secondDB, err := func() (*sql.DB, error) {
+		target, err := st.sqlBinding("orders", "test", "db")
+		if err != nil {
+			return nil, err
+		}
+		return openChangeMySQL(context.Background(), target)
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { secondDB.Exec("DROP TABLE IF EXISTS `" + table + "`"); secondDB.Close() })
+	g := &ResourceGroup{Name: "mysql-integration", Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}, {Alias: "other-db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: "qa-mysql", Config: map[string]string{"database": "delivery_qa"}}, {Alias: "other-db", Environment: "test", Connection: c.Name, Config: map[string]string{"database": "delivery_qa"}}}}
+	if err := st.SaveResourceGroup(g); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveApplicationResources("orders", ApplicationResources{ResourceGroup: g.Name}); err != nil {
+		t.Fatal(err)
+	}
+	ids := []int64{}
+	for _, alias := range []string{"db", "other-db"} {
+		ch := &Change{Kind: "mysql", Title: "Create in " + alias, Service: "orders", SQL: &SQLChange{ResourceAlias: alias, Content: fmt.Sprintf("CREATE TABLE %s (id bigint NOT NULL, PRIMARY KEY (id))", table), MaxAffectedRows: 100}}
+		if err := st.CreateChange(ch); err != nil {
+			t.Fatal(err)
+		}
+		st.SetChangeReady(ch.ID, true)
+		ids = append(ids, ch.ID)
+	}
+	tpl := &DeliveryTemplate{Name: "Two databases", Mode: "fixed", Nodes: []DeliveryNode{{ID: "sql", Kind: "mysql", Name: "SQL", ChangeIDs: ids}}}
+	if err := st.SaveDeliveryTemplate(tpl); err != nil {
+		t.Fatal(err)
+	}
+	req := DeliveryRequest{TemplateID: tpl.ID, Environment: "test", Reason: "Disposable QA"}
+	run, err := st.CreateDeliveryRun(req, "alice", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Plan.SQLPlans) != 2 || len(run.Steps) != 2 || run.Status != "pending_approval" {
+		t.Fatal("split / approval missing")
+	}
+	for _, db := range []*sql.DB{firstDB, secondDB} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?`, table).Scan(&count); err != nil || count != 0 {
+			t.Fatal("preview wrote DDL", err)
+		}
+	}
+	if _, err := st.ReviewDeliveryRun(run.ID, "reviewer", run.Digest, true); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		got, err := st.AdvanceDeliveryRun(run.ID, "alice", false, m)
+		if err != nil || got.Steps[i].Status != "success" {
+			t.Fatal("approved split execution failed", err, got)
+		}
+	}
+	for _, db := range []*sql.DB{firstDB, secondDB} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?`, table).Scan(&count); err != nil || count != 1 {
+			t.Fatal("DDL not applied to each database", err)
+		}
+	}
+	again, _, err := st.ResolveDelivery(req, m)
+	if err != nil || len(again.Blockers) > 0 || len(again.SQLPlans) != 2 {
+		t.Fatal("repeat preflight failed", err, again)
+	}
+	for _, plan := range again.SQLPlans {
+		if plan.Mode != "applied" || len(plan.Applied) != 1 {
+			t.Fatal("successful split change not skipped", plan)
+		}
 	}
 }
 
@@ -344,5 +432,92 @@ func TestSQLMySQLDMLCommitDataDriftAndRollback(t *testing.T) {
 	_ = db.QueryRow("SELECT COUNT(*) FROM " + table + "_b").Scan(&count)
 	if count != 0 {
 		t.Fatal("partly committed failed transaction")
+	}
+}
+
+// Opt-in isolated MySQL coverage: the same change selects distinct scripts and
+// executes them on separate disposable databases; no real application data.
+func TestSQLMySQLEnvironmentSpecificExecution(t *testing.T) {
+	st, m, testDB, table := sqlTargetFixture(t)
+	database := "env_" + table
+	if _, err := testDB.Exec("CREATE DATABASE `" + database + "` CHARACTER SET utf8mb4"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { testDB.Exec("DROP DATABASE IF EXISTS `" + database + "`") })
+	connection := *st.GetConnection("qa-mysql")
+	connection.Name = "qa-mysql-environment"
+	connection.Password = os.Getenv("DEVOPS_SQL_TEST_PASSWORD")
+	connection.Config = map[string]string{"tls": "false"}
+	if err := st.UpsertConnection(connection); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveApplicationResources("orders", ApplicationResources{Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: "qa-mysql", Config: map[string]string{"database": "delivery_qa"}}, {Alias: "db", Environment: "prod", Connection: connection.Name, Config: map[string]string{"database": database}}}}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := st.sqlBinding("orders", "prod", "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	productionDB, err := openChangeMySQL(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { productionDB.Close() })
+	env := *st.GetEnvironment("prod")
+	env.Approvers = "reviewer"
+	if err := st.UpsertEnvironment(env); err != nil {
+		t.Fatal(err)
+	}
+	defaultSQL := fmt.Sprintf("CREATE TABLE %s (id bigint NOT NULL, name varchar(64) NOT NULL DEFAULT '', PRIMARY KEY (id))", table)
+	productionSQL := fmt.Sprintf("CREATE TABLE %s (id bigint NOT NULL, name varchar(128) NOT NULL DEFAULT '', PRIMARY KEY (id))", table)
+	c := &Change{Kind: "mysql", Title: "同一变更按环境执行", Service: "orders", Owner: "alice", SQL: &SQLChange{ResourceAlias: "db", Content: defaultSQL, MaxAffectedRows: 100, EnvironmentOverrides: []SQLEnvironmentOverride{{Environment: "prod", Content: productionSQL, Reason: "生产保留更长的字段"}}}}
+	if err := st.CreateChange(c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetChangeReady(c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	var testRun *DeliveryRun
+	for _, name := range []string{"test", "prod"} {
+		var run *DeliveryRun
+		if name == "test" {
+			run = sqlRunFixture(t, st, m, c, name)
+			testRun = run
+		} else {
+			run, err = st.CreateDeliveryRun(DeliveryRequest{TemplateID: testRun.Plan.Template.ID, VersionID: testRun.Plan.Version.ID, Environment: name, Reason: "environment exception QA"}, "alice", m)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if name == "prod" {
+			if run.Status != "pending_approval" {
+				t.Fatal("production exception bypassed approval")
+			}
+			run, err = st.ReviewDeliveryRun(run.ID, "reviewer", run.Digest, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		plan := run.Plan.SQLPlans[0]
+		if name == "prod" && (len(plan.ScriptSelections) != 1 || plan.ScriptSelections[0].Content != productionSQL || !strings.Contains(plan.Statements[0].SQL, "128")) {
+			t.Fatal("production executed default", plan)
+		}
+		if name == "test" && (len(plan.ScriptSelections) != 0 || !strings.Contains(plan.Statements[0].SQL, "64")) {
+			t.Fatal("default script replaced", plan)
+		}
+		next, err := st.AdvanceDeliveryRun(run.ID, "alice", false, m)
+		if err != nil || next.Steps[0].Status != "success" {
+			t.Fatal(next, err)
+		}
+	}
+	for _, target := range []struct {
+		db     *sql.DB
+		schema string
+		length int
+	}{{testDB, "delivery_qa", 64}, {productionDB, database, 128}} {
+		var length int
+		if err := target.db.QueryRow(`SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME='name'`, target.schema, table).Scan(&length); err != nil || length != target.length {
+			t.Fatal(length, err)
+		}
 	}
 }

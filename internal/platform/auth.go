@@ -122,6 +122,13 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Exact deployment data-plane routes authenticate an independent,
+		// host-scoped Agent credential inside the deploy plugin. Console tokens
+		// and the log ingest credential are never accepted by those handlers.
+		if deploymentAgentDataPath(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Deploy webhooks carry an application-scoped random token and are called
 		// by Git providers that do not have a browser session.
 		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/plugins/deploy/api/hooks/") {
@@ -146,12 +153,16 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		}
 		// 登录界面由壳前端渲染，因此首页依赖的 JS/CSS 必须允许匿名读取。
 		// 这里只放行 GET/HEAD 静态资源，不放行任何插件或业务 API。
-		if r.URL.Path == "/" || ((r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+		if ((r.URL.Path == "/" || r.URL.Path == "/login") && (r.Method == http.MethodGet || r.Method == http.MethodHead)) || ((r.Method == http.MethodGet || r.Method == http.MethodHead) &&
 			(strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasPrefix(r.URL.Path, "/static/"))) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		http.Error(w, `{"error":"unauthorized"}`, 401)
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && pluginLoginReturn(r.URL.Path) {
+			http.Redirect(w, r, "/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+			return
+		}
+		platformLoginRequired(w)
 	})
 }
 
@@ -176,8 +187,36 @@ func requiresAdmin(r *http.Request) bool {
 	if r.Method == http.MethodPut && strings.HasPrefix(rest, "services/") {
 		return true
 	}
-	for _, prefix := range []string{"connections", "hosts", "host-groups", "variable-groups", "runners"} {
+	for _, prefix := range []string{"connections", "hosts", "host-groups", "variable-groups", "runners", "resource-groups", "deployment-agents"} {
 		if rest == prefix || strings.HasPrefix(rest, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func deploymentAgentDataPath(r *http.Request) bool {
+	p := strings.TrimPrefix(r.URL.Path, "/api/plugins/deploy/api/deployment-agent/")
+	if p == r.URL.Path {
+		return false
+	}
+	if r.Method == http.MethodPost && p == "enrollment" {
+		return true
+	}
+	if r.Method == http.MethodGet && p == "tasks" {
+		return true
+	}
+	if r.Method == http.MethodPost && p == "reports" {
+		return true
+	}
+	if r.Method == http.MethodGet {
+		parts := strings.Split(p, "/")
+		if len(parts) == 3 && parts[0] == "tasks" && parts[2] == "artifact" && len(parts[1]) > 0 && len(parts[1]) <= 96 {
+			for _, c := range parts[1] {
+				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+					return false
+				}
+			}
 			return true
 		}
 	}
@@ -186,4 +225,19 @@ func requiresAdmin(r *http.Request) bool {
 
 func securePasswordEqual(got, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func pluginLoginReturn(path string) bool {
+	if !strings.HasPrefix(path, "/api/plugins/") {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(path, "/api/plugins/"), "/"), "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] == "ui"
+}
+func platformLoginRequired(w http.ResponseWriter) {
+	w.Header().Set("X-Platform-Auth-Required", "1")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = w.Write([]byte(`{"error":"登录已过期，请重新登录","code":"platform_login_required"}`))
 }

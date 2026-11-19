@@ -6,12 +6,11 @@ export function useDatePopup() {
   const picker = ref(null), visible = ref(false)
   function escape(event) {
     if (event.key !== 'Escape' || !visible.value) return
-    picker.value?.handleClose()
     visible.value = false
     event.preventDefault()
     event.stopImmediatePropagation()
   }
   onMounted(() => document.addEventListener('keydown', escape, true))
   onBeforeUnmount(() => document.removeEventListener('keydown', escape, true))
-  return { picker, dateVisible: value => { visible.value = value } }
+  return { picker, popupVisible:visible, dateVisible: value => { visible.value = value } }
 }

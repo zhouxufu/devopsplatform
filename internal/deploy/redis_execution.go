@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ type RedisChangePlan struct {
 	Endpoint          string     `json:"endpoint"`
 	DB                string     `json:"db"`
 	Prefix            string     `json:"prefix"`
+	Prefixes          []string   `json:"prefixes,omitempty"`
 	DestinationDigest string     `json:"destination_digest"`
 	ChangeDigest      string     `json:"change_digest"`
 	Commands          [][]string `json:"commands"`
@@ -68,9 +70,8 @@ func validateRedisConnection(c *ResourceConnection) error {
 	if c.Config["redis_auth"] != "password" && c.Config["redis_auth"] != "none" {
 		return fmt.Errorf("Redis 认证支持 password 或 none")
 	}
-	prefix := c.Config["key_prefix"]
-	if prefix == "" || len(prefix) > 200 || strings.ContainsAny(prefix, "*?[]") || strings.IndexFunc(prefix, unicode.IsControl) >= 0 {
-		return fmt.Errorf("Redis 必须配置非空精确 Key 前缀（如 menu:），不允许通配符")
+	if _, err := redisAllowedPrefixes(c); err != nil {
+		return err
 	}
 	return nil
 }
@@ -318,8 +319,12 @@ func (s *Store) prepareRedisNode(ctx context.Context, nodeID string, ids []int64
 			ks, _ := redisCommandKeys(a)
 			keys += len(ks)
 			for _, k := range ks {
-				if k == c.Config["key_prefix"] || !strings.HasPrefix(k, c.Config["key_prefix"]) || strings.ContainsAny(k, "*?[]") {
-					return nil, fmt.Errorf("所有 Key 必须在前缀 %s 内且为精确 Key；不允许通配符或前缀本身", c.Config["key_prefix"])
+				prefixes, err := redisAllowedPrefixes(c)
+				if err != nil {
+					return nil, err
+				}
+				if !redisKeyInPrefixes(k, prefixes, false) {
+					return nil, fmt.Errorf("所有 Key 必须在已授权的精确前缀内；不允许通配符或前缀本身")
 				}
 			}
 		}
@@ -332,6 +337,9 @@ func (s *Store) prepareRedisNode(ctx context.Context, nodeID string, ids []int64
 		}
 		client.Close() // preview only authenticates/selects/PINGs; no maintenance commands.
 		item := RedisChangePlan{ChangeID: id, Service: change.Service, Alias: change.Redis.ResourceAlias, Connection: c.Name, Endpoint: c.Endpoint, DB: c.Config["db"], Prefix: c.Config["key_prefix"], DestinationDigest: sqlDestination(c), ChangeDigest: digestJSON([]any{change.Service, change.Redis}), Commands: commands}
+		if c.Config["key_prefixes"] != "" {
+			item.Prefixes, _ = redisAllowedPrefixes(c)
+		}
 		var count int
 		if err = s.db.QueryRow(`SELECT COUNT(*) FROM redis_execution_ledger WHERE target_key=? AND change_id=?`, redisTargetKey(item), id).Scan(&count); err != nil {
 			return nil, err
@@ -477,4 +485,45 @@ func registerRedisRoutes(mux *http.ServeMux, s *Store) {
 		p, e := s.prepareRedisNode(ctx, "preview", []int64{id}, req.Environment)
 		writeIntegrationJSON(w, p, e)
 	})
+}
+
+// Multiple prefixes are an explicit allowlist; legacy single-prefix snapshots
+// remain unchanged. No empty/wildcard scope, even on read-only paths.
+func redisAllowedPrefixes(c *ResourceConnection) ([]string, error) {
+	if c == nil {
+		return nil, fmt.Errorf("Redis 连接不存在")
+	}
+	prefixes := []string{c.Config["key_prefix"]}
+	if raw := c.Config["key_prefixes"]; raw != "" {
+		if json.Unmarshal([]byte(raw), &prefixes) != nil {
+			return nil, fmt.Errorf("Redis 前缀列表格式无效")
+		}
+	}
+	if len(prefixes) == 0 || len(prefixes) > 20 {
+		return nil, fmt.Errorf("Redis 需要 1–20 个精确 Key 前缀")
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, prefix := range prefixes {
+		if prefix == "" || len(prefix) > 200 || strings.ContainsAny(prefix, "*?[]") || strings.IndexFunc(prefix, unicode.IsControl) >= 0 {
+			return nil, fmt.Errorf("Redis 必须配置非空精确 Key 前缀（如 menu:），不允许通配符")
+		}
+		if !seen[prefix] {
+			out = append(out, prefix)
+			seen[prefix] = true
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+func redisKeyInPrefixes(key string, prefixes []string, allowPrefix bool) bool {
+	if strings.ContainsAny(key, "*?[]") {
+		return false
+	}
+	for _, prefix := range prefixes {
+		if prefix != "" && strings.HasPrefix(key, prefix) && (allowPrefix || key != prefix) {
+			return true
+		}
+	}
+	return false
 }

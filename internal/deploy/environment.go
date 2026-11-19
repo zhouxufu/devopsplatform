@@ -19,6 +19,7 @@ var runtimeEnvironmentKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 type Environment struct {
 	Name          string `json:"name"`
 	DisplayName   string `json:"display_name"`
+	Purpose       string `json:"purpose"`
 	Protected     bool   `json:"protected"`
 	RequireReason bool   `json:"require_reason"`
 	SortOrder     int    `json:"sort_order"`
@@ -31,7 +32,7 @@ type EnvironmentSetup struct {
 	Environments []Environment `json:"environments"`
 }
 
-// ServiceEnvironment 保存一个服务在某环境下独立的部署参数和主机组。
+// ServiceEnvironment 保存一个服务在某环境下独立的部署参数，以及直接选择或主机组提供的发布主机。
 type ServiceEnvironment struct {
 	Service             string            `json:"service"`
 	Environment         string            `json:"environment"`
@@ -52,8 +53,10 @@ type ServiceEnvironment struct {
 	Hosts               []string          `json:"hosts"`
 	DeployConfig        map[string]string `json:"deploy_config,omitempty"`
 	// RuntimeEnv 仅接受写入，不从查询接口回传明文；RuntimeEnvKeys 用于展示已保存项。
-	RuntimeEnv          map[string]string `json:"runtime_env,omitempty"`
-	RuntimeEnvKeys      []string          `json:"runtime_env_keys,omitempty"`
+	RuntimeEnv map[string]string `json:"runtime_env,omitempty"`
+	// RuntimeEnvPatch 增量更新；null 明确删除该项，空字符串仍是有效值。
+	RuntimeEnvPatch     map[string]*string `json:"runtime_env_patch,omitempty"`
+	RuntimeEnvKeys      []string           `json:"runtime_env_keys,omitempty"`
 	runtimeEnvEncrypted string
 	Approvers           string `json:"approvers,omitempty"`
 }
@@ -68,6 +71,9 @@ func (v ServiceEnvironment) ManagedTarget() bool { return v.TargetType == Target
 // orders. The legacy Hosts JSON field is retained for database compatibility,
 // but for managed targets it contains a provider resource reference.
 func (v ServiceEnvironment) ExecutionTargets() []string {
+	if v.ScriptTarget() {
+		return []string{"runner:" + v.DeployConfig["script_runner"]}
+	}
 	if !v.ManagedTarget() {
 		return append([]string{}, v.Hosts...)
 	}
@@ -79,6 +85,9 @@ func (v ServiceEnvironment) ExecutionTargets() []string {
 }
 
 func (v ServiceEnvironment) ExecutionHosts() []Host {
+	if v.ScriptTarget() {
+		return []Host{{Name: v.ExecutionTargets()[0], Addr: "Runner / " + v.DeployConfig["script_runner"], Environment: v.Environment}}
+	}
 	if !v.ManagedTarget() {
 		return nil
 	}
@@ -157,10 +166,36 @@ func normalizeEnvironment(env Environment) (Environment, error) {
 	if !environmentNameRE.MatchString(env.Name) || env.DisplayName == "" {
 		return env, fmt.Errorf("环境标识需为小写字母开头、最多 32 位，仅含字母数字、下划线或横线，且名称必填")
 	}
+	env.Purpose = strings.TrimSpace(env.Purpose)
+	if env.Purpose == "" {
+		env.Purpose = legacyEnvironmentPurpose(env.Name)
+	}
+	switch env.Purpose {
+	case "development", "test", "staging", "production", "other":
+	default:
+		return env, fmt.Errorf("环境用途仅支持 development、test、staging、production 或 other")
+	}
 	if env.Protected && env.Approvers == "" {
 		return env, fmt.Errorf("受保护环境必须配置至少一名审批人")
 	}
 	return env, nil
+}
+
+// Compatibility inference only for conventional legacy identifiers. Protection
+// is NOT proof of production: protected test/UAT must never count as上线.
+func legacyEnvironmentPurpose(name string) string {
+	switch name {
+	case "dev", "development":
+		return "development"
+	case "test", "testing", "qa", "uat":
+		return "test"
+	case "stage", "staging", "pre", "preprod":
+		return "staging"
+	case "prod", "production", "live":
+		return "production"
+	default:
+		return "other"
+	}
 }
 
 func (s *Store) EnvironmentSetup() EnvironmentSetup {
@@ -213,8 +248,8 @@ func (s *Store) InitializeEnvironments(environments []Environment) error {
 	}
 	now := time.Now().Unix()
 	for _, env := range normalized {
-		if _, err := tx.Exec(`INSERT INTO environments(name,display_name,protected,require_reason,sort_order,approvers,created_at) VALUES(?,?,?,?,?,?,?)`,
-			env.Name, env.DisplayName, env.Protected, env.RequireReason, env.SortOrder, env.Approvers, now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO environments(name,display_name,purpose,protected,require_reason,sort_order,approvers,created_at) VALUES(?,?,?,?,?,?,?,?)`,
+			env.Name, env.DisplayName, env.Purpose, env.Protected, env.RequireReason, env.SortOrder, env.Approvers, now); err != nil {
 			return err
 		}
 	}
@@ -226,7 +261,7 @@ func (s *Store) InitializeEnvironments(environments []Environment) error {
 }
 
 func (s *Store) Environments() []Environment {
-	rows, err := s.db.Query(`SELECT name,display_name,protected,require_reason,sort_order,COALESCE(approvers,'') FROM environments ORDER BY sort_order,name`)
+	rows, err := s.db.Query(`SELECT name,display_name,COALESCE(purpose,''),protected,require_reason,sort_order,COALESCE(approvers,'') FROM environments ORDER BY sort_order,name`)
 	if err != nil {
 		return []Environment{}
 	}
@@ -234,7 +269,10 @@ func (s *Store) Environments() []Environment {
 	out := []Environment{}
 	for rows.Next() {
 		var env Environment
-		if rows.Scan(&env.Name, &env.DisplayName, &env.Protected, &env.RequireReason, &env.SortOrder, &env.Approvers) == nil {
+		if rows.Scan(&env.Name, &env.DisplayName, &env.Purpose, &env.Protected, &env.RequireReason, &env.SortOrder, &env.Approvers) == nil {
+			if env.Purpose == "" {
+				env.Purpose = legacyEnvironmentPurpose(env.Name)
+			}
 			out = append(out, env)
 		}
 	}
@@ -243,8 +281,11 @@ func (s *Store) Environments() []Environment {
 
 func (s *Store) GetEnvironment(name string) *Environment {
 	var env Environment
-	if s.db.QueryRow(`SELECT name,display_name,protected,require_reason,sort_order,COALESCE(approvers,'') FROM environments WHERE name=?`, name).
-		Scan(&env.Name, &env.DisplayName, &env.Protected, &env.RequireReason, &env.SortOrder, &env.Approvers) == nil {
+	if s.db.QueryRow(`SELECT name,display_name,COALESCE(purpose,''),protected,require_reason,sort_order,COALESCE(approvers,'') FROM environments WHERE name=?`, name).
+		Scan(&env.Name, &env.DisplayName, &env.Purpose, &env.Protected, &env.RequireReason, &env.SortOrder, &env.Approvers) == nil {
+		if env.Purpose == "" {
+			env.Purpose = legacyEnvironmentPurpose(env.Name)
+		}
 		return &env
 	}
 	return nil
@@ -252,16 +293,27 @@ func (s *Store) GetEnvironment(name string) *Environment {
 
 func (s *Store) UpsertEnvironment(env Environment) error {
 	var err error
+	if env.Purpose == "" {
+		if current := s.GetEnvironment(env.Name); current != nil {
+			env.Purpose = current.Purpose
+		}
+	}
 	if env, err = normalizeEnvironment(env); err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT INTO environments(name,display_name,protected,require_reason,sort_order,approvers,created_at) VALUES(?,?,?,?,?,?,?)
-		ON CONFLICT(name) DO UPDATE SET display_name=excluded.display_name,protected=excluded.protected,require_reason=excluded.require_reason,sort_order=excluded.sort_order,approvers=excluded.approvers`,
-		env.Name, env.DisplayName, env.Protected, env.RequireReason, env.SortOrder, strings.TrimSpace(env.Approvers), time.Now().Unix())
+	_, err = s.db.Exec(`INSERT INTO environments(name,display_name,purpose,protected,require_reason,sort_order,approvers,created_at) VALUES(?,?,?,?,?,?,?,?)
+		ON CONFLICT(name) DO UPDATE SET display_name=excluded.display_name,purpose=excluded.purpose,protected=excluded.protected,require_reason=excluded.require_reason,sort_order=excluded.sort_order,approvers=excluded.approvers`,
+		env.Name, env.DisplayName, env.Purpose, env.Protected, env.RequireReason, env.SortOrder, strings.TrimSpace(env.Approvers), time.Now().Unix())
 	return err
 }
 
 func (s *Store) DeleteEnvironment(name string) error {
+	if s.compositionUses("environment", strings.TrimSpace(name)) {
+		return fmt.Errorf("环境仍有 Nacos 接入或应用自有资源绑定，请先解除")
+	}
+	if s.groupUses("environment", strings.TrimSpace(name)) {
+		return fmt.Errorf("环境仍被资源组使用，请先调整资源组绑定")
+	}
 	name = strings.TrimSpace(name)
 	if s.GetEnvironment(name) == nil {
 		return fmt.Errorf("环境不存在")
@@ -280,8 +332,18 @@ func (s *Store) DeleteEnvironment(name string) error {
 	if n > 0 {
 		return fmt.Errorf("环境仍被 %d 个应用配置、主机或主机组使用", n)
 	}
-	_, err := s.db.Exec(`DELETE FROM environments WHERE name=?`, name)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`DELETE FROM deploy_meta WHERE key=?`, "delivery_policy:"+name); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM environments WHERE name=?`, name); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ServiceEnvironments(service string) []ServiceEnvironment {
@@ -338,6 +400,10 @@ func (s *Store) ServiceEnvironmentHosts(service, environment string) []string {
 }
 
 func (s *Store) UpsertServiceEnvironment(v ServiceEnvironment) error {
+	return s.upsertServiceEnvironment(v, nil)
+}
+
+func (s *Store) upsertServiceEnvironment(v ServiceEnvironment, defaults *applicationDefaultPatch) error {
 	environment := s.GetEnvironment(v.Environment)
 	if s.GetService(v.Service) == nil || environment == nil {
 		return fmt.Errorf("服务或环境不存在")
@@ -345,14 +411,23 @@ func (s *Store) UpsertServiceEnvironment(v ServiceEnvironment) error {
 	if v.TargetType == "" {
 		v.TargetType = "ssh-jar"
 	}
-	if v.TargetType != "ssh-jar" && v.TargetType != "ssh-static" && v.TargetType != "docker-host" && v.TargetType != TargetAliyunSAE {
-		return fmt.Errorf("部署类型仅支持 ssh-jar、ssh-static、docker-host 或 aliyun-sae")
+	if v.TargetType != "ssh-jar" && v.TargetType != TargetJavaBundle && v.TargetType != "ssh-static" && v.TargetType != "docker-host" && v.TargetType != TargetAliyunSAE && !v.ManualTarget() && !v.ScriptTarget() {
+		return fmt.Errorf("部署类型仅支持 ssh-jar、ssh-java-bundle、ssh-static、docker-host、aliyun-sae、script 或 manual")
 	}
 	v.RemoteDir = strings.TrimSpace(v.RemoteDir)
-	if v.TargetType != "docker-host" && !v.ManagedTarget() && !path.IsAbs(v.RemoteDir) {
+	if v.TargetType != "docker-host" && !v.ManagedTarget() && !v.ManualTarget() && !v.ScriptTarget() && !path.IsAbs(v.RemoteDir) {
 		return fmt.Errorf("远端目录必须是绝对路径")
 	}
-	if v.TargetType == "ssh-jar" && v.DeployConfig["java_mode"] == "managed" {
+	if v.TargetType == TargetJavaBundle {
+		if s.GetService(v.Service).ArtifactType != ArtifactJavaBundle {
+			return fmt.Errorf("Java 整包部署需要 Java 整包制品")
+		}
+		if v.DeployConfig == nil {
+			v.DeployConfig = map[string]string{}
+		}
+		v.DeployConfig["java_mode"] = "managed"
+	}
+	if (v.TargetType == "ssh-jar" || v.TargetType == TargetJavaBundle) && v.DeployConfig["java_mode"] == "managed" {
 		if strings.TrimSpace(v.DeployConfig["health_failure_action"]) == "" {
 			v.DeployConfig["health_failure_action"] = healthFailureRollback
 		}
@@ -370,6 +445,12 @@ func (s *Store) UpsertServiceEnvironment(v ServiceEnvironment) error {
 		return fmt.Errorf("JAR 部署必须配置启动命令")
 	}
 	if v.TargetType == "docker-host" {
+		if err := validateDockerHealthURL(&Service{DeployConfig: v.DeployConfig, HealthURL: v.HealthURL}); err != nil {
+			return err
+		}
+		if _, err := parseDockerRuntime(v.DeployConfig); err != nil {
+			return err
+		}
 		if v.DeployConfig == nil {
 			v.DeployConfig = map[string]string{}
 		}
@@ -449,6 +530,16 @@ func (s *Store) UpsertServiceEnvironment(v ServiceEnvironment) error {
 		v.BatchSize, v.MaxParallel = 1, 1
 		v.PauseBetweenBatches, v.FailureThreshold = false, 0
 	}
+	if v.ScriptTarget() {
+		if err := s.validateScriptTarget(&v); err != nil {
+			return err
+		}
+	}
+	if v.ManualTarget() {
+		if err := validateManualTarget(&v, s.GetService(v.Service)); err != nil {
+			return err
+		}
+	}
 	if v.Strategy == "" {
 		v.Strategy = "rolling"
 	}
@@ -464,50 +555,70 @@ func (s *Store) UpsertServiceEnvironment(v ServiceEnvironment) error {
 	if v.FailureThreshold < 0 {
 		return fmt.Errorf("失败阈值不能小于 0")
 	}
-	runtimeEnvEncrypted, runtimeEnvKeys := "", []string{}
-	if current := s.GetServiceEnvironment(v.Service, v.Environment); current != nil {
-		runtimeEnvEncrypted = current.runtimeEnvEncrypted
-		runtimeEnvKeys = append(runtimeEnvKeys, current.RuntimeEnvKeys...)
+	if v.RuntimeEnv != nil && v.RuntimeEnvPatch != nil {
+		return fmt.Errorf("环境变量不能同时整体替换和增量更新")
 	}
-	if v.RuntimeEnv != nil {
-		var err error
-		runtimeEnvEncrypted, runtimeEnvKeys, err = s.encryptRuntimeEnvironment(v.RuntimeEnv)
-		if err != nil {
-			return err
-		}
-	}
-	if !v.ManagedTarget() && strings.TrimSpace(v.HostGroup) == "" {
-		return fmt.Errorf("应用环境必须绑定主机组，不能临时输入或选择主机")
-	}
-	var group *HostGroup
-	if !v.ManagedTarget() {
-		group = s.GetHostGroup(v.HostGroup)
-		if group == nil || len(group.Hosts) == 0 {
-			return fmt.Errorf("主机组不存在或为空: %s", v.HostGroup)
-		}
-		if group.Environment != v.Environment {
-			return fmt.Errorf("主机组 %s 属于 %s 环境，不能绑定到 %s", group.Name, group.Environment, v.Environment)
-		}
-		v.Hosts = group.Hosts
-	}
-	if err := validateReleasePolicy(v, len(v.Hosts)); err != nil {
+	beforePolicy, afterPolicy, err := s.prepareApplicationDefault(v.Service, v.Environment, defaults)
+	if err != nil {
 		return err
-	}
-	seen := map[string]bool{}
-	for _, host := range v.Hosts {
-		if seen[host] {
-			return fmt.Errorf("主机重复: %s", host)
-		}
-		seen[host] = true
-		if s.GetHost(host) == nil {
-			return fmt.Errorf("主机不存在: %s", host)
-		}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockArtifactLifecycle(tx); err != nil {
+		return err
+	}
+	if err := instanceOperationBusy(tx, v.Service, v.Environment, ""); err != nil {
+		return err
+	}
+	if err := resolveEnvironmentHosts(tx, &v); err != nil {
+		return err
+	}
+	// Serialize even the first environment insert on MySQL. Reading before the
+	// transaction loses other editors' additions, including ordinary config saves.
+	if tx.dialect == "mysql" {
+		var name string
+		if err := tx.QueryRow(`SELECT name FROM services WHERE name=? FOR UPDATE`, v.Service).Scan(&name); err != nil {
+			return err
+		}
+	}
+	runtimeEnvEncrypted, runtimeEnvKeys := "", []string{}
+	keysJSONText := "[]"
+	query := `SELECT COALESCE(runtime_env_encrypted,''),COALESCE(runtime_env_keys,'[]') FROM service_environments WHERE service=? AND environment=?`
+	if tx.dialect == "mysql" {
+		query += " FOR UPDATE"
+	}
+	if err := tx.QueryRow(query, v.Service, v.Environment).Scan(&runtimeEnvEncrypted, &keysJSONText); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err := json.Unmarshal([]byte(keysJSONText), &runtimeEnvKeys); err != nil {
+		return fmt.Errorf("无法读取已保存的环境变量名")
+	}
+	values := v.RuntimeEnv
+	if v.RuntimeEnvPatch != nil {
+		values, err = s.decryptRuntimeEnvironment(runtimeEnvEncrypted)
+		if err != nil {
+			return fmt.Errorf("无法读取已保存的环境变量，未修改配置")
+		}
+		for key, value := range v.RuntimeEnvPatch {
+			if !runtimeEnvironmentKeyRE.MatchString(key) {
+				return fmt.Errorf("环境变量名格式错误")
+			}
+			if value == nil {
+				delete(values, key)
+			} else {
+				values[key] = *value
+			}
+		}
+	}
+	if values != nil {
+		runtimeEnvEncrypted, runtimeEnvKeys, err = s.encryptRuntimeEnvironment(values)
+		if err != nil {
+			return err
+		}
+	}
 	config, _ := json.Marshal(v.DeployConfig)
 	keysJSON, _ := json.Marshal(runtimeEnvKeys)
 	if _, err := tx.Exec(`INSERT INTO service_environments(service,environment,target_type,remote_dir,start_cmd,stop_cmd,health_url,strategy,max_parallel,host_group,batch_size,pause_between_batches,failure_threshold,deploy_config,runtime_env_encrypted,runtime_env_keys,updated_at)
@@ -516,6 +627,16 @@ func (s *Store) UpsertServiceEnvironment(v ServiceEnvironment) error {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM service_environment_hosts WHERE service=? AND environment=?`, v.Service, v.Environment); err != nil {
+		return err
+	}
+	if v.HostGroup == "" && !v.ManagedTarget() && !v.ManualTarget() && !v.ScriptTarget() {
+		for i, host := range v.Hosts {
+			if _, err := tx.Exec(`INSERT INTO service_environment_hosts(service,environment,host,sort_order) VALUES(?,?,?,?)`, v.Service, v.Environment, host, i); err != nil {
+				return err
+			}
+		}
+	}
+	if err := writeApplicationDefault(tx, v.Environment, beforePolicy, afterPolicy); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -540,13 +661,19 @@ func (s *Store) ProtectedEnvironmentForHost(service, host string) *Environment {
 
 func (s *Store) DeleteServiceEnvironment(service, environment string) error {
 	if release := s.ActiveReleaseForServiceEnvironment(service, environment); release != nil {
-		return fmt.Errorf("该应用环境存在进行中的发布单 #%d，不能删除", release.ID)
+		return fmt.Errorf("该应用环境存在进行中的发布单 %s，不能删除", release.DisplayLabel())
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockArtifactLifecycle(tx); err != nil {
+		return err
+	}
+	if err := instanceOperationBusy(tx, service, environment, ""); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM service_environment_hosts WHERE service=? AND environment=?`, service, environment); err != nil {
 		return err
 	}

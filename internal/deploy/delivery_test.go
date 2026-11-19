@@ -248,6 +248,6 @@ func TestHostGroupsAreEnvironmentIsolated(t *testing.T) {
 	}
 	base.HostGroup, base.Hosts = "", []string{"dev-1"}
 	if err := st.UpsertServiceEnvironment(base); err == nil {
-		t.Fatal("application environment accepted direct hosts")
+		t.Fatal("application environment accepted a direct host from another environment")
 	}
 }

@@ -6,6 +6,7 @@ export function scopeChanges(changes, workIDs = [], manualIDs = []) {
 }
 export function scopePayload(version, workIDs, manualIDs) {
   return {version:version.version, title:version.title, description:version.description || '',
+	preparation_template_id:version.preparation_template_id||0,preparation_environment:version.preparation_environment||'',
     work_item_ids:[...new Set(workIDs || [])], manual_change_ids:[...new Set(manualIDs || [])]};
 }
 export function frozenChangeIDs(versions = []) {

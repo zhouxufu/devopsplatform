@@ -5,16 +5,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"logplatform/internal/logtext"
 	"logplatform/internal/types"
 )
 
@@ -166,19 +167,23 @@ func (t *Tailer) tailFile(ctx context.Context, path string) {
 	backoff := 250 * time.Millisecond
 	var rotatedAt time.Time
 	resetOffset := false
+	var nextMetadataCheck time.Time
 
 	for {
 		lineStart := offset
 		line, consumed, readErr := readLine(r, maxLineLen)
 		if consumed > 0 {
 			offset += consumed
-			if st, err := f.Stat(); err == nil {
-				mtime = st.ModTime().Unix()
+			now := time.Now()
+			if !now.Before(nextMetadataCheck) {
+				if st, err := f.Stat(); err == nil {
+					mtime = st.ModTime().Unix()
+				}
+				nextMetadataCheck = now.Add(250 * time.Millisecond)
 			}
 			if len(head) < 172 { // base64(128 bytes) 长度为 172；文件初建时补齐稳定签名
 				head = readHeadSig(path)
 			}
-			now := time.Now()
 			if ev, ok := merger.add(line, now, lineStart, offset); ok {
 				if !t.emit(ctx, ev, now, path, key, device, inode, mtime, head, generation, resetOffset) {
 					return
@@ -279,7 +284,21 @@ func (t *Tailer) emit(ctx context.Context, merged mergedEvent, ts time.Time, pat
 
 func eventID(host, environment, service, path, generation string, device, inode uint64, start, end int64, message string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00%d\x00", host, environment, service, path, generation, device, inode, start, end)
+	var storage [512]byte
+	b := storage[:0]
+	for _, value := range []string{host, environment, service, path, generation} {
+		b = append(b, value...)
+		b = append(b, 0)
+	}
+	b = strconv.AppendUint(b, device, 10)
+	b = append(b, 0)
+	b = strconv.AppendUint(b, inode, 10)
+	b = append(b, 0)
+	b = strconv.AppendInt(b, start, 10)
+	b = append(b, 0)
+	b = strconv.AppendInt(b, end, 10)
+	b = append(b, 0)
+	h.Write(b)
 	h.Write([]byte(message))
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -288,10 +307,13 @@ func eventID(host, environment, service, path, generation string, device, inode 
 
 // readLine 读一行（含换行符计入 consumed），超过 max 截断
 func readLine(r *bufio.Reader, max int) (line string, consumed int64, err error) {
+	chunk, firstErr := r.ReadSlice('\n')
+	if firstErr != bufio.ErrBufferFull && len(chunk) <= max {
+		return strings.TrimRight(string(chunk), "\r\n"), int64(len(chunk)), firstErr
+	}
 	var buf []byte
 	truncated := false
 	for {
-		chunk, e := r.ReadSlice('\n')
 		consumed += int64(len(chunk))
 		if len(buf)+len(chunk) > max {
 			room := max - len(buf)
@@ -302,11 +324,12 @@ func readLine(r *bufio.Reader, max int) (line string, consumed int64, err error)
 		} else {
 			buf = append(buf, chunk...)
 		}
-		if e == bufio.ErrBufferFull {
+		if firstErr == bufio.ErrBufferFull {
+			chunk, firstErr = r.ReadSlice('\n')
 			continue
 		}
-		if e != nil {
-			err = e
+		if firstErr != nil {
+			err = firstErr
 		}
 		break
 	}
@@ -345,7 +368,12 @@ func (m *merger) add(line string, now time.Time, lineStart, lineEnd int64) (merg
 	if m.re == nil { // 单行模式
 		return mergedEvent{Message: line, Start: lineStart, End: lineEnd}, true
 	}
+	// Match visible text, but retain the original bytes for checkpoints, event
+	// identity and transport. Existing timestamp rules also work on colored Java.
 	newStart := m.re.MatchString(line)
+	if !newStart && strings.IndexByte(line, '\x1b') >= 0 {
+		newStart = m.re.MatchString(logtext.StripANSIColors(line))
+	}
 	if newStart && m.buf.Len() > 0 {
 		out := mergedEvent{Message: m.buf.String(), Start: m.startOff, End: m.endOff}
 		m.buf.Reset()

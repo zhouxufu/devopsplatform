@@ -1,0 +1,81 @@
+// All business requests are intercepted. No real tracker/DB/deployment writes.
+import assert from 'node:assert/strict'
+import {readFile} from 'node:fs/promises'
+import path from 'node:path'
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright')
+const base='http://127.0.0.1:9800',dist=path.resolve('web/dist')
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH})
+const page=await browser.newPage({viewport:{width:1440,height:960}}),errors=[],requests=[],unexpected=[],writes=[]
+page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept())
+await page.addInitScript(()=>{window.__opened=[];window.open=u=>{window.__opened.push(u);return null}})
+const work={id:7,source:'zentao:issues',external_id:'26087',kind:'bug',title:'菜单修复',status:'open',external_status:'active',assigned_to:'alice',resolved_by:'alice',owner:'sync',severity:'1',priority:'1',resolution:'backend_custom',resolution_label:'后端代码修复',source_fields_read_at:1,updated_at:1791856800,metadata_revision:0,release_required:true,description:'<p>说明</p>'}
+const bug={id:'26087',title:work.title,status:'active',steps:work.description,assignedTo:'alice',resolvedBy:'alice',severity:'1',pri:'1',resolution:'backend_custom'}
+const run={id:5,status:'success',owner:'alice',digest:'frozen',plan:{template:{id:1,name:'研发交付',workbench:'research'},scope:{type:'work_items',work_items:[work],changes:[]},environment:{name:'prod',display_name:'生产'},nodes:[]},steps:[]}
+await page.route('**/*',async route=>{
+ const request=route.request(),url=new URL(request.url()),p=url.pathname.replace('/api/plugins/research',''),method=request.method(),reply=json=>route.fulfill({json})
+ if(url.origin!==base)return route.abort()
+ if(url.pathname==='/api/plugins/research/ui')return route.fulfill({body:await readFile(path.join(dist,'research.html')),contentType:'text/html'})
+ if(/\/assets\/[^/]+\.(js|css)$/.test(url.pathname))return route.fulfill({body:await readFile(path.join(dist,'assets',path.basename(url.pathname))),contentType:url.pathname.endsWith('.js')?'text/javascript':'text/css'})
+ if(!['fetch','xhr'].includes(request.resourceType()))return route.abort()
+ requests.push({method,p,query:url.searchParams.toString()})
+ if(method==='GET'){
+  if(p==='/api/me')return reply({username:'alice',display_name:'Alice',role:'admin',auth_enabled:true})
+  if(p==='/api/users')return reply([{username:'alice',display_name:'Alice',enabled:true}])
+  if(p==='/api/plugins')return reply([{name:'research'},{name:'deploy'},{name:'devtools'}])
+  if(p==='/api/research/overview')return reply({actor:'alice',aliases:['alice'],connections:[{name:'issues',authorized:true,account:'alice',field_labels:{resolution:{backend_custom:'后端代码修复'}}}]})
+  if(p==='/api/research/tasks')return reply({items:[],total:0,page:1})
+  if(p==='/api/research/work-items/sources')return reply([{name:'issues',products:[1]}])
+  if(p==='/api/research/work-items/page')return reply({items:[work],total:1,page:1,total_exact:true,has_more:false,people:{alice:'Alice'}})
+  if(p==='/api/work-items/people')return reply(['alice'])
+  if(p==='/api/environments')return reply([{name:'prod',display_name:'生产',protected:true}])
+  if(p==='/api/services')return reply([])
+  if(p==='/api/research/work-items/7')return reply({item:work,remote:{bug,digest:'native',actions:{}},activity:[],pending_operations:[]})
+  if(p==='/api/research/work-items/7/action-options')return reply({bug,digest:'native',assignedTo:'alice',users:{alice:'Alice'},builds:{trunk:'主干'},resolutions:{backend_custom:'后端代码修复'}})
+  if(p==='/api/research/flows')return reply([{id:1,name:'研发交付',owner:'alice',workbench:'research',nodes:[]}])
+  if(p==='/api/research/flows/runs')return reply([run])
+  if(p==='/api/research/flows/runs/5')return reply(run)
+  if(p==='/api/release-versions')return reply([])
+ }
+ if(method==='POST'&&p==='/api/research/work-items/attach'){const body=request.postDataJSON();assert.deepEqual(body,{connection:'issues',external_id:'26087'});writes.push(p);return reply(work)}
+ unexpected.push(method+' '+p);return route.fulfill({status:404,json:{error:'unexpected fixture route'}})
+})
+try{
+ await page.goto(base+'/api/plugins/research/ui')
+ const tabs=page.locator('.page-header-navigation nav')
+ assert.equal(await tabs.getByRole('link',{name:'我的工作项'}).count(),0)
+ await tabs.getByRole('button',{name:'我的工作项',exact:true}).click()
+ assert.equal(await tabs.getByRole('button',{name:'我的工作项',exact:true}).evaluate(el=>getComputedStyle(el).textDecorationLine),'none')
+ await page.locator('tbody tr').first().waitFor()
+ for(const title of ['级别 ↕','P ↕','方案 ↕'])await page.getByRole('button',{name:title,exact:true}).waitFor()
+ await page.getByText('后端代码修复',{exact:true}).waitFor()
+ await Promise.all([page.waitForResponse(r=>r.url().includes('/work-items/page?')),page.getByRole('button',{name:'指派给我',exact:true}).click()])
+ const assigned=requests.filter(r=>r.p==='/api/research/work-items/page').at(-1)
+ assert.match(assigned.query,/person_role=assigned_to/);assert.match(assigned.query,/person=alice/)
+ await Promise.all([page.waitForResponse(r=>r.url().includes('/work-items/page?')),page.getByRole('button',{name:'我的待上线',exact:true}).click()])
+ const pending=requests.filter(r=>r.p==='/api/research/work-items/page').at(-1)
+ assert.match(pending.query,/delivery=pending_release/);assert.match(pending.query,/release_required=yes/)
+ assert.equal(new URLSearchParams(pending.query).has('environment'),false)
+ await Promise.all([page.waitForResponse(r=>r.url().includes('order=priority_asc')),page.getByRole('button',{name:'P ↕',exact:true}).click()])
+ await page.locator('tbody tr').first().getByRole('button',{name:'解决',exact:true}).click()
+ const origin=page.url()
+ await page.getByRole('dialog',{name:'解决 Bug · 26087',exact:true}).waitFor()
+ await page.locator('.r-grid label').filter({hasText:'解决方式'}).getByText('后端代码修复',{exact:true}).waitFor()
+ await page.getByRole('button',{name:'取消',exact:true}).click()
+ await page.getByRole('dialog').waitFor({state:'hidden'});assert.equal(page.url(),origin)
+ await page.getByRole('button',{name:'菜单修复',exact:true}).click()
+ await page.getByRole('button',{name:'发起交付',exact:true}).click()
+ assert.match((await page.evaluate(()=>window.__opened)).at(-1),/orchestration\?work_items=7$/)
+ assert.match(page.url(),/\/work\/7/,'existing templates forced a preparation flow')
+ await page.getByRole('button',{name:'交付记录',exact:true}).click()
+ await page.getByRole('button',{name:'查看交付流程',exact:true}).click()
+ await page.getByRole('heading',{name:'交付进度 #5',exact:true}).waitFor()
+ await page.getByRole('button',{name:'继续发布交付',exact:true}).click()
+ assert.match((await page.evaluate(()=>window.__opened)).at(-1),/orchestration\?work_items=7$/)
+ assert.equal(await page.getByRole('link',{name:'准备流程',exact:true}).count(),0)
+ await page.getByRole('button',{name:'← 返回工作项',exact:true}).click()
+ await page.getByRole('button',{name:'← 返回原列表'}).click()
+ for(const width of [1440,900,700]){await page.setViewportSize({width,height:960});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)}
+ await page.setViewportSize({width:1440,height:960});await page.screenshot({path:'/tmp/research-consistency-qa.png',fullPage:true})
+ assert.deepEqual(unexpected,[]);assert.deepEqual(errors,[]);assert.deepEqual(writes,['/api/research/work-items/attach'])
+ console.log('PASS uniform tabs, live source columns/custom labels, production-only pending query, standard delivery entry, optional configurable flow handoff, three widths; fixture only')
+}finally{await browser.close()}

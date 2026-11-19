@@ -114,7 +114,7 @@ func (n *nacosClient) request(ctx context.Context, method, path string, args url
 	}
 	resp, err := n.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("Nacos 网络连接失败或请求超时，请检查地址、TLS 和网络")
+		return nil, 0, &resourceTransportError{cause: err}
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, nacosMaxContent+1))
@@ -122,7 +122,7 @@ func (n *nacosClient) request(ctx context.Context, method, path string, args url
 		return nil, resp.StatusCode, fmt.Errorf("Nacos 响应无效或超过 1 MiB")
 	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return nil, resp.StatusCode, fmt.Errorf("Nacos 认证或配置读写权限不足")
+		return nil, resp.StatusCode, &resourceRemoteError{Code: "authentication_failed", Message: "Nacos 认证或配置读写权限不足", Suggestion: "核对连接认证及该命名空间的读取授权"}
 	}
 	if resp.StatusCode == 409 {
 		return nil, resp.StatusCode, fmt.Errorf("Nacos 配置基线冲突，禁止覆盖；请重新预览审核")
@@ -138,7 +138,7 @@ func (n *nacosClient) args(dataID, group string) url.Values {
 func (n *nacosClient) read(ctx context.Context, dataID, group string) (string, error) {
 	b, status, err := n.request(ctx, http.MethodGet, "/v1/cs/configs", n.args(dataID, group), "")
 	if status == 404 {
-		return "", fmt.Errorf("目标 Nacos 配置不存在；本阶段仅修改已有配置，请先在来源平台创建")
+		return "", &resourceRemoteError{Code: "configuration_missing", Message: "目标 Nacos 配置不存在；本阶段仅修改已有配置，请先在来源平台创建", Suggestion: "核对所选环境、命名空间、Group 和 Data ID"}
 	}
 	if err == nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(string(b))), "<!doctype html") {
 		return "", fmt.Errorf("Nacos 返回 HTML 页面，请核对服务根路径和认证")

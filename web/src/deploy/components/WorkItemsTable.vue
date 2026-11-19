@@ -1,113 +1,72 @@
 <script setup>
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ElButton, ElInput } from '../../shared/components/ui.js';
-import Sel from '../../shared/components/Sel.vue';
-import HelpTip from '../../shared/components/HelpTip.vue';
-const props=defineProps({me:{type:Object,default:()=>({})},canManage:{type:Function,required:true}});
-const emit=defineEmits(['view','edit','delivery','version','create']);
-const api=inject('api');
-const query=ref(''),status=ref(''),kind=ref(''),person=ref(''),personRole=ref('related');
-const items=ref([]),people=ref([]),page=ref(1),pageSize=ref(20),total=ref(0),loading=ref(false),error=ref(''),peopleError=ref('');
-let sequence=0,searchTimer;
-const pages=computed(()=>Math.max(1,Math.ceil(total.value/pageSize.value)));
-const filtered=computed(()=>!!(query.value||status.value||kind.value||person.value));
-const canUseMine=computed(()=>!!props.me.username&&props.me.username!=='local'&&props.me.auth_enabled!==false);
-const mine=computed(()=>canUseMine.value&&person.value===props.me.username);
-const personOptions=computed(()=>[...new Set([...people.value,...(person.value?[person.value]:[])])].map(value=>({value,label:value})));
-const roles=[{value:'related',label:'相关人员'},{value:'assigned_to',label:'指派给'},{value:'resolved_by',label:'由谁解决'},{value:'opened_by',label:'由谁创建'},{value:'closed_by',label:'由谁关闭'},{value:'owner',label:'手工需求创建人'}];
-const statuses=[{value:'open',label:'进行中（未关闭）'},{value:'active',label:'激活'},{value:'resolved',label:'已解决'},{value:'closed',label:'已关闭'}];
-const statusLabel=item=>({active:'激活',resolved:'已解决',closed:'已关闭'}[item.external_status]||{open:'进行中',closed:'已关闭'}[item.status]||item.status);
-const account=value=>value==='closed'?'已关闭':value||'—';
-const date=value=>value?new Date(value*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'—';
-const missingPeople=computed(()=>items.value.some(v=>v.source?.startsWith('zentao:')&&![v.assigned_to,v.opened_by,v.resolved_by,v.closed_by].some(Boolean)));
-async function loadPage(){
- clearTimeout(searchTimer);
- const request=++sequence;
- loading.value=true;error.value='';items.value=[];
- const params=new URLSearchParams({page:String(page.value),page_size:String(pageSize.value),q:query.value,status:status.value,kind:kind.value,person:person.value,person_role:personRole.value});
- try{
-  const result=await api(`api/work-items/page?${params}`);
-  if(request!==sequence)return;
-  if(!Array.isArray(result?.items)||!Number.isInteger(result.total))throw new Error('需求列表响应格式错误，请刷新页面');
-  items.value=result.items;total.value=result.total;page.value=result.page;
- }catch(e){if(request===sequence){error.value=e.message;total.value=0}}
- finally{if(request===sequence)loading.value=false}
-}
-async function loadPeople(){try{const result=await api('api/work-items/people');if(!Array.isArray(result))throw new Error('人员响应格式错误');people.value=result;peopleError.value=''}catch(e){people.value=[];peopleError.value='人员列表加载失败，请刷新重试'}}
-function refresh(){loadPage();loadPeople()}
-function goto(value){page.value=value;loadPage()}
-function showMine(){personRole.value='related';person.value=mine.value?'':props.me.username}
-function clearFilters(){query.value='';status.value='';kind.value='';person.value='';personRole.value='related'}
-watch(query,()=>{page.value=1;sequence++;loading.value=true;items.value=[];clearTimeout(searchTimer);searchTimer=setTimeout(loadPage,300)});
-watch([status,kind,person,personRole,pageSize],()=>{page.value=1;loadPage()});
-onMounted(refresh);
-onBeforeUnmount(()=>{sequence++;clearTimeout(searchTimer)});
-defineExpose({refresh});
-</script>
-<template>
- <section class="work-list" aria-label="需求与 BUG 列表">
-  <div class="work-filters">
-   <ElInput v-model="query" class="work-search" placeholder="搜索标题、描述或外部编号" aria-label="搜索需求与 BUG" clearable />
-   <Sel v-model="kind" :options="[{value:'requirement',label:'需求'},{value:'bug',label:'BUG'}]" all-label="全部类型" width="120px" aria-label="需求类型" />
-   <Sel v-model="status" :options="statuses" all-label="全部状态" width="180px" aria-label="需求状态" />
-   <div class="person-filters">
-    <Sel v-model="personRole" :options="roles" width="150px" aria-label="人员关系" />
-    <Sel v-model="person" :options="personOptions" filterable all-label="全部人员" width="220px" aria-label="筛选人员" />
-    <HelpTip text="相关人员包含禅道的指派人、创建人、解决人、关闭人；手工需求按创建人筛选。平台同步人不算 Bug 负责人。只看我的使用当前登录账号，请与禅道账号保持一致。历史 Bug 需要重新同步才能补齐人员字段。" />
-   </div>
-   <ElButton :type="mine?'primary':'default'" :disabled="!canUseMine" :title="canUseMine?'按当前登录账号筛选相关记录':'登录后使用；当前可直接选择禅道账号'" @click="showMine">只看我的</ElButton>
-   <ElButton v-if="filtered" text @click="clearFilters">清空筛选</ElButton>
-   <ElButton :loading="loading" @click="refresh">刷新</ElButton><HelpTip v-if="missingPeople" text="部分历史 Bug 暂无人员信息，重新同步来源平台后补齐。人员筛选不会包含这些历史记录。" />
-  </div>
-  <p v-if="peopleError" class="list-hint" role="alert">{{peopleError}}</p>
+import DataTable from "../../shared/components/DataTable.vue"
 
-  <div class="work-table-scroll" tabindex="0" aria-label="需求表格，可横向滚动" :aria-busy="loading">
-   <table class="work-table">
-    <colgroup><col class="type-col" /><col class="number-col" /><col class="title-col" /><col class="status-col" /><col class="person-col" /><col class="person-col" /><col class="date-col" /><col class="actions-col" /></colgroup>
-    <thead><tr><th scope="col">类型</th><th scope="col">编号</th><th scope="col">标题</th><th scope="col">状态</th><th scope="col">指派给</th><th scope="col">由谁解决</th><th scope="col">同步 / 更新时间</th><th scope="col" class="fixed-actions">操作</th></tr></thead>
-    <tbody>
-     <tr v-for="item in items" :key="item.id">
-      <td><span class="kind-tag" :class="item.kind">{{item.kind==='bug'?'BUG':'需求'}}</span></td>
-      <td><span class="work-number" :title="item.source">{{item.external_id||`#${item.id}`}}</span><small>{{item.external_id?'禅道 / 外部':'手工'}}</small></td>
-      <td><button class="work-title" :title="item.title" @click="emit('view',item)">{{item.title}}</button><small :title="item.source">{{item.source?.startsWith('zentao:')?item.source.slice(7):item.source==='manual'?`创建人：${item.owner||'—'}`:item.source}}</small></td>
-      <td><span class="work-status" :class="item.external_status||item.status">{{statusLabel(item)}}</span></td>
-      <td :title="item.assigned_to||'暂无人员信息'">{{account(item.assigned_to)}}</td>
-      <td :title="item.resolved_by||'暂无人员信息'">{{account(item.resolved_by)}}</td>
-      <td :title="item.updated_at?new Date(item.updated_at*1000).toLocaleString('zh-CN'):''">{{date(item.updated_at)}}</td>
-      <td class="fixed-actions"><div class="row-actions"><button @click="emit('view',item)">查看</button><button @click="emit('delivery',item)">交付内容</button><button @click="emit('version',item)">纳入版本</button><button v-if="canManage(item)" @click="emit('edit',item)">编辑</button></div></td>
-     </tr>
-     <tr v-if="!items.length"><td colspan="8" class="table-empty">
-      <span v-if="loading" role="status">正在加载…</span>
-      <template v-else-if="error"><p role="alert">{{error}}</p><ElButton @click="refresh">重试</ElButton></template>
-      <template v-else-if="filtered"><p>没有符合筛选条件的需求或 Bug</p><ElButton @click="clearFilters">清空筛选</ElButton></template>
-      <template v-else><p>尚无需求与 Bug</p><ElButton @click="emit('create')">新建需求</ElButton></template>
-     </td></tr>
-    </tbody>
-   </table>
-  </div>
-  <div class="work-pagination">
-   <span role="status">{{loading?'查询中…':`共 ${total} 条`}}</span>
-   <Sel v-model="pageSize" :options="[20,50,100].map(value=>({value,label:`${value} 条 / 页`}))" width="130px" aria-label="每页条数" />
-   <div class="page-navigation" aria-label="需求列表分页">
-    <ElButton size="small" :disabled="loading||page<=1" @click="goto(1)">首页</ElButton>
-    <ElButton size="small" :disabled="loading||page<=1" @click="goto(page-1)">上一页</ElButton>
-    <span>{{page}} / {{pages}} 页</span>
-    <ElButton size="small" :disabled="loading||page>=pages" @click="goto(page+1)">下一页</ElButton>
-    <ElButton size="small" :disabled="loading||page>=pages" @click="goto(pages)">末页</ElButton>
-   </div>
-  </div>
- </section>
-</template>
-<style scoped>
-.work-list{min-width:0}.work-filters{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px;margin-bottom:10px;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
-.work-search{width:280px;max-width:100%}.person-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.list-hint{font-size:12px;color:var(--muted);margin:0 0 10px}
-.work-table-scroll{overflow:auto;max-height:calc(100vh - 230px);min-height:180px;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
-.work-table{width:100%;min-width:1150px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-size:13px;line-height:1.4}.work-table th,.work-table td{text-align:left;padding:8px 14px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--panel)}
-.work-table th{position:sticky;top:0;background:var(--panel2);color:var(--muted);font-size:12px;font-weight:600;z-index:2}.work-table tbody tr:hover td{background:var(--panel2)}.work-table tbody tr:last-child td{border-bottom:0}
-.type-col{width:72px}.number-col{width:100px}.title-col{width:auto}.status-col{width:90px}.person-col{width:120px}.date-col{width:140px}.actions-col{width:230px}
-.work-table small{display:block;color:var(--muted);font-size:11px;margin-top:5px;overflow:hidden;text-overflow:ellipsis}.work-title{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;padding:0;background:none;color:var(--text);font-weight:600;font-size:13px;cursor:pointer;text-align:left}.work-title:hover{color:var(--brand)}
-.kind-tag,.work-status{font-size:11px;border-radius:5px;padding:4px 6px;background:var(--panel2);color:var(--muted)}.kind-tag.bug{color:var(--brand);background:var(--brand-soft)}.work-status.closed{color:var(--ok)}.work-status.resolved{color:var(--brand)}.work-status.active{color:var(--warn)}
-.work-table .fixed-actions{position:sticky;right:0;border-left:1px solid var(--border);z-index:1}.work-table th.fixed-actions{z-index:3}.row-actions{display:flex;gap:12px}.row-actions button{padding:3px 0;border:0;background:none;color:var(--brand);font-size:12px;cursor:pointer;white-space:nowrap}.row-actions button:hover{text-decoration:underline}
-.work-table .table-empty{text-align:center;height:160px;color:var(--muted)}.table-empty p{margin:0 0 14px}.work-pagination{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 0;font-size:12px;color:var(--muted)}.page-navigation{margin-left:auto;display:flex;align-items:center;gap:10px}.work-title:focus-visible,.row-actions button:focus-visible,.work-table-scroll:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
-@media(max-width:700px){.work-search{width:100%}.work-filters{padding:12px}.work-table-scroll{max-height:60vh}.work-table .fixed-actions{position:static}.page-navigation{margin-left:0;flex-wrap:wrap;gap:8px}.person-filters{width:100%}}
-</style>
+import {computed,inject,nextTick,onBeforeUnmount,onMounted,ref,watch} from 'vue'
+
+import {useTableLayout} from '../../shared/composables/tableLayout.js'
+import {browserView} from '../../shared/viewMemory.js'
+import {useWorkspaceActivity} from '../../shared/composables/workspaceActivity.js'
+
+
+import ListFilters from '../../shared/components/ListFilters.vue'
+import HelpTip from '../../shared/components/HelpTip.vue'
+import {issueStatus,sourcePerson,personOptions} from '../../shared/issuePresentation.js'
+const props=defineProps({me:{type:Object,default:()=>({})},canManage:{type:Function,required:true},environments:{type:Array,default:()=>[]}})
+const emit=defineEmits(['view','preview','delivery','version','run'])
+const api=inject('api'),{pinTableActions}=useTableLayout()
+const scope=ref('production'),environment=ref(''),query=ref(''),status=ref(''),kind=ref(''),person=ref(''),personRole=ref('related')
+const items=ref([]),page=ref(1),pageSize=ref(20),total=ref(0),loading=ref(false),error=ref(''),sourceErrors=ref([]),checkedAt=ref(0)
+let sequence=0,timer,memory,restoring=true,disposed=false,epoch=0
+const active=useWorkspaceActivity()
+let poll
+const pendingStates=new Set(['running','pending_approval','approved','paused','waiting_manual','waiting_confirmation','waiting_next_batch'])
+function schedule(){clearTimeout(poll);if(!disposed&&active.value&&!document.hidden&&!sourceErrors.value.length&&items.value.some(w=>pendingStates.has(w.delivery_status)))poll=setTimeout(()=>refresh(true),15000)}
+const defaults={scope:'production',environment:'',q:'',status:'',kind:'',person:'',role:'related',page:1,size:20}
+const viewState=()=>({scope:scope.value,environment:environment.value,q:query.value,status:status.value,kind:kind.value,person:person.value,role:personRole.value,page:page.value,size:pageSize.value})
+const canMine=computed(()=>!!props.me.username&&props.me.username!=='local'&&props.me.auth_enabled!==false)
+const mine=computed(()=>canMine.value&&person.value===props.me.username)
+const labels=computed(()=>Object.assign({},...items.value.map(w=>w.person_labels||{})))
+const people=computed(()=>personOptions([...new Set(items.value.flatMap(w=>[w.assigned_to,w.resolved_by,w.owner]).filter(Boolean)),...(person.value?[person.value]:[])],labels.value))
+const roles=[{value:'related',label:'相关人员'},{value:'assigned_to',label:'指派给'},{value:'resolved_by',label:'解决人'},{value:'owner',label:'自定义创建人'}]
+const statuses=[{value:'open',label:'未关闭'},{value:'active',label:'激活'},{value:'resolved',label:'已解决'},{value:'closed',label:'已关闭'}]
+const prep={draft:'待完善',partial:'部分就绪',ready:'已就绪',blocked:'范围待核对'}
+const delivery={not_started:'无可见交付记录',pending_approval:'待审批',approved:'待执行',running:'执行中',paused:'已暂停',waiting_manual:'待确认',waiting_next_batch:'待批次确认',success:'交付成功',partial_success:'部分范围成功',scope_changed:'有新变更待交付',failed:'交付失败',rejected:'已驳回',canceled:'已取消',cancelled:'已取消',timeout:'已超时',needs_review:'待核对',timed_out:'已超时',rolled_back:'已回滚',uncertain:'结果待核对'}
+delivery.scope_unverified='范围待核对'
+delivery.waiting_confirmation='待确认'
+const advanced=ref(false)
+const advancedCount=computed(()=>[person.value].filter(Boolean).length)
+const filtered=computed(()=>!!(query.value||status.value||kind.value||person.value||environment.value))
+const nonproduction=computed(()=>props.environments.filter(e=>e.purpose!=='production').map(e=>({value:e.name,label:e.display_name||e.name})))
+const personLabel=(value,item)=>sourcePerson(value,item.person_labels||{})
+async function refresh(quiet=false){
+ clearTimeout(timer);clearTimeout(poll);const request=++sequence;loading.value=true;error.value='';sourceErrors.value=[];if(quiet!==true)items.value=[]
+ const q=new URLSearchParams({scope:scope.value,environment:scope.value==='nonproduction'?environment.value:'',page:String(page.value),page_size:String(pageSize.value),q:query.value,status:status.value,kind:kind.value,person:mine.value?'':person.value,person_role:personRole.value,mine:mine.value?'1':''})
+ try{const data=await api('api/work-items/delivery-page?'+q);if(request!==sequence||disposed)return;if(!Array.isArray(data.items)||!Number.isInteger(data.total))throw Error('交付清单响应无效');items.value=data.items;total.value=data.total;page.value=data.page;sourceErrors.value=data.source_errors||[];checkedAt.value=data.checked_at}
+ catch(e){if(request===sequence){error.value=e.message;total.value=0;items.value=[]}}
+ finally{if(request===sequence){loading.value=false;schedule()}}
+}
+function clearFilters(){query.value='';status.value='';kind.value='';person.value='';environment.value='';personRole.value='related'}
+function goto(value){page.value=value;refresh()}
+watch(query,()=>{if(restoring)return;page.value=1;sequence++;loading.value=true;items.value=[];clearTimeout(timer);timer=setTimeout(refresh,300)})
+watch([scope,environment,status,kind,person,personRole,pageSize],()=>{if(restoring)return;page.value=1;refresh()})
+watch([scope,environment,query,status,kind,person,personRole,page,pageSize],()=>{if(memory&&!restoring)memory.write(viewState(),defaults)},{flush:'post'})
+watch(()=>props.me.username,async actor=>{if(!actor)return;const current=++epoch;restoring=true;memory=browserView('deploy:delivery-work:v1',actor);const v=memory.read(defaults);scope.value=['production','nonproduction','unassigned'].includes(v.scope)?v.scope:'production';environment.value=v.environment;query.value=v.q;status.value=v.status;kind.value=v.kind;person.value=v.person;personRole.value=v.role;page.value=v.page;pageSize.value=v.size;await nextTick();if(disposed||current!==epoch)return;restoring=false;refresh()},{immediate:true})
+function resume(){if(active.value&&!document.hidden&&!restoring&&!loading.value)refresh(true);else clearTimeout(poll)}
+function changed(e){if(e.source===window.parent&&e.origin===location.origin&&e.data?.type==='work-item.changed')resume()}
+watch(active,resume)
+onMounted(()=>{document.addEventListener('visibilitychange',resume);window.addEventListener('message',changed)})
+onBeforeUnmount(()=>{disposed=true;sequence++;clearTimeout(timer);clearTimeout(poll);document.removeEventListener('visibilitychange',resume);window.removeEventListener('message',changed)})
+defineExpose({refresh})
+
+import OptionPicker from '../../shared/components/OptionPicker.vue'
+
+
+
+import {Badge,Button,Empty,EmptyContent,EmptyDescription,EmptyHeader,Field,FieldLabel,Input,Pagination,PaginationContent,PaginationNext,PaginationPrevious,Popover,PopoverContent,PopoverTrigger,Spinner,Table,TableBody,TableCell,TableHead,TableHeader,TableRow,Tabs,TabsList,TabsTrigger} from '../../shared/shadcn-ui.js'
+
+import {InputGroup,InputGroupInput,InputGroupAddon,InputGroupButton} from '../../shared/shadcn-ui.js'
+
+import {XIcon} from '@lucide/vue'
+</script>
+<template><section aria-label="交付工作项清单" class="delivery-work-list"><div class="scope-row"><Tabs aria-label="交付范围" :model-value="scope" @update:model-value="scope=$event;"><TabsList class="h-auto! flex-wrap gap-y-1 [&>[data-slot=tabs-trigger]]:h-7"><TabsTrigger :value="&quot;production&quot;">生产交付</TabsTrigger><TabsTrigger :value="&quot;nonproduction&quot;">开发 / 测试</TabsTrigger><TabsTrigger :value="&quot;unassigned&quot;">待归属</TabsTrigger></TabsList></Tabs><HelpTip text="仅展示有实际变更的工作项。生产范围复用上线规则及明确的变更归属；子 Bug 变更聚合到主项，不重复发版。待归属不是生产候选。查询不会执行变更或修改来源 Bug。"/><small v-if="checkedAt">来源实时核对 {{new Date(checkedAt*1000).toLocaleTimeString()}}</small></div><ListFilters v-model="advanced" :active-count="advancedCount" class="work-filters"><InputGroup  class="min-w-0 work-search"><InputGroupInput v-model="query" placeholder="搜索主项 / 子 Bug 标题或编号" v-bind="{'aria-label':'搜索交付工作项'}"/><InputGroupAddon align="inline-end"><InputGroupButton v-if="query" :disabled="false" size="icon-xs" aria-label="清空输入" @click="query='' "><XIcon/></InputGroupButton></InputGroupAddon></InputGroup><OptionPicker v-if="scope==='nonproduction'" v-model="environment" :options="nonproduction" all-label="全部非生产环境" :style="{width:'170px',maxWidth:'100%'}" aria-label="核对环境"/><OptionPicker v-model="kind" :options="[{value:'requirement',label:'需求'},{value:'bug',label:'BUG'}]" all-label="全部类型" :style="{width:'120px',maxWidth:'100%'}" aria-label="工作项类型"/><OptionPicker v-model="status" :options="statuses" all-label="全部来源状态" :style="{width:'150px',maxWidth:'100%'}" aria-label="来源状态"/><template #actions><Button @click="person=mine?'':me.username" :variant="({primary:'default',secondary:'outline',text:'ghost',outline:'outline',dashed:'outline'})[mine?'primary':'secondary']||'outline'" size="default" type="button" :disabled="(!canMine)">只看我的</Button><Button v-if="filtered" @click="clearFilters" variant="ghost" size="default" type="button">清空筛选</Button><Button @click="refresh" variant="outline" size="default" type="button" :disabled="(loading)"><Spinner v-if="loading"/>刷新</Button></template><template #advanced><Field ><FieldLabel as="div">人员关系</FieldLabel><OptionPicker v-model="personRole" :options="roles" :style="{width:'140px',maxWidth:'100%'}" aria-label="人员关系"/></Field><Field ><FieldLabel as="div">人员</FieldLabel><OptionPicker v-model="person" placeholder="人员账号（可输入）" :style="{width:'190px'}" aria-label="筛选人员" :options="[...(people).map((p)=>({value:p.value,label:String(p.label)}))]" allow-create all-label="不限"/></Field></template></ListFilters><p v-for="message in sourceErrors" :key="message" role="alert" class="source-error">来源读取失败，该来源未展示旧快照：{{message}} <Button @click="refresh" variant="ghost" size="default" type="button" :disabled="(loading)">重试</Button></p><div class="console-table min-w-0 max-w-full"><div v-if="loading" class="flex items-center gap-2 py-2" role="status"><Spinner/>正在读取</div><div class="min-w-0 max-w-full" :style="{maxHeight:({minWidth:1320}).y?({minWidth:1320}).y+'px':undefined}"><DataTable class="[&_[data-slot=table-container]]:rounded-lg [&_[data-slot=table-container]]:border" :rows="(items||[])" :columns="[{id:'c0',label:&quot;工作项 / 范围&quot;,size:220,minSize:160,required:true,defaultHidden:false,flex:true,selection:false,pin:'left'},{id:'c1',label:&quot;来源状态&quot;,size:88,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c2',label:&quot;变更准备&quot;,size:128,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c3',label:&quot;目标交付结果&quot;,size:184,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c4',label:&quot;生产交付判定&quot;,size:144,minSize:64,required:false,defaultHidden:true,flex:false,selection:false,pin:false},{id:'c5',label:&quot;指派给 / 解决人&quot;,size:152,minSize:64,required:false,defaultHidden:false,flex:false,selection:false,pin:false},{id:'c6',label:&quot;操作&quot;,size:152,minSize:64,required:true,defaultHidden:false,flex:false,selection:false,pin:'right'}]" table-key="deploy-components-WorkItemsTable-0" :row-key="(record,rowIndex)=>typeof (&quot;id&quot;)==='function'?(&quot;id&quot;)(record):record[&quot;id&quot;]??rowIndex"><template #header-c0>工作项 / 范围</template><template #cell-c0="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:w} in [{record,rowIndex}]"><Button :title="w.title" @click="emit('view',w)" class="title-link" variant="ghost" size="sm" type="button">#{{w.external_id||w.id}} · {{w.title}}</Button><div class="row-meta"><Badge variant="secondary">{{w.kind==='bug'?'BUG':'需求'}}</Badge><span>{{w.ownership==='unassigned'?'待确定交付归属':w.linked_items.length?'主项聚合交付':'独立交付'}}</span><Popover v-if="w.linked_items.length"><PopoverTrigger as-child><Button variant="ghost" size="sm" type="button">随主项 {{w.linked_items.length}} 项</Button></PopoverTrigger><PopoverContent class="max-h-[80dvh] max-w-[calc(100vw-2rem)] overflow-auto" align="end"><div class="child-list"><Button v-for="child in w.linked_items" :key="child.id" @click="emit('view',child)" variant="ghost" size="default" type="button">#{{child.external_id||child.id}} · {{child.title}}</Button></div></PopoverContent></Popover></div></template></div></template><template #header-c1>来源状态</template><template #cell-c1="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:w} in [{record,rowIndex}]"><Badge variant="secondary">{{issueStatus(w)}}</Badge></template></div></template><template #header-c2>变更准备</template><template #cell-c2="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:w} in [{record,rowIndex}]"><Badge :variant="(w.preparation==='ready'?'green':'gray')==='red'?'destructive':'secondary'">{{prep[w.preparation]||w.preparation}}</Badge><small>{{w.ready_count}} / {{w.change_count}} 项就绪</small></template></div></template><template #header-c3>目标交付结果</template><template #cell-c3="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:w} in [{record,rowIndex}]"><Button v-if="w.run_id" @click="emit('run',w.run_id)" variant="ghost" size="sm" type="button">{{delivery[w.delivery_status]||w.delivery_status}}</Button><span v-else>{{scope==='unassigned'?'尚未明确生产归属':delivery[w.delivery_status]||w.delivery_status}}</span><small v-if="w.run_id">{{w.delivery_environment}} · 执行单 #{{w.run_id}}</small><HelpTip v-if="w.delivery_status==='success'" text="当前变更范围在该目标环境执行成功；不代表服务当前健康。"/></template></div></template><template #header-c4>生产交付判定</template><template #cell-c4="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:w} in [{record,rowIndex}]"><span :title="w.release_reason||w.no_release_reason">{{w.release_required===true?'需上线':w.release_required===false?'不独立上线':'待判定'}}</span></template></div></template><template #header-c5>指派给 / 解决人</template><template #cell-c5="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(&quot;&quot;)}"><template v-for="{record:w} in [{record,rowIndex}]">{{personLabel(w.assigned_to,w)}}<small>{{personLabel(w.resolved_by,w)}}</small></template></div></template><template #header-c6>操作</template><template #cell-c6="{record,rowIndex}"><div class="min-w-0 break-words" :class="{truncate:!!(false)}"><template v-for="{record:w} in [{record,rowIndex}]"><div class="cell-actions"><Button @click="emit('preview',w)" variant="ghost" size="sm" type="button">变更总览</Button><Button @click="emit('delivery',w)" :aria-label="scope==='unassigned'?'确定变更归属':'维护交付内容'" variant="ghost" size="sm" type="button">{{scope==='unassigned'?'确定变更归属':'交付内容'}}</Button><Button v-if="scope==='production'" @click="emit('version',w)" variant="ghost" size="sm" type="button" :disabled="(w.preparation==='blocked')">纳入版本</Button></div></template></div></template><template #empty><Empty><EmptyHeader><EmptyDescription><span v-if="error" role="alert">{{error}}</span><span v-else-if="sourceErrors.length">未展示读取失败来源的旧数据，请重试来源连接。</span><span v-else>{{scope==='production'?'暂无已明确归属、需要生产交付的变更；新 Bug 请在研发工作项维护。':scope==='unassigned'?'暂无有变更但尚未确定归属的工作项。':'暂无符合条件的开发 / 测试变更。'}}</span><Button v-if="error" @click="refresh" variant="ghost" size="default" type="button">重试读取</Button></EmptyDescription></EmptyHeader></Empty></template></DataTable></div></div><div class="table-footer"><div class="flex flex-wrap items-center justify-end gap-3 py-4"><span class="mr-auto text-sm text-muted-foreground">共 {{total}} 项</span><OptionPicker class="w-28" :model-value="pageSize" :options="([20,50,100]).map(value=>({value:Number(value),label:value+' 条/页'}))" @update:model-value="(v=>pageSize=v)($event)"/><Pagination class="mx-0 w-auto" :disabled="loading" :page="page" :total="total" :items-per-page="pageSize" @update:page="goto($event)"><PaginationContent><PaginationPrevious /><span class="px-2 text-sm">{{page}} / {{Math.max(1,Math.ceil((total)/(pageSize)))}}</span><PaginationNext /></PaginationContent></Pagination></div></div></section></template>
+<style scoped>.scope-row,.row-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.scope-row{margin-bottom:14px}.scope-row>small{margin-left:auto;color:var(--muted-foreground)}.work-search{width:280px;max-width:100%}.title-link{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}.row-meta,small{color:var(--muted-foreground);font-size:.75rem}small{display:block}.row-meta{margin-top:4px}.child-list{display:grid;max-width:440px;max-height:240px;overflow:auto}.source-error{color:var(--error);font-size:.75rem}</style>

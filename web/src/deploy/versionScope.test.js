@@ -13,5 +13,5 @@ test('draft versions do not lock editing; frozen versions do',()=>{
 });
 test('empty scope and deduplicated explicit selections',()=>{
  assert.deepEqual(scopeChanges(null,null,null),[]);
- assert.deepEqual(scopePayload({version:'v1',title:'版本'},[10,10],[2,2]),{version:'v1',title:'版本',description:'',work_item_ids:[10],manual_change_ids:[2]});
+ assert.deepEqual(scopePayload({version:'v1',title:'版本'},[10,10],[2,2]),{version:'v1',title:'版本',description:'',preparation_template_id:0,preparation_environment:'',work_item_ids:[10],manual_change_ids:[2]});
 });

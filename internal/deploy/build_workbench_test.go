@@ -149,6 +149,9 @@ func TestCanceledPipelineNeverFinishesSuccessAndReleasesRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	if err := s.InitializeEnvironments([]Environment{{Name: "test", DisplayName: "测试"}}); err != nil {
+		t.Fatal(err)
+	}
 	root := t.TempDir()
 	dir := filepath.Join(root, "fixture")
 	if err = os.Mkdir(dir, 0700); err != nil {

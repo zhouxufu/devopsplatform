@@ -1,5 +1,8 @@
 // Actual local UI with mocked data-sync APIs. No metadata or database writes.
 import assert from 'node:assert/strict'
+import {readFile} from 'node:fs/promises'
+import nodePath from 'node:path'
+const dist=process.env.CONSOLE_UI_DIST||nodePath.resolve('web/dist')
 const base = process.env.SHELL_UI_TEST_URL || 'http://127.0.0.1:9800'
 assert.equal(new URL(base).hostname, '127.0.0.1')
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
@@ -8,8 +11,11 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
 const errors = [], writes = [], saved = [], comparisons = [], frozen = []
 page.on('pageerror', e => errors.push(e.message))
 let task
-await page.route('**/api/**', async route => {
+await page.route('**/*', async route => {
   const request = route.request(), path = new URL(request.url()).pathname.replace('/api/workbench/dbms/','/api/'), method = request.method()
+  const url=new URL(request.url());if(url.origin!==new URL(base).origin)return route.abort()
+  let file;if(url.pathname==='/api/plugins/dbms/ui')file='workbench.html';else if(/\/assets\/[^/]+\.(js|css)$/.test(url.pathname))file='assets/'+nodePath.basename(url.pathname)
+  if(file)return route.fulfill({body:await readFile(nodePath.join(dist,file)),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html'})
   const respond = json => route.fulfill({ json })
   if (method === 'GET' && path.endsWith('/api/me')) return respond({username:'local',role:'admin',auth_enabled:true})
   if (method === 'GET' && path.endsWith('/api/registry/applications')) return respond([{name:'ui-sync-api'}])
@@ -30,7 +36,7 @@ await page.route('**/api/**', async route => {
     return respond({ id: 990011, sql: { content: "UPDATE menu SET name='edited' WHERE id=1;", data_sync: { task_id: task.id, task_revision: task.revision, source_environment: plan.source_environment, target_environment: plan.target_environment } } })
   }
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) { writes.push(method + ' ' + path); return route.abort() }
-  return route.continue()
+  return respond([])
 })
 const field = (dialog, label) => dialog.locator('label').filter({ hasText: new RegExp('^' + label) })
 async function choose(dialog, label, option) {
@@ -46,11 +52,10 @@ try {
   assert.equal(await page.getByRole('dialog').count(),0,'Sync still opens another window')
   await dialog.getByRole('button', { name: '＋ 新建任务', exact: true }).click()
   await dialog.getByText('尚未保存任务', { exact: true }).waitFor()
-  assert.equal(await dialog.locator('.grid .el-select').count(), 2, 'Task definition still has environment selectors')
+  assert.equal(await dialog.locator('.grid .el-select').count(), 3, 'Task definition still has environment selectors')
   await field(dialog, '任务名称').locator('input').fill('可跨环境复用的菜单任务')
   await choose(dialog, '应用', 'ui-sync-api'); await choose(dialog, '逻辑数据库资源', 'db')
-  await field(dialog, '来源查询 SQL').locator('textarea').fill('SELECT id,name FROM menu WHERE id > 0')
-  await field(dialog, '目标查询 SQL').locator('textarea').fill('SELECT id,name FROM menu WHERE id > 0')
+  await field(dialog, '对比查询 SQL').locator('textarea').fill('SELECT id,name FROM menu WHERE id > 0')
   await field(dialog, '匹配键').locator('input').fill('id')
   await dialog.getByRole('button', { name: '保存任务', exact: true }).click()
   await dialog.getByRole('heading', { name: '本次对比', exact: true }).waitFor()
@@ -64,20 +69,20 @@ try {
   await dialog.getByRole('alert').filter({ hasText: '来源和目标环境不能相同' }).waitFor()
   await choose(dialog, '本次目标环境', 'test')
   await dialog.getByRole('button', { name: '对比数据（只读）', exact: true }).click()
-  await dialog.locator('.diff-list article').waitFor()
-  await dialog.locator('.diff-title input').check()
+  await dialog.locator('.sync-table tbody tr').waitFor()
+  await dialog.locator('.sync-table input').check()
   await choose(dialog, '本次来源环境', 'prod')
-  await dialog.locator('.diff-list').waitFor({ state: 'hidden' })
+  await dialog.locator('.sync-diff').waitFor({ state: 'hidden' })
   await dialog.getByRole('button', { name: '对比数据（只读）', exact: true }).click()
-  await dialog.locator('.diff-list article').waitFor()
-  assert.equal(await dialog.locator('.diff-title input').isChecked(), false)
+  await dialog.locator('.sync-table tbody tr').waitFor()
+  assert.equal(await dialog.locator('.sync-table input').isChecked(), false)
   await choose(dialog, '本次目标环境', 'dev')
-  await dialog.locator('.diff-list').waitFor({ state: 'hidden' })
+  await dialog.locator('.sync-diff').waitFor({ state: 'hidden' })
   await choose(dialog, '本次来源环境', 'test'); await choose(dialog, '本次目标环境', 'prod')
   await dialog.getByRole('button', { name: '对比数据（只读）', exact: true }).click()
-  await dialog.locator('.diff-list article').waitFor()
-  await dialog.locator('.diff-title input').check()
-  await dialog.locator('.diff-row').filter({ has: page.getByText('name', { exact: true }) }).locator('.el-input input').fill('edited')
+  await dialog.locator('.sync-table tbody tr').waitFor()
+  await dialog.locator('.sync-table input').check()
+  await dialog.getByLabel('迁移后 name',{exact:true}).fill('edited')
   await dialog.getByRole('button', { name: /^生成同步草稿/ }).click()
   await dialog.locator('.result').waitFor()
   assert.equal(frozen.length, 1)

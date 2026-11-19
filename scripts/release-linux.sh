@@ -11,7 +11,7 @@ case "$arch" in
   amd64|arm64) ;;
   x86_64) arch=amd64 ;;
   aarch64) arch=arm64 ;;
-  *) echo "不支持的架构: $arch（仅支持 amd64/arm64）" >&2; exit 2 ;;
+  *) echo "不支持的架构: ${arch}（仅支持 amd64/arm64）" >&2; exit 2 ;;
 esac
 case "$version" in
   *[!0-9A-Za-z._-]*|'') echo "版本只能包含字母、数字、点、下划线和横线" >&2; exit 2 ;;
@@ -48,6 +48,9 @@ build() {
 
 build devopsplatform ./cmd/platform
 build logserver ./cmd/server
+mkdir -p "$package_dir/support"
+python3 scripts/fetch-victorialogs.py --os linux --arch "$arch" --output "$package_dir/bin/victoria-logs-prod" --version-output "$package_dir/support/VICTORIALOGS-VERSION"
+cp deploy/victorialogs.service deploy/VICTORIALOGS.md deploy/licenses/VictoriaLogs-LICENSE.txt "$package_dir/support/"
 build monitor ./cmd/monitor
 build deploy ./cmd/deploy
 build devtools ./cmd/devtools
@@ -63,9 +66,9 @@ chmod +x "$package_dir/devopsplatformctl" "$package_dir/bin/"*
 printf '%s\n' "$version" > "$package_dir/VERSION"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  (cd "$package_dir" && find bin dist/agents -type f -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+  (cd "$package_dir" && find bin dist/agents support VERSION devopsplatformctl -type f -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
 else
-  (cd "$package_dir" && find bin dist/agents -type f -print | LC_ALL=C sort | xargs shasum -a 256 > SHA256SUMS)
+  (cd "$package_dir" && find bin dist/agents support VERSION devopsplatformctl -type f -print | LC_ALL=C sort | xargs shasum -a 256 > SHA256SUMS)
 fi
 
 mkdir -p "$repo_dir/dist"

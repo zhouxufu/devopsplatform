@@ -31,7 +31,10 @@ func (s *Store) DeliveryControl(id int64) DeliveryControl {
 	return c
 }
 func (s *Store) claimDeliveryControl(id int64, actor string) (string, error) {
-	run := s.DeliveryRun(id)
+	run := s.deliveryRunLedger(id)
+	if run != nil && run.Plan.PreparationRequest != nil {
+		s.projectResearchCodeState(run)
+	}
 	if run == nil || (run.Status != "approved" && run.Status != "running") {
 		return "", fmt.Errorf("仅待执行或执行中的交付可启动")
 	}
@@ -72,18 +75,38 @@ func deliveryControlDecision(s *Store, run *DeliveryRun) (string, string) {
 			continue
 		}
 		if step.Status == "executing" {
+			if step.Kind == "extension" && step.LeaseUntil > time.Now().Unix() {
+				return "wait", "编排插件任务执行中"
+			}
+			if step.Kind == "script" && step.LeaseUntil > time.Now().Unix() {
+				return "wait", "交付脚本执行中"
+			}
 			return "pause", "节点执行中或上次中断，必须先核对台账，禁止自动重复执行"
+		}
+		if step.Kind == "deploy" && step.Status == "failed" {
+			return "pause", "应用发布失败，等待重试或人工处理；已完成步骤保留"
 		}
 		if step.Kind == "manual" {
 			return "pause", "等待人工确认：" + step.Name
+		}
+		for _, node := range run.Plan.Nodes {
+			if node.ID == step.NodeID && node.Kind == "verify" && node.Verification != nil && node.Verification.Mode == "manual" {
+				return "pause", "等待独立验证人员提交结论：" + step.Name
+			}
 		}
 		if step.ReleaseID > 0 {
 			child := s.GetReleaseOrder(step.ReleaseID)
 			if child == nil {
 				return "pause", "子发布单不存在，请核对"
 			}
+			if child.Status == "waiting_manual" {
+				return "pause", "等待负责人下载制品并登记手动发布结果：" + step.Service
+			}
 			if child.Status == "waiting_next_batch" {
 				return "pause", "等待批次观察确认，请核对后继续下一批"
+			}
+			if child.Status == "needs_review" {
+				return "wait", "应用启动较慢或结果待核对；保留进程与原执行身份，不重发"
 			}
 			if releaseStatusActive(child.Status) {
 				return "wait", "应用发布中"
@@ -97,10 +120,10 @@ func deliveryControlDecision(s *Store, run *DeliveryRun) (string, string) {
 // A durable lease prevents competing workers. A restart never replays a write:
 // its executing marker remains a hard gate until an operator reconciles it.
 func (s *Store) runDeliveryControl(id int64, actor, lease string, m *ReleaseManager) {
-	s.runDeliveryControlWithAdvance(id, lease, func() error { _, err := s.AdvanceDeliveryRun(id, actor, false, m); return err })
+	s.runDeliveryControlWithAdvance(id, lease, func() error { _, err := s.AdvanceDeliveryRun(id, actor, false, m); return err }, m)
 }
 
-func (s *Store) runDeliveryControlWithAdvance(id int64, lease string, advance func() error) {
+func (s *Store) runDeliveryControlWithAdvance(id int64, lease string, advance func() error, managers ...*ReleaseManager) {
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -124,7 +147,32 @@ func (s *Store) runDeliveryControlWithAdvance(id int64, lease string, advance fu
 			s.finishDeliveryControl(id, lease, "paused", "已暂停后续步骤；已启动的应用批次仍须在节点中核对")
 			return
 		}
-		decision, message := deliveryControlDecision(s, s.DeliveryRun(id))
+		run := s.deliveryRunLedger(id)
+		if run != nil && run.Plan.PreparationRequest != nil {
+			s.projectResearchCodeState(run)
+		}
+		decision, message := deliveryControlDecision(s, run)
+		if decision == "pause" && run != nil && len(managers) > 0 {
+			for _, step := range run.Steps {
+				if step.Status == "success" {
+					continue
+				}
+				if step.ReleaseID > 0 {
+					for _, node := range run.Plan.Nodes {
+						if node.ID == step.NodeID && node.Monitor != nil {
+							if child := s.GetReleaseOrder(step.ReleaseID); child != nil && child.Status == "waiting_next_batch" {
+								var err error
+								decision, err = s.observeDeliveryBatch(run, step, managers[0])
+								if err != nil {
+									decision, message = "pause", err.Error()
+								}
+							}
+						}
+					}
+				}
+				break
+			}
+		}
 		switch decision {
 		case "pause":
 			s.finishDeliveryControl(id, lease, "paused", message)
@@ -164,6 +212,16 @@ func registerDeliveryControlRoutes(mux *http.ServeMux, s *Store, m *ReleaseManag
 				deliveryWriteError(w, 403, "仅发起人或管理员可控制交付")
 				return
 			}
+			if action == "start" {
+				if err := validateDeliveryReviewerDirectory(&run.Plan, r.Header.Get("X-Reviewer-Directory"), run.Owner); err != nil {
+					deliveryWriteError(w, 409, err)
+					return
+				}
+				if err := s.checkDeliveryPolicy(&run.Plan); err != nil {
+					deliveryWriteError(w, 409, err)
+					return
+				}
+			}
 			var body struct {
 				Digest  string `json:"digest"`
 				Confirm bool   `json:"confirm"`
@@ -181,6 +239,10 @@ func registerDeliveryControlRoutes(mux *http.ServeMux, s *Store, m *ReleaseManag
 				}
 				for i := range run.Steps {
 					step := &run.Steps[i]
+					if step.Kind == "script" && step.Status == "executing" {
+						deliveryWriteError(w, 409, "脚本执行中或中断待核对，请先在节点中记录核对结果")
+						return
+					}
 					if step.ReleaseID <= 0 {
 						continue
 					}

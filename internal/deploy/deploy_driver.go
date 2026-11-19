@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
@@ -29,7 +30,7 @@ type DeployDriver interface {
 }
 
 func builtinDeployDrivers() []DeployDriver {
-	return []DeployDriver{sshJarDriver{}, sshStaticDriver{}, dockerHostDriver{}, aliyunSAEDriver{}}
+	return []DeployDriver{sshJarDriver{}, sshJavaBundleDriver{}, sshStaticDriver{}, dockerHostDriver{}, aliyunSAEDriver{}, scriptDriver{}}
 }
 
 func (d *Deployer) DriverManifests() []DeployDriverManifest {
@@ -87,6 +88,9 @@ func (sshJarDriver) Validate(sv *Service, _ Host, a Artifact) error {
 	return nil
 }
 func (sshJarDriver) Deploy(d *Deployer, id int64, sv *Service, h Host, a Artifact, version string) string {
+	if deploymentAgentTarget(sv.DeployConfig) {
+		return d.queueManagedJavaAgent(id, sv, h, a)
+	}
 	if managedJava(sv) {
 		return d.deployManagedJava(id, sv, h, a.URI)
 	}
@@ -119,20 +123,35 @@ type dockerHostDriver struct{}
 func (dockerHostDriver) Manifest() DeployDriverManifest {
 	return DeployDriverManifest{
 		APIVersion: "deploy.logplatform.io/v1", ID: "docker-host", Name: "Docker Host（SSH）",
-		Accepts: []string{ArtifactOCI}, Capabilities: []string{"deploy", "verify", "rollback", "immutable-digest"},
+		Accepts: []string{ArtifactOCI, ArtifactDockerArchive}, Capabilities: []string{"deploy", "verify", "rollback", "immutable-digest", "offline-archive"},
 		Params: []StepParam{
 			{Name: "container_name", Type: "input", Label: "容器名"},
 			{Name: "ports", Type: "input", Label: "端口映射（逗号分隔）"},
+			{Name: "network", Type: "input", Label: "网络模式 / 网络名"},
+			{Name: "host_ports", Type: "input", Label: "host 网络监听端口（逗号分隔）"},
+			{Name: "mounts", Type: "textarea", Label: "目录 / 文件挂载 JSON"},
+			{Name: "startup_timeout_seconds", Type: "input", Label: "启动检查超时（秒，默认 120）"},
+			{Name: "startup_observe_seconds", Type: "input", Label: "启动稳定观察（秒，默认 15）"},
 			{Name: "env_file", Type: "input", Label: "远程 env-file"},
 			{Name: "run_args", Type: "shell", Label: "额外 docker run 参数"},
 		},
 	}
 }
 func (dockerHostDriver) Validate(sv *Service, _ Host, a Artifact) error {
-	if a.Kind != ArtifactOCI {
+	if err := validateDockerHealthURL(sv); err != nil {
+		return err
+	}
+	if _, err := parseDockerRuntime(sv.DeployConfig); err != nil {
+		return err
+	}
+	if a.Kind == ArtifactDockerArchive {
+		if err := validateDockerArchive(a); err != nil {
+			return err
+		}
+	} else if a.Kind != ArtifactOCI {
 		return fmt.Errorf("docker-host 需要 oci-image 制品")
 	}
-	if !strings.Contains(a.URI, "@sha256:") || !strings.HasSuffix(a.URI, a.Digest) {
+	if a.Kind == ArtifactOCI && (!strings.Contains(a.URI, "@sha256:") || !strings.HasSuffix(a.URI, a.Digest)) {
 		return fmt.Errorf("Docker 部署必须使用已推送的 image@sha256:digest，不允许可变 tag")
 	}
 	if cfg := sv.DeployConfig; cfg != nil {
@@ -198,89 +217,47 @@ func (d *Deployer) deployStaticAtomic(id int64, sv *Service, host Host, artifact
 }
 
 func (d *Deployer) deployDockerHost(id int64, sv *Service, host Host, artifact Artifact) string {
-	cfg := sv.DeployConfig
-	name := sv.Name
-	if cfg != nil && strings.TrimSpace(cfg["container_name"]) != "" {
-		name = strings.TrimSpace(cfg["container_name"])
+	d.mu.Lock()
+	ctx := d.contexts[id]
+	d.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	step := func(label, command string, timeout time.Duration) (string, bool) {
-		d.emit(id, "\n$ "+command+"\n")
-		out, err := SSHExec(host, command, timeout)
-		if out != "" {
-			d.emit(id, out)
+	// Existing remote env-files may also contain secrets. Read only into the
+	// server-side redaction set; never emit their contents or return them to UI.
+	if file := sv.DeployConfig["env_file"]; file != "" {
+		text, err := SSHExecContext(ctx, host, "head -c 65537 -- "+shellQuote(file), 15*time.Second)
+		if err != nil || len(text) > 65536 {
+			d.emit(id, "✗ 运行变量文件不可读取或超过 64 KiB；旧容器未停止\n")
+			return "failed"
 		}
-		if err != nil {
-			d.emit(id, fmt.Sprintf("✗ %s 失败: %v\n", label, err))
-			return out, false
+		d.mu.Lock()
+		if d.logSecrets == nil {
+			d.logSecrets = map[int64][]string{}
 		}
-		return strings.TrimSpace(out), true
-	}
-	oldImage, _ := SSHExec(host, "docker inspect --format '{{.Config.Image}}' "+shellQuote(name)+" 2>/dev/null || true", time.Minute)
-	if _, ok := step("拉取镜像", "docker pull "+shellQuote(artifact.URI), 10*time.Minute); !ok {
-		return "failed"
-	}
-	_, _ = step("停止旧容器", "docker rm -f "+shellQuote(name)+" 2>/dev/null || true", 2*time.Minute)
-	runArgs := []string{"docker run -d --restart unless-stopped --name", shellQuote(name)}
-	if cfg != nil {
-		if envFile := strings.TrimSpace(cfg["env_file"]); envFile != "" {
-			runArgs = append(runArgs, "--env-file", shellQuote(envFile))
-		}
-		for _, port := range strings.Split(cfg["ports"], ",") {
-			port = strings.TrimSpace(port)
-			if port != "" {
-				runArgs = append(runArgs, "-p", shellQuote(port))
+		for _, line := range strings.Split(text, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+				_, v, ok := strings.Cut(line, "=")
+				if ok && v != "" {
+					d.logSecrets[id] = append(d.logSecrets[id], v)
+				}
 			}
 		}
-		if extra := strings.TrimSpace(cfg["run_args"]); extra != "" {
-			runArgs = append(runArgs, extra)
-		}
+		sort.Slice(d.logSecrets[id], func(i, j int) bool { return len(d.logSecrets[id][i]) > len(d.logSecrets[id][j]) })
+		d.mu.Unlock()
 	}
-	if sv.RuntimeEnvFile != "" {
-		runArgs = append(runArgs, "--env-file", shellQuote(sv.RuntimeEnvFile))
-	}
-	runArgs = append(runArgs, shellQuote(artifact.URI))
-	if _, ok := step("启动新容器", strings.Join(runArgs, " "), 5*time.Minute); !ok {
-		return d.rollbackDocker(id, host, name, strings.TrimSpace(oldImage), cfg, sv.RuntimeEnvFile)
-	}
-	if sv.HealthURL != "" {
-		if !d.healthCheckRemote(id, host, sv.HealthURL, 120*time.Second) {
-			return d.rollbackDocker(id, host, name, strings.TrimSpace(oldImage), cfg, sv.RuntimeEnvFile)
-		}
-	} else if _, ok := step("容器状态检查", "test \"$(docker inspect --format '{{.State.Running}}' "+shellQuote(name)+")\" = true", time.Minute); !ok {
-		return d.rollbackDocker(id, host, name, strings.TrimSpace(oldImage), cfg, sv.RuntimeEnvFile)
-	}
-	return "success"
-}
-
-func (d *Deployer) rollbackDocker(id int64, host Host, name, oldImage string, cfg map[string]string, runtimeEnvFile string) string {
-	d.emit(id, "\n↩ 恢复上一个容器镜像\n")
-	_, _ = SSHExec(host, "docker rm -f "+shellQuote(name)+" 2>/dev/null || true", 2*time.Minute)
-	if oldImage == "" {
-		return "failed"
-	}
-	args := []string{"docker run -d --restart unless-stopped --name", shellQuote(name)}
-	if cfg != nil {
-		if envFile := strings.TrimSpace(cfg["env_file"]); envFile != "" {
-			args = append(args, "--env-file", shellQuote(envFile))
-		}
-		for _, port := range strings.Split(cfg["ports"], ",") {
-			if port = strings.TrimSpace(port); port != "" {
-				args = append(args, "-p", shellQuote(port))
-			}
-		}
-		if extra := strings.TrimSpace(cfg["run_args"]); extra != "" {
-			args = append(args, extra)
-		}
-	}
-	if runtimeEnvFile != "" {
-		args = append(args, "--env-file", shellQuote(runtimeEnvFile))
-	}
-	args = append(args, shellQuote(oldImage))
-	if _, err := SSHExec(host, strings.Join(args, " "), 5*time.Minute); err != nil {
-		d.emit(id, "✗ 恢复旧容器失败: "+err.Error()+"\n")
-		return "failed"
-	}
-	return "rolled-back"
+	return deployDockerContainer(id, sv, artifact, dockerHostIO{
+		exec: func(command string, timeout time.Duration) (string, error) {
+			return SSHExecContext(ctx, host, command, timeout)
+		},
+		upload: func(local, remote string) error { return SSHUploadContext(ctx, host, local, remote) },
+		emit:   func(line string) { d.emit(id, line) },
+		health: func() bool {
+			url := strings.ReplaceAll(sv.HealthURL, "{host}", strings.Split(host.Addr, ":")[0])
+			_, err := SSHExecContext(ctx, host, "curl -fsS --max-time 5 "+shellQuote(url)+" >/dev/null 2>&1", 7*time.Second)
+			return err == nil
+		},
+	})
 }
 
 func (d *Deployer) healthCheckRemote(id int64, host Host, url string, max time.Duration) bool {

@@ -187,6 +187,15 @@ func TestDeliveryRunPaginationIncludesHistoryBeyond100AndReturnsOnlySummary(t *t
 	if strings.Contains(string(encoded), "DO-NOT-RETURN") || strings.Contains(string(encoded), "/not-executed.jar") {
 		t.Fatal("summary leaked snapshot")
 	}
+	allVersions, e := s.DeliveryRunPage("", "approved", "test", "0", "alice", 0, 0, 1, 20)
+	if e != nil || allVersions.Total != 151 {
+		t.Fatalf("zero version means all versions: %+v %v", allVersions, e)
+	}
+	for _, invalid := range []string{"-1", "invalid", "99 OR 1=1"} {
+		if _, e := s.DeliveryRunPage("", "", "", invalid, "", 0, 0, 1, 20); e == nil {
+			t.Fatalf("invalid version filter accepted: %q", invalid)
+		}
+	}
 	filtered, e := s.DeliveryRunPage("", "approved", "test", "", "alice", 200, 210, 1, 20)
 	if e != nil || filtered.Total != 11 {
 		t.Fatalf("date filter %+v %v", filtered, e)

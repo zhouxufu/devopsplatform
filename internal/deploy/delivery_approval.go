@@ -7,10 +7,11 @@ import (
 )
 
 type ApprovalDecision struct {
-	Actor    string `json:"actor"`
-	Approved bool   `json:"approved"`
-	Comment  string `json:"comment,omitempty"`
-	At       int64  `json:"at"`
+	WorkItemIDs []int64 `json:"work_item_ids,omitempty"`
+	Actor       string  `json:"actor"`
+	Approved    bool    `json:"approved"`
+	Comment     string  `json:"comment,omitempty"`
+	At          int64   `json:"at"`
 }
 
 func hasApprovalNodes(p *DeliveryPlan) bool {
@@ -85,11 +86,17 @@ func validateRunApprovals(p *DeliveryPlan, owner string) error {
 // same revision CAS as execution. An administrator cannot skip a stage.
 func (s *Store) ReviewDeliveryNode(id int64, actor, digest, nodeID, comment string, approve bool) (*DeliveryRun, error) {
 	v := s.DeliveryRun(id)
+	if v != nil && v.Plan.Template.Workbench == "research" {
+		return nil, fmt.Errorf("请通过研发工作台处理版本准备审批")
+	}
 	if v == nil || v.Status != "pending_approval" || v.Digest != digest {
 		return nil, fmt.Errorf("审核单状态或内容摘要已改变")
 	}
 	if actor == v.Owner {
 		return nil, fmt.Errorf("发起人不能审批自己的发布")
+	}
+	if err := s.checkDeliveryPolicy(&v.Plan); err != nil {
+		return nil, err
 	}
 	env := s.GetEnvironment(v.Plan.Environment.Name)
 	if env == nil {

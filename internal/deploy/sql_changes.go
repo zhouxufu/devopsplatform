@@ -21,26 +21,30 @@ import (
 // Destructive DDL, routines, joins, subqueries and arbitrary functions are not
 // accepted. DML and DDL cannot share a transaction/approval node.
 type SQLChange struct {
-	ResourceAlias   string            `json:"resource_alias"`
-	Content         string            `json:"content"`
-	MaxAffectedRows int               `json:"max_affected_rows"`
-	DataSync        *DataSyncSnapshot `json:"data_sync,omitempty"`
+	EnvironmentOverrides []SQLEnvironmentOverride `json:"environment_overrides,omitempty"`
+	ResourceAlias        string                   `json:"resource_alias"`
+	Content              string                   `json:"content"`
+	MaxAffectedRows      int                      `json:"max_affected_rows"`
+	DataSync             *DataSyncSnapshot        `json:"data_sync,omitempty"`
 }
 type sqlColumn struct {
-	Type          string  `json:"type"`
-	Nullable      bool    `json:"nullable"`
-	Default       *string `json:"default"`
-	AutoIncrement bool    `json:"auto_increment"`
-	Comment       string  `json:"comment"`
-	Collation     string  `json:"collation,omitempty"`
-	Generation    string  `json:"generation,omitempty"`
-	Extra         string  `json:"extra,omitempty"`
+	generationRefs []string
+	Type           string  `json:"type"`
+	Nullable       bool    `json:"nullable"`
+	Default        *string `json:"default"`
+	AutoIncrement  bool    `json:"auto_increment"`
+	Comment        string  `json:"comment"`
+	Collation      string  `json:"collation,omitempty"`
+	Generation     string  `json:"generation,omitempty"`
+	Extra          string  `json:"extra,omitempty"`
 }
 type sqlIndex struct {
+	Comment string   `json:"comment,omitempty"`
 	Unique  bool     `json:"unique"`
 	Columns []string `json:"columns"`
 }
 type sqlTable struct {
+	Comment   string               `json:"comment,omitempty"`
 	Exists    bool                 `json:"exists"`
 	Columns   map[string]sqlColumn `json:"columns"`
 	Order     []string             `json:"order"`
@@ -69,19 +73,25 @@ type SQLStatement struct {
 	columns         []string
 }
 type SQLExecutionPlan struct {
-	NodeID            string         `json:"node_id"`
-	ChangeIDs         []int64        `json:"change_ids"`
-	Services          []string       `json:"services"`
-	Aliases           []string       `json:"aliases"`
-	ChangeDigests     []string       `json:"change_digests"`
-	Connection        string         `json:"connection"`
-	Database          string         `json:"database"`
-	DestinationDigest string         `json:"destination_digest"`
-	SchemaDigest      string         `json:"schema_digest"`
-	Tables            []string       `json:"tables"`
-	Statements        []SQLStatement `json:"statements"`
-	Mode              string         `json:"mode"`
-	Warnings          []string       `json:"warnings"`
+	SchemaVersion     int                  `json:"schema_version,omitempty"`
+	PreviousNodes     []string             `json:"previous_nodes,omitempty"`
+	ExpectedSchema    sqlCatalog           `json:"expected_schema,omitempty"`
+	DeferredData      bool                 `json:"deferred_data,omitempty"`
+	ScriptSelections  []SQLScriptSelection `json:"script_selections,omitempty"`
+	Applied           []AppliedSQLChange   `json:"applied,omitempty"`
+	NodeID            string               `json:"node_id"`
+	ChangeIDs         []int64              `json:"change_ids"`
+	Services          []string             `json:"services"`
+	Aliases           []string             `json:"aliases"`
+	ChangeDigests     []string             `json:"change_digests"`
+	Connection        string               `json:"connection"`
+	Database          string               `json:"database"`
+	DestinationDigest string               `json:"destination_digest"`
+	SchemaDigest      string               `json:"schema_digest"`
+	Tables            []string             `json:"tables"`
+	Statements        []SQLStatement       `json:"statements"`
+	Mode              string               `json:"mode"`
+	Warnings          []string             `json:"warnings"`
 }
 
 var sqlIdentifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
@@ -91,6 +101,9 @@ var addColumnRE = regexp.MustCompile("(?is)^alter\\s+table\\s+(`?[A-Za-z_][A-Za-
 var createIndexRE = regexp.MustCompile("(?is)^create\\s+(unique\\s+)?index\\s+(`?[A-Za-z_][A-Za-z0-9_]*`?)\\s+on\\s+(`?[A-Za-z_][A-Za-z0-9_]*`?)\\s*\\(([^()]*)\\)\\s*$")
 
 func saveSQLPayload(tx *deployTx, v *Change) error {
+	if err := validateSQLOverrideEnvironments(tx, v.SQL); err != nil {
+		return err
+	}
 	doc, _ := json.Marshal(struct {
 		SQL   *SQLChange   `json:"sql,omitempty"`
 		Nacos *NacosChange `json:"nacos,omitempty"`
@@ -100,6 +113,7 @@ func saveSQLPayload(tx *deployTx, v *Change) error {
 	return err
 }
 func (s *Store) loadSQLPayload(v *Change) {
+	_ = loadChangeOwnership(s.db, v)
 	var doc string
 	if s.db.QueryRow(`SELECT document FROM change_payloads WHERE change_id=?`, v.ID).Scan(&doc) == nil {
 		var payload struct {
@@ -169,7 +183,7 @@ func sqlTokens(input string) ([]string, error) {
 			return nil, fmt.Errorf("SQL 字符串请使用单引号，标识符使用反引号")
 		}
 		if i+1 < len(input) && ((b == '/' && input[i+1] == '*') || (b == '-' && input[i+1] == '-')) || b == '#' {
-			return nil, fmt.Errorf("执行 SQL 请移除注释（包括版本注释和优化器提示）")
+			return nil, fmt.Errorf("含注释的 SQL 暂不支持就绪或执行（包括版本注释和优化器提示）；可保留原文保存草稿")
 		}
 		if b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' {
 			start := i
@@ -278,8 +292,15 @@ func tableFromSpec(spec *sqlparser.TableSpec) (*sqlTable, error) {
 }
 
 func parseChangeSQL(content string) ([]SQLStatement, error) {
-	if len(content) > 64<<10 || strings.TrimSpace(content) == "" {
-		return nil, fmt.Errorf("SQL 必填且不超过 64 KiB")
+	if err := validateSQLDraftContent(content); err != nil {
+		return nil, err
+	}
+	// Only change scripts accept ordinary comments. Keep the frozen source in
+	// SQLChange, but validate and execute the same comment-free statement text.
+	// The narrower read-query/data-sync tokenizer remains unchanged.
+	content, err := sqlChangeWithoutComments(content)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := sqlTokens(content); err != nil {
 		return nil, err
@@ -296,52 +317,12 @@ func parseChangeSQL(content string) ([]SQLStatement, error) {
 			continue
 		}
 		op := SQLStatement{SQL: piece}
-		if m := createTableRE.FindStringSubmatch(piece); m != nil {
-			table := strings.Trim(m[1], "`")
-			synthetic := "create table " + m[1] + " " + m[2]
-			stmt, e := sqlparser.Parse(synthetic)
-			if e != nil {
-				return nil, fmt.Errorf("建表语句无法解析：%w", e)
-			}
-			ddl, ok := stmt.(*sqlparser.DDL)
-			if !ok || ddl.TableSpec == nil || !sameSQLTokens(synthetic, sqlparser.String(ddl)) {
-				return nil, fmt.Errorf("建表语句含未支持的语法，请使用完整字段定义及独立主键/索引声明")
-			}
-			op.definition, e = tableFromSpec(ddl.TableSpec)
-			if e != nil {
-				return nil, e
-			}
-			op.Action, op.Table = "create-table", table
-			// Always pin the engine and charset instead of depending on server defaults.
-			op.SQL = synthetic + " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-		} else if m := addColumnRE.FindStringSubmatch(piece); m != nil {
-			synthetic := "create table preview (" + m[2] + ")"
-			stmt, e := sqlparser.Parse(synthetic)
-			if e != nil {
-				return nil, fmt.Errorf("新增字段定义无法解析")
-			}
-			ddl, ok := stmt.(*sqlparser.DDL)
-			if !ok || ddl.TableSpec == nil || len(ddl.TableSpec.Columns) != 1 || len(ddl.TableSpec.Indexes) > 0 || !sameSQLTokens(synthetic, sqlparser.String(ddl)) {
-				return nil, fmt.Errorf("ALTER 仅支持每条新增一个字段，不支持位置、约束或其他修改")
-			}
-			c := ddl.TableSpec.Columns[0]
-			op.column, e = parseColumn(c)
-			if e != nil {
-				return nil, e
-			}
-			op.columnName = c.Name.String()
-			op.Table = strings.Trim(m[1], "`")
-			op.Action = "add-column"
-		} else if m := createIndexRE.FindStringSubmatch(piece); m != nil {
-			op.Action, op.Table, op.indexName = "create-index", strings.Trim(m[3], "`"), strings.Trim(m[2], "`")
-			op.index = sqlIndex{Unique: m[1] != "", Columns: []string{}}
-			for _, part := range strings.Split(m[4], ",") {
-				n := strings.Trim(strings.TrimSpace(part), "`")
-				if !sqlIdentifierRE.MatchString(n) {
-					return nil, fmt.Errorf("索引仅支持字段列表")
-				}
-				op.index.Columns = append(op.index.Columns, n)
-			}
+		parsedDDL, isDDL, ddlError := parseChangeDDL(piece)
+		if ddlError != nil {
+			return nil, ddlError
+		}
+		if isDDL {
+			op = parsedDDL
 		} else {
 			stmt, e := sqlparser.Parse(piece)
 			if e != nil {
@@ -397,6 +378,12 @@ func parseChangeSQL(content string) ([]SQLStatement, error) {
 				where = v.Where
 				op.Action = "delete"
 			default:
+				if _, ok := stmt.(*sqlparser.DDL); ok {
+					return nil, fmt.Errorf("该 DDL 操作尚不支持；可使用受限 CREATE TABLE、ADD COLUMN 或 ADD INDEX。原文可保存为草稿，不能就绪或执行")
+				}
+				if strings.HasPrefix(strings.ToLower(piece), "start transaction") || strings.EqualFold(piece, "begin") || strings.EqualFold(piece, "commit") || strings.EqualFold(piece, "rollback") {
+					return nil, fmt.Errorf("平台统一管理事务，暂不支持脚本内的事务控制语句；原文可保存为草稿，不能就绪或执行")
+				}
 				return nil, fmt.Errorf("仅支持 CREATE TABLE、ALTER TABLE ADD COLUMN、CREATE INDEX，以及单表 INSERT/UPDATE/DELETE")
 			}
 			if e != nil {
@@ -622,7 +609,7 @@ func catalogSnapshot(c sqlCatalog, tables []string) sqlCatalog {
 	return out
 }
 func defaultColumnCollation(c sqlColumn, collation string) sqlColumn {
-	if strings.HasPrefix(c.Type, "varchar") || strings.HasPrefix(c.Type, "char") || c.Type == "text" || c.Type == "longtext" {
+	if c.Collation == "" && ddlCharacterColumn(c.Type) {
 		c.Collation = collation
 	}
 	return c
@@ -635,9 +622,11 @@ func applySQLSchema(c sqlCatalog, op *SQLStatement) error {
 			raw, _ := json.Marshal(op.definition)
 			var expected sqlTable
 			_ = json.Unmarshal(raw, &expected)
-			expected.Collation = t.Collation
+			if expected.Collation == "" {
+				expected.Collation = t.Collation
+			}
 			for name, col := range expected.Columns {
-				expected.Columns[name] = defaultColumnCollation(col, t.Collation)
+				expected.Columns[name] = defaultColumnCollation(col, expected.Collation)
 			}
 			if !strings.HasPrefix(t.Collation, "utf8mb4_") || digestJSON(t) != digestJSON(&expected) {
 				return fmt.Errorf("表 %s 已存在但结构不一致，禁止跳过或覆盖", op.Table)
@@ -652,6 +641,9 @@ func applySQLSchema(c sqlCatalog, op *SQLStatement) error {
 	case "add-column":
 		if t == nil {
 			return fmt.Errorf("表 %s 不存在", op.Table)
+		}
+		if err := validateDDLGenerationRefs(op.columnName, op.column, t); err != nil {
+			return err
 		}
 		expected := defaultColumnCollation(op.column, t.Collation)
 		if col, ok := t.Columns[op.columnName]; ok {
@@ -722,20 +714,21 @@ func (s *Store) sqlBinding(service, environment, alias string) (*ResourceConnect
 			if c == nil || c.Kind != "mysql" {
 				return nil, fmt.Errorf("绑定的 MySQL 连接不存在")
 			}
-			if len(b.Config) > 0 {
-				return nil, fmt.Errorf("MySQL 数据库在连接中指定，本版不支持绑定配置覆盖")
-			}
-			return c, nil
+			return mysqlDatabaseTarget(c, b.Config)
 		}
 	}
 	return nil, fmt.Errorf("应用 %s 的资源 %s 尚未绑定 %s 环境连接", service, alias, environment)
 }
 
 func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, environment string) (*SQLExecutionPlan, error) {
+	return s.prepareSQLStage(ctx, nodeID, ids, environment, nil)
+}
+
+func (s *Store) prepareSQLStage(ctx context.Context, nodeID string, ids []int64, environment string, prior []*SQLExecutionPlan) (*SQLExecutionPlan, error) {
 	if len(ids) == 0 || len(ids) > 50 {
 		return nil, fmt.Errorf("SQL 节点需选择 1–50 个变更")
 	}
-	p := &SQLExecutionPlan{NodeID: nodeID, ChangeIDs: ids, Warnings: []string{}, Statements: []SQLStatement{}, Services: []string{}, Aliases: []string{}}
+	p := &SQLExecutionPlan{SchemaVersion: 2, NodeID: nodeID, ChangeIDs: []int64{}, Warnings: []string{}, Statements: []SQLStatement{}, Services: []string{}, Aliases: []string{}}
 	seen := map[int64]bool{}
 	tables := map[string]bool{}
 	var connection *ResourceConnection
@@ -750,14 +743,35 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 		if c == nil || c.Kind != "mysql" || c.SQL == nil {
 			return nil, fmt.Errorf("变更 #%d 缺少结构化 SQL 配置，请编辑后保存", id)
 		}
+		selected, explicit, err := selectEnvironmentSQL(c.SQL, environment)
+		if err != nil {
+			return nil, fmt.Errorf("SQL 变更 #%d：%w", id, err)
+		}
+		if explicit {
+			p.ScriptSelections = append(p.ScriptSelections, SQLScriptSelection{ChangeID: id, Environment: environment, Content: selected.Content, DefaultContent: c.SQL.Content, Skip: selected.Skip, Reason: selected.Reason, ChangeDigest: digestJSON([]any{c.Service, c.SQL})})
+			if selected.Skip {
+				p.Warnings = append(p.Warnings, fmt.Sprintf("变更 #%d 在 %s 无需执行：%s", id, environment, selected.Reason))
+				continue
+			}
+			p.Warnings = append(p.Warnings, fmt.Sprintf("变更 #%d 使用 %s 环境专用 SQL，请核对与默认脚本的差异；其他环境的验证结果不代表本脚本已验证。原因：%s", id, environment, selected.Reason))
+		}
 		resource, err := s.sqlBinding(c.Service, environment, c.SQL.ResourceAlias)
 		if err != nil {
 			return nil, err
 		}
-		if connection != nil && connection.Name != resource.Name {
-			return nil, fmt.Errorf("同一 SQL 节点只能操作一个数据库连接，请分成多个节点")
+		if connection != nil && (connection.Name != resource.Name || connection.Config["database"] != resource.Config["database"]) {
+			return nil, fmt.Errorf("同一 SQL 节点只能操作一个目标数据库，请分成多个节点")
 		}
 		connection = resource
+		applied, err := s.appliedSQLChange(c, resource, environment)
+		if err != nil {
+			return nil, err
+		}
+		if applied != nil {
+			p.Applied = append(p.Applied, *applied)
+			continue
+		}
+		p.ChangeIDs = append(p.ChangeIDs, id)
 		if c.SQL.DataSync != nil {
 			if err := validateSyncScript(c); err != nil {
 				return nil, err
@@ -768,7 +782,7 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 				return nil, fmt.Errorf("同步任务 #%d：%w", c.SQL.DataSync.TaskID, err)
 			}
 		}
-		ops, err := parseChangeSQL(c.SQL.Content)
+		ops, err := parseChangeSQL(selected.Content)
 		if err != nil {
 			return nil, err
 		}
@@ -787,8 +801,17 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 	if len(p.Statements) > 100 {
 		return nil, fmt.Errorf("SQL 节点最多 100 条语句")
 	}
+	if connection == nil {
+		p.Mode = "skipped"
+		return p, nil
+	}
 	p.Connection, p.Database, p.DestinationDigest = connection.Name, connection.Config["database"], sqlDestination(connection)
-	for _, id := range ids {
+	if len(p.ChangeIDs) == 0 {
+		p.Mode = "applied"
+		p.Warnings = append(p.Warnings, "全部 SQL 变更已有可验证的成功记录，本节点不再执行 SQL。")
+		return p, nil
+	}
+	for _, id := range p.ChangeIDs {
 		var status string
 		e := s.db.QueryRow(`SELECT status FROM sql_execution_ledger WHERE connection=? AND database_name=? AND change_id=?`, p.Connection, p.Database, id).Scan(&status)
 		if e == nil {
@@ -807,9 +830,38 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 		return nil, err
 	}
 	defer db.Close()
-	catalog, err := readSQLCatalog(ctx, db, p.Database)
+	catalog, err := readSQLCatalogVersion(ctx, db, p.Database, p.SchemaVersion)
 	if err != nil {
 		return nil, err
+	}
+	if err = validateSQLCollations(ctx, db, p.Statements); err != nil {
+		return nil, err
+	}
+	for _, previous := range prior {
+		if previous.Mode == "applied" || previous.Mode == "skipped" || s.sqlPhysicalTarget(previous.Connection, previous.Database) != s.sqlPhysicalTarget(p.Connection, p.Database) {
+			continue
+		}
+		p.PreviousNodes = append(p.PreviousNodes, previous.NodeID)
+		if previous.Mode == "ddl" {
+			for _, frozen := range previous.Statements {
+				ops, e := parseChangeSQL(frozen.SQL)
+				if e != nil || len(ops) != 1 {
+					return nil, fmt.Errorf("前序 SQL 阶段解析失败")
+				}
+				if e = applySQLSchema(catalog, &ops[0]); e != nil {
+					return nil, fmt.Errorf("前序 SQL 阶段 %s：%w", previous.NodeID, e)
+				}
+			}
+		}
+	}
+	if len(p.PreviousNodes) > 0 {
+		if len(syncSnapshots) > 0 {
+			return nil, fmt.Errorf("数据同步使用冻结数据快照，请在前序阶段完成后单独对比并交付")
+		}
+		raw, _ := json.Marshal(catalogSnapshot(catalog, p.Tables))
+		_ = json.Unmarshal(raw, &p.ExpectedSchema)
+		p.DeferredData = true
+		p.Warnings = append(p.Warnings, "分阶段 SQL：前序同库节点必须成功；本阶段按冻结脚本和行数上限核验当时数据，保存独立核验回执后执行。")
 	}
 	p.SchemaDigest = digestJSON(catalogSnapshot(catalog, p.Tables))
 	for _, snapshot := range syncSnapshots {
@@ -818,7 +870,7 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 		unique := false
 		if table != nil {
 			for _, idx := range table.Indexes {
-				if idx.Unique && strings.Join(idx.Columns, "\x00") == strings.Join(snapshot.Keys, "\x00") {
+				if idx.Unique && strings.Join(idx.Columns, "\x00") == strings.Join(syncExecutionKeys(snapshot.Keys, snapshot.Tree), "\x00") {
 					unique = true
 				}
 			}
@@ -852,6 +904,10 @@ func (s *Store) prepareSQLNode(ctx context.Context, nodeID string, ids []int64, 
 			}
 			// All DML statements are individually baseline-checked immediately
 			// before executing, including when earlier statements changed rows.
+			if op.Scope != "" && p.DeferredData {
+				op.ExpectedRows = -1
+				continue
+			}
 			if op.Scope != "" {
 				count, hash, e := sqlDataScope(ctx, db, op, false)
 				if e != nil {
@@ -921,22 +977,30 @@ func sqlDataScope(ctx context.Context, q sqlQueryer, op *SQLStatement, lock bool
 // A durable local ledger reserves all changes before any external write. An
 // interrupted/uncertain execution is never retried automatically.
 func (s *Store) executeSQLNode(ctx context.Context, run *DeliveryRun, p *SQLExecutionPlan) (output string, executionErr error) {
-	c := s.GetConnection(p.Connection)
-	if c == nil || sqlDestination(c) != p.DestinationDigest {
-		return "", fmt.Errorf("已审核数据库连接身份发生变化，请重新预检审批")
+	if err := s.verifySQLScriptSelections(p, run.Plan.Environment.Name); err != nil {
+		return "", err
 	}
-	if len(p.ChangeDigests) != len(p.ChangeIDs) || len(p.Services) != len(p.ChangeIDs) || len(p.Aliases) != len(p.ChangeIDs) {
-		return "", fmt.Errorf("SQL 快照不完整，请重新生成执行单")
+	if err := s.verifySQLReuse(p, run.Plan.Environment.Name); err != nil {
+		return "", err
 	}
-	for i, id := range p.ChangeIDs {
-		current := s.GetChange(id)
-		if current == nil || current.SQL == nil || current.Status != ChangeReady || digestJSON([]any{current.Service, current.SQL}) != p.ChangeDigests[i] {
-			return "", fmt.Errorf("SQL 变更内容或状态已变化，请重新预检审批")
+	skipped := 0
+	for _, selection := range p.ScriptSelections {
+		if selection.Skip {
+			skipped++
 		}
-		binding, e := s.sqlBinding(p.Services[i], run.Plan.Environment.Name, p.Aliases[i])
-		if e != nil || binding.Name != p.Connection {
-			return "", fmt.Errorf("环境资源绑定发生变化，请重新提交")
-		}
+	}
+	if len(p.ChangeIDs) == 0 && skipped > 0 {
+		return fmt.Sprintf("按环境设置跳过 %d 项 SQL，复用 %d 项历史成功记录；未执行 SQL", skipped, len(p.Applied)), nil
+	}
+	if len(p.ChangeIDs) == 0 && len(p.Applied) > 0 {
+		return fmt.Sprintf("已跳过 %d 项历史成功 SQL 变更，未重复执行", len(p.Applied)), nil
+	}
+	if err := s.verifySQLStagePredecessors(run, p); err != nil {
+		return "", err
+	}
+	c, err := s.reviewedSQLConnection(p, run.Plan.Environment.Name)
+	if err != nil {
+		return "", err
 	}
 	db, err := openChangeMySQL(ctx, c)
 	if err != nil {
@@ -957,11 +1021,11 @@ func (s *Store) executeSQLNode(ctx context.Context, run *DeliveryRun, p *SQLExec
 		defer cancel()
 		_, _ = conn.ExecContext(unlock, `SELECT RELEASE_LOCK(?)`, "devops-sql:"+p.Database)
 	}()
-	catalog, err := readSQLCatalog(ctx, conn, p.Database)
+	catalog, err := readSQLCatalogVersion(ctx, conn, p.Database, p.SchemaVersion)
 	if err != nil {
 		return "", err
 	}
-	if digestJSON(catalogSnapshot(catalog, p.Tables)) != p.SchemaDigest {
+	if !sqlStageSchemaMatches(p, catalog) {
 		return "", fmt.Errorf("审批后目标表结构发生变化，请重新预检审批")
 	}
 	if p.Mode == "ddl" {
@@ -1012,15 +1076,43 @@ func (s *Store) executeSQLNode(ctx context.Context, run *DeliveryRun, p *SQLExec
 			return detail, err
 		}
 		defer target.Rollback()
+		// Tree parents and unselected nodes are also part of the approved topology.
+		for _, id := range p.ChangeIDs {
+			change := s.GetChange(id)
+			if change.SQL.DataSync != nil && change.SQL.DataSync.Tree != nil {
+				snapshot := change.SQL.DataSync
+				q, e := parseSyncQuery(snapshot.TargetSQL)
+				if e != nil {
+					return "", e
+				}
+				rows, e := querySyncRows(ctx, target, q, true)
+				if e != nil || syncRowsDigest(rows) != snapshot.TargetDigest {
+					status, detail = "failed", "审批后菜单层级或数据已变化，事务已回滚，请重新对比"
+					return detail, fmt.Errorf("%s", detail)
+				}
+			}
+		}
+		stageScopes := []SQLStageScope{}
 		// Lock/check every approved scope BEFORE performing any write.
 		for i := range p.Statements {
 			op := &p.Statements[i]
 			if op.Scope != "" {
-				_, hash, e := sqlDataScope(ctx, target, op, true)
-				if e != nil || hash != op.DataDigest {
+				count, hash, e := sqlDataScope(ctx, target, op, true)
+				if p.DeferredData && e == nil {
+					stageScopes = append(stageScopes, SQLStageScope{Statement: i, Rows: count, Digest: hash})
+				}
+				if e != nil || (!p.DeferredData && hash != op.DataDigest) {
 					status, detail = "failed", "审批后目标数据变化或影响范围无法锁定，事务已回滚"
 					return detail, fmt.Errorf("%s", detail)
 				}
+			}
+		}
+		if p.DeferredData {
+			baseline := SQLStageBaseline{NodeID: p.NodeID, PlanDigest: digestJSON(p), SchemaDigest: digestJSON(catalogSnapshot(catalog, p.Tables)), Scopes: stageScopes, CheckedAt: time.Now().Unix()}
+			raw, _ := json.Marshal(baseline)
+			if _, e := s.db.Exec(`INSERT INTO deploy_meta(key,value) VALUES(?,?)`, sqlStageBaselineKey(run.ID, p.NodeID), string(raw)); e != nil {
+				status, detail = "failed", "阶段核验回执已存在或无法保存，禁止重复执行"
+				return detail, fmt.Errorf("%s", detail)
 			}
 		}
 		total := int64(0)
@@ -1036,6 +1128,27 @@ func (s *Store) executeSQLNode(ctx context.Context, run *DeliveryRun, p *SQLExec
 				return detail, fmt.Errorf("%s", detail)
 			}
 			total += n
+		}
+		// Confirm that inserts/moves remain visible in the task's target scope.
+		// A WHERE filter on physical IDs must never make a successful migration
+		// disappear from the next comparison and create duplicate logical menus.
+		for _, id := range p.ChangeIDs {
+			change := s.GetChange(id)
+			if change.SQL.DataSync != nil && change.SQL.DataSync.Tree != nil {
+				snapshot := change.SQL.DataSync
+				q, e := parseSyncQuery(snapshot.TargetSQL)
+				if e != nil {
+					return "", e
+				}
+				rows, e := querySyncRows(ctx, target, q, true)
+				if e == nil {
+					e = verifySyncTreeResult(rows, snapshot)
+				}
+				if e != nil {
+					status, detail = "failed", "迁移后菜单超出目标查询范围或层级不一致，事务已回滚："+e.Error()
+					return detail, fmt.Errorf("%s", detail)
+				}
+			}
 		}
 		if err = target.Commit(); err != nil {
 			detail = "事务提交返回异常，需人工核对提交结果"
@@ -1058,7 +1171,7 @@ func (s *Store) executeSQLNode(ctx context.Context, run *DeliveryRun, p *SQLExec
 	}
 	// Re-read and apply the same declared operations: every operation should
 	// now be an identical skip. No success on silently different definitions.
-	after, err := readSQLCatalog(ctx, conn, p.Database)
+	after, err := readSQLCatalogVersion(ctx, conn, p.Database, p.SchemaVersion)
 	if err != nil {
 		return "结构回读失败，需人工核对", err
 	}
@@ -1107,4 +1220,26 @@ func (s *Store) SQLLedger() []map[string]any {
 
 func sqlExecutionContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 2*time.Minute)
+}
+
+// Resolve and verify every reviewed alias before opening any external connection.
+func (s *Store) reviewedSQLConnection(p *SQLExecutionPlan, environment string) (*ResourceConnection, error) {
+	c, targetErr := mysqlDatabaseTarget(s.GetConnection(p.Connection), map[string]string{"database": p.Database})
+	if targetErr != nil || sqlDestination(c) != p.DestinationDigest {
+		return nil, fmt.Errorf("已审核数据库连接身份发生变化，请重新预检审批")
+	}
+	if len(p.ChangeDigests) != len(p.ChangeIDs) || len(p.Services) != len(p.ChangeIDs) || len(p.Aliases) != len(p.ChangeIDs) {
+		return nil, fmt.Errorf("SQL 快照不完整，请重新生成执行单")
+	}
+	for i, id := range p.ChangeIDs {
+		current := s.GetChange(id)
+		if current == nil || current.SQL == nil || current.Status != ChangeReady || digestJSON([]any{current.Service, current.SQL}) != p.ChangeDigests[i] {
+			return nil, fmt.Errorf("SQL 变更内容或状态已变化，请重新预检审批")
+		}
+		binding, e := s.sqlBinding(p.Services[i], environment, p.Aliases[i])
+		if e != nil || binding.Name != p.Connection || sqlDestination(binding) != p.DestinationDigest || binding.Config["database"] != p.Database {
+			return nil, fmt.Errorf("环境资源绑定发生变化，请重新提交")
+		}
+	}
+	return c, nil
 }

@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,9 +61,52 @@ func (pr *PipelineRunner) Start(sv *Service, autoDeploy bool, branch, actor stri
 
 func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts PipelineRunOptions, actor string) (int64, error) {
 	var err error
+	baseService := sv
+	buildEnvironment := strings.TrimSpace(opts.BuildEnvironment)
+	if buildEnvironment == "" {
+		buildEnvironment = strings.TrimSpace(opts.DeployEnvironment)
+	}
+	if buildEnvironment == "" && opts.ReplayDelivery == nil {
+		_, required, err := pr.st.buildEnvironmentOptions(sv.Name)
+		if err != nil {
+			return 0, err
+		}
+		if required {
+			return 0, fmt.Errorf("应用配置了环境构建方案，请先选择本次构建的目标环境")
+		}
+		environments, e := pr.st.automaticDocumentEnvironments(sv)
+		if e != nil {
+			return 0, e
+		}
+		if len(environments) > 0 {
+			return 0, fmt.Errorf("应用启用了按环境生成接口文档，请选择本次构建目标环境")
+		}
+
+	}
+	if buildEnvironment != "" {
+		if opts.ReplayDelivery != nil {
+			return 0, fmt.Errorf("原配置重试不能更换环境构建方案")
+		}
+		sv, err = pr.st.environmentBuildService(sv, buildEnvironment)
+		if err != nil {
+			return 0, err
+		}
+		if target := strings.TrimSpace(opts.DeployEnvironment); target != "" && target != buildEnvironment {
+			expected, e := pr.st.environmentBuildService(baseService, target)
+			if e != nil {
+				return 0, e
+			}
+			if expected.BuildVariant != sv.BuildVariant || buildVariantDigest(expected, nil) != buildVariantDigest(sv, nil) {
+				return 0, fmt.Errorf("构建方案与自动发布目标环境不兼容，未启动构建")
+			}
+		}
+	}
 	raw, err := serviceForPipelineRun(sv, opts)
 	if err != nil {
 		return 0, err
+	}
+	if buildEnvironment != "" && sv.BuildVariant != "" && buildVariantDigest(raw, nil) != buildVariantDigest(sv, nil) {
+		return 0, fmt.Errorf("本次覆盖参数与环境构建方案不一致；请修改应用环境方案后重新构建")
 	}
 	delivery := pr.st.GetServiceDelivery(sv.Name)
 	if opts.ReplayDelivery != nil {
@@ -72,6 +116,11 @@ func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts Pi
 	if err != nil {
 		return 0, err
 	}
+	if err := pr.st.freezeAPIDocumentation(sv, opts.ReplayDelivery != nil, buildEnvironment); err != nil {
+		return 0, err
+	}
+	raw.APIDocumentation = sv.APIDocumentation
+	raw.DocumentEnvironment = sv.DocumentEnvironment
 	steps := sv.Steps
 	if len(steps) == 0 {
 		steps = ExpandTemplate(*sv)
@@ -80,11 +129,6 @@ func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts Pi
 		return 0, err
 	}
 	if sv.BuildEnvironment.isolated() {
-		for _, inst := range steps {
-			if inst.Step == "docker-build" {
-				return 0, fmt.Errorf("隔离环境中不支持 Docker 镜像构建步骤，请使用本机 Runner")
-			}
-		}
 		if err := checkBuildDocker(); err != nil {
 			return 0, err
 		}
@@ -105,7 +149,7 @@ func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts Pi
 	if trigger == "" {
 		trigger = "manual"
 	}
-	r := &PipelineRun{Service: sv.Name, Trigger: trigger, Branch: sv.Branch,
+	r := &PipelineRun{Stages: pr.plannedStages(sv), Service: sv.Name, Trigger: trigger, Branch: sv.Branch,
 		BuildCommand: sv.BuildCmd, AutoDeploy: autoDeploy, DeployEnvironment: strings.TrimSpace(opts.DeployEnvironment), Actor: actor, StartedAt: time.Now().Unix()}
 	if err := pr.st.CreateRun(r); err != nil {
 		releaseRunner()
@@ -186,14 +230,11 @@ func (pr *PipelineRunner) cancelBuild(id int64) error {
 	return nil
 }
 func (pr *PipelineRunner) runContext(ctx context.Context, runID int64, sv *Service, autoDeploy bool) {
-	pr.emit(runID, fmt.Sprintf("▶ 流水线 #%d %s\n", runID, sv.Name))
+	pr.emit(runID, fmt.Sprintf("▶ 流水线 %s %s（记录 ID %d）\n", pr.st.PipelineRunLabel(runID, sv.Name), sv.Name, runID))
 
-	steps := sv.Steps
-	if len(steps) == 0 {
-		steps = ExpandTemplate(*sv)
-	}
-	// 阶段视图 = 步骤序列
-	pr.st.SetStages(runID, len(steps))
+	steps := pr.pipelineSteps(sv)
+	planned, _ := json.Marshal(pr.plannedStages(sv))
+	pr.st.db.Exec(`UPDATE pipeline_runs SET stages=? WHERE id=?`, string(planned), runID)
 
 	version := time.Now().Format("0102-1504")
 	workspace := pr.b.buildDir(sv)
@@ -207,10 +248,39 @@ func (pr *PipelineRunner) runContext(ctx context.Context, runID int64, sv *Servi
 	var artifactRecord *Artifact
 	failed := false
 	waitingDeploy := false
+	compiled := map[string]time.Time{}
 
 	for i, inst := range steps {
 		if ctx.Err() != nil {
 			break
+		}
+		if inst.Step == apiDocumentStage {
+			name := documentStageName(sv)
+			pr.st.UpdateStage(runID, i, Stage{Name: name, Status: "running", StartedAt: time.Now().Unix()})
+			pr.emit(runID, fmt.Sprintf("\n━━ %s（%s）━━\n", name, apiDocumentStage))
+			var e error
+			if artifactRecord == nil {
+				e = fmt.Errorf("未生成本次制品，不能关联文档")
+			} else {
+				e = pr.generateAPIDocument(ctx, runID, sv, artifactRecord, workspace, outputDir)
+			}
+			status := "success"
+			if ctx.Err() != nil {
+				status = "canceled"
+			} else if e != nil {
+				if sv.APIDocumentation.Source.Required {
+					status = "failed"
+					failed = true
+				} else {
+					status = "warning"
+				}
+				pr.emit(runID, "✗ 接口文档阶段："+e.Error()+"\n")
+			}
+			pr.st.UpdateStage(runID, i, Stage{Name: name, Status: status})
+			if failed || ctx.Err() != nil {
+				break
+			}
+			continue
 		}
 		def := pr.lib.Get(inst.Step)
 		if def == nil {
@@ -260,12 +330,78 @@ func (pr *PipelineRunner) runContext(ctx context.Context, runID int64, sv *Servi
 		}
 
 		// shell 执行体：run.sh + 环境变量注入（产物契约经 .outputs 文件回传）
+		inputMetadata := map[string]string{}
+		retainedJar := ""
+		cleanupInput := func() {}
+		if def.ID == "git-checkout" {
+			compiled = map[string]time.Time{}
+		}
+		if def.ID == "docker-build" {
+			params, metadata, cleanup, err := prepareDockerCompilation(def.RenderParams(inst), workspace, outputDir, compiled)
+			if err != nil {
+				pr.emit(runID, "✗ 镜像编译输入校验失败："+err.Error()+"\n")
+				pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
+				failed = true
+				break
+			}
+			inst.Params, inputMetadata, cleanupInput = params, metadata, cleanup
+			retainedJar, err = retainDockerJar(params, metadata, outputDir)
+			if err != nil {
+				cleanupInput()
+				pr.emit(runID, "✗ 保留编译制品失败："+err.Error()+"\n")
+				pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
+				failed = true
+				break
+			}
+		}
 		_ = os.Remove(outputDir + "/.outputs") // 每个步骤独立输出，防止上一步骤的制品泄漏
 		env := def.BuildEnv(inst, workspace, sv.Name, version, outputDir)
 		for key, value := range sv.RuntimeEnv {
 			env = append(env, key+"="+value)
 		}
-		code := pr.b.execBuildStepContext(ctx, sv, def, env, func(l string) { pr.emit(runID, l) })
+		compileStarted := time.Now()
+		code := 0
+		if def.ID == javaBundleStep {
+			var started time.Time
+			for _, at := range compiled {
+				if started.IsZero() || at.Before(started) {
+					started = at
+				}
+			}
+			file, err := packageJavaBundle(ctx, workspace, outputDir, sv.Name, def.RenderParams(inst), started)
+			if err == nil {
+				err = os.WriteFile(filepath.Join(outputDir, ".outputs"), []byte("ARTIFACT="+file+"\nARTIFACT_KIND="+ArtifactJavaBundle+"\n"), 0600)
+			}
+			if err != nil {
+				code = 1
+				pr.emit(runID, "✗ 完整归档失败: "+err.Error()+"\n")
+			}
+		} else {
+			code = pr.b.execBuildStepContext(ctx, sv, def, env, func(l string) { pr.emit(runID, l) })
+		}
+		if code == 0 && ctx.Err() == nil && def.ID == "docker-build" && retainedJar == "" && inst.Params["EXPORT_JAR_GLOB"] != "" {
+			started := compiled["java-build"]
+			if started.IsZero() {
+				started = compileStarted
+			}
+			exportParams, exportMetadata, clean, exportErr := prepareDockerCompilation(map[string]string{"DOCKERFILE_SOURCE": "template", "DOCKERFILE_TEMPLATE": "java21", "CONTEXT": inst.Params["CONTEXT"], "DOCKERFILE_ARTIFACT_PATH": inst.Params["EXPORT_JAR_GLOB"]}, workspace, outputDir, map[string]time.Time{"java-build": started})
+			if exportErr == nil {
+				retainedJar, exportErr = retainDockerJar(exportParams, exportMetadata, outputDir)
+			}
+			clean()
+			if exportErr != nil {
+				cleanupInput()
+				pr.emit(runID, "✗ 导出本次 JAR 失败："+exportErr.Error()+"\n")
+				pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
+				failed = true
+				break
+			}
+			if inputMetadata == nil {
+				inputMetadata = map[string]string{}
+			}
+			inputMetadata["related_output_digest"], inputMetadata["related_output_path"] = exportMetadata["compiled_input_digest"], exportMetadata["compiled_input_path"]
+		}
+		cleanupInput()
 		if ctx.Err() != nil {
 			pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "canceled"})
 			break
@@ -275,6 +411,18 @@ func (pr *PipelineRunner) runContext(ctx context.Context, runID int64, sv *Servi
 			pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
 			failed = true
 			break
+		}
+		if def.Kind == "build" {
+			compiled[def.ID] = compileStarted
+		}
+		// Prepared delivery builds must not silently switch source during a custom step.
+		if run := pr.st.GetRun(runID); strings.HasPrefix(triggerOfRun(run), "code-preparation:") {
+			if err := verifyPreparedWorkspace(ctx, workspace, sv.Branch); err != nil {
+				pr.emit(runID, "✗ "+err.Error()+"\n")
+				pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
+				failed = true
+				break
+			}
 		}
 		// 读取步骤输出（COMMIT/ARTIFACT）
 		if outs := readOutputs(outputDir); outs != nil {
@@ -306,13 +454,57 @@ func (pr *PipelineRunner) runContext(ctx context.Context, runID int64, sv *Servi
 					failed = true
 					break
 				}
-				described.Metadata = map[string]string{"branch": sv.Branch, "build_command": sv.BuildCmd, "trigger": triggerOfRun(pr.st.GetRun(runID))}
+				if described.Metadata == nil {
+					described.Metadata = map[string]string{}
+				}
+				described.Metadata["branch"], described.Metadata["build_command"], described.Metadata["trigger"] = sv.Branch, sv.BuildCmd, triggerOfRun(pr.st.GetRun(runID))
+				if def.ID == "docker-build" {
+					for key, value := range inputMetadata {
+						described.Metadata[key] = value
+					}
+					for key, value := range dockerfileBuildMetadata(def.RenderParams(inst)) {
+						described.Metadata[key] = value
+					}
+				}
+				var jarRecord *Artifact
+				if retainedJar != "" {
+					jarDigest, jarRole := inputMetadata["compiled_input_digest"], "compilation"
+					if jarDigest == "" {
+						jarDigest = inputMetadata["related_output_digest"]
+						jarRole = "build-output"
+					}
+					jar, jarErr := describeArtifact(sv.Name, version, ArtifactJar, retainedJar, jarDigest)
+					if jarErr == nil {
+						jar.Metadata = map[string]string{"artifact_role": jarRole, "branch": sv.Branch}
+						jarRecord, jarErr = pr.st.RecordPipelineArtifact(runID, actorOfRun(pr.st.GetRun(runID)), jar)
+					}
+					if jarErr != nil {
+						pr.emit(runID, "✗ 关联 JAR 登记失败："+jarErr.Error()+"\n")
+						pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
+						failed = true
+						break
+					}
+					if jarRole == "compilation" {
+						described.Metadata["compiled_artifact_id"] = fmt.Sprint(jarRecord.ID)
+					} else {
+						described.Metadata["related_artifact_id"] = fmt.Sprint(jarRecord.ID)
+					}
+				}
 				artifactRecord, err = pr.st.RecordPipelineArtifact(runID, actorOfRun(pr.st.GetRun(runID)), described)
 				if err != nil {
 					pr.emit(runID, "✗ 制品入库失败: "+err.Error()+"\n")
 					pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
 					failed = true
 					break
+				}
+				if jarRecord != nil {
+					if err = pr.st.linkCompilationArtifact(runID, jarRecord, artifactRecord); err != nil {
+						pr.emit(runID, "✗ 制品关联失败："+err.Error()+"\n")
+						pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "failed"})
+						failed = true
+						break
+					}
+					pr.emit(runID, fmt.Sprintf("✓ 本次构建保留 JAR #%d 与镜像 #%d，制品关联已核对\n", jarRecord.ID, artifactRecord.ID))
 				}
 			}
 		}
@@ -325,6 +517,12 @@ func (pr *PipelineRunner) runContext(ctx context.Context, runID int64, sv *Servi
 		pr.st.UpdateStage(runID, i, Stage{Name: stageName, Status: "success"})
 	}
 	pr.st.SetRunVersion(runID, version, artifact)
+	if ctx.Err() == nil && !failed && artifactRecord != nil {
+		if _, err := pr.st.db.Exec(`INSERT INTO deploy_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, fmt.Sprintf("build-ready:%d", runID), fmt.Sprintf("%d:%s", artifactRecord.ID, artifactRecord.Digest)); err != nil {
+			pr.emit(runID, "✗ 构建完成证明保存失败，禁止发布\n")
+			failed = true
+		}
+	}
 	if ctx.Err() != nil {
 		pr.emit(runID, "⏹ 构建已取消；不会自动发布\n")
 		pr.st.FinishRun(runID, "canceled")
@@ -403,7 +601,7 @@ func (pr *PipelineRunner) ContinueDeployEnvironment(runID int64, target *Service
 		return fmt.Errorf("找不到待部署阶段")
 	}
 	hosts := make([]Host, 0, len(target.Hosts))
-	if target.ManagedTarget() {
+	if target.ManagedTarget() || target.ScriptTarget() {
 		hosts = target.ExecutionHosts()
 	} else {
 		for _, name := range target.Hosts {

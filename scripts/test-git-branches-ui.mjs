@@ -90,7 +90,7 @@ try{
  await wizard.getByRole('button',{name:'取消',exact:true}).click()
  await ui.getByRole('link',{name:'变更',exact:true}).click()
  await ui.getByRole('button',{name:work.title,exact:true}).click()
- await ui.getByRole('button',{name:'编辑交付内容',exact:true}).click()
+ await ui.getByRole('button',{name:'维护交付内容',exact:true}).click()
  const editor=visibleDialog('交付内容 · '+work.title)
  await editor.getByRole('button',{name:'＋ 添加代码与应用',exact:true}).click()
  await chooseApp(editor,'branch-qa-api');await chooseApp(editor,'branch-qa-web')
@@ -107,7 +107,7 @@ try{
  await editor.getByRole('button',{name:'同步分支'}).click();await editor.getByText(/已同步 4 个分支/).waitFor()
  for(const width of [1440,900,700]){await page.setViewportSize({width,height:1000});await page.waitForTimeout(80);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false)}
  await editor.getByRole('button',{name:'关闭',exact:true}).click()
- await ui.getByRole('button',{name:'编辑交付内容',exact:true}).click()
+ await ui.getByRole('button',{name:'维护交付内容',exact:true}).click()
  await branchControl(editor).locator('.el-select__selected-item').filter({hasText:'feature/menu'}).waitFor()
  assert.equal(await selected(editor),'feature/menu','close/reopen discarded branch draft')
  assert.deepEqual(writes,[]);assert.deepEqual(errors,[])

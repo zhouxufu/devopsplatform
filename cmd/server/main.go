@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"logplatform/internal/server"
 )
@@ -20,15 +22,34 @@ func main() {
 		tokenDefault = os.Getenv("LOGQ_TOKEN")
 	}
 	token := flag.String("token", tokenDefault, "ingest shared token (or env DEVOPSPLATFORM_DATA_TOKEN)")
-	retention := flag.Int("retention-days", 7, "days to keep")
-	diskGB := flag.Float64("disk-gb", 20, "disk watermark in GB")
+	retentionDefault := 7
+	if configured := os.Getenv("DEVOPSPLATFORM_LOG_RETENTION_DAYS"); configured != "" {
+		days, err := strconv.Atoi(configured)
+		if err != nil || days <= 0 {
+			log.Fatal("DEVOPSPLATFORM_LOG_RETENTION_DAYS must be a positive integer")
+		}
+		retentionDefault = days
+	}
+	retention := flag.Int("retention-days", retentionDefault, "VictoriaLogs retention in days (must match backend)")
+	diskGB := flag.Float64("disk-gb", 2, "maximum local delivery queue disk use in GiB")
 	rules := flag.String("rules", "", "trace rules json (service+regex, hot reload)")
 	bus := flag.String("bus", "", "platform event bus base url (e.g. http://127.0.0.1:9800) for derived metrics")
+	vlURL := flag.String("victorialogs-url", server.DefaultStorageOptions().URL, "VictoriaLogs base URL")
+	replay := flag.Duration("log-replay-window", time.Hour, "retained compressed delivery replay window")
+	retry := flag.Duration("log-retry-window", 48*time.Hour, "deduplication receipt window")
 	flag.Parse()
 
 	server.LoadTraceRules(*rules)
 
-	st, err := server.Open(*data, *retention, *diskGB)
+	st, err := server.OpenVictoriaLogs(*data, func() server.StorageOptions {
+		o := server.DefaultStorageOptions()
+		o.URL = *vlURL
+		o.RetentionDays = *retention
+		o.QueueMaxBytes = int64(*diskGB * 1024 * 1024 * 1024)
+		o.ReplayWindow = *replay
+		o.RetryWindow = *retry
+		return o
+	}())
 	if err != nil {
 		log.Fatalf("open storage: %v", err)
 	}
