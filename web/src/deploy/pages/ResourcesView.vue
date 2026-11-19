@@ -225,7 +225,7 @@ async function saveApplication(){
     toast('平台应用已创建','success')
   }catch(e){toast(e.message,'error')}finally{editorSaves.value.application=false}
 }
-function removeCollect(i){const collect=asArray(agentForm.value.collect);if(collect.length>1)collect.splice(i,1);agentForm.value.collect=collect}
+function removeCollect(i){if(agentBusy.value||agentLoading.value)return;const collect=asArray(agentForm.value.collect);if(!Number.isInteger(i)||i<0||i>=collect.length)return;collect.splice(i,1);agentForm.value.collect=collect}
 function agentInstalled(h){return !!(centralAgent(h)||agentRemoteState.value[h.name]?.installed)}
 function agentConfigBody(){
   const f=agentForm.value
