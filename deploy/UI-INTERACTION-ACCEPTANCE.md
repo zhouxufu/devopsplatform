@@ -3129,6 +3129,17 @@ fixture.html 为临时组件验收页备份，测试后已从 web/ 移除。只�
 - 发布 java-auto-recheck-20261119 到 192.168.0.32:9800，部署回执 updated，基础启动、运行二进制摘要及 SHA256SUMS 核验通过。依用户要求未做运行备份或部署后业务验收，未更新 Agent/VictoriaLogs。
 - 证据：artifacts/java-auto-recheck-20261119/；冻结源码、全量检查、发布回执：artifacts/java-auto-recheck-publish-20261119/。
 
+## 2026-11-19 单应用 MCP 一次授权部署与发布编号
+
+- 普通单应用新增 deploy_service（build/artifact），完整预览后确认一次，平台后台按原授权自动构建/发布/读取原结果。get_service_deployment 查询原任务；advance_service_deployment 在授权内不生成第二份确认。MCP 全局说明同步明确已授权需求/Bug work_loop 无需逐步重复确认。
+- 预览冻结应用、环境、完整分支提交或不可变制品、环境构建契约、部署目标与策略。确认前分支前进需新预览；确认后只构建原 SHA。本入口不合并需求源，需求/Bug 合并继续使用原 work_loop。仅非受保护开发/测试；原人工发布、批次暂停和审批机制不变。
+- 后台每次派发重新校验启用用户与原 Key 权限/撤销/期限，允许窄应用授权。持久意图、CAS 与租约防并发重复；构建 ID 丢失按稳定 trigger 查回并立即保存进度。子发布与任务关联同事务，未知派发不重放，原发布复用已有自动核对。
+- 编号缺失根因：交付编排直接 INSERT 子发布单，漏写 release_order_numbers。已同事务分配应用内编号；保留全局 ID、审批及历史日志，历史缺号沿用已有启动补齐机制。
+- 隔离回归覆盖唯一发布、重复确认、归属、配置/目标/制品变化、过期、Key 撤销/用户停用、租约、丢失构建回执恢复、原结果读取；既有 work_loop 与编号回归通过。
+- 临时 Git HTTP 仓库、原 git-checkout、PipelineRunner、临时产物和隔离本地发布脚本跑通构建至成功发布；远端后续提交未混入已授权构建，公共目标分支不能被需求源替代。没有业务仓库/主机操作。
+- 未修改页面组件；通过原 API 的 number 与全局 ID 契约核验编号，没有重复浏览器验收或修改个人 Skill、MCP 凭据。360 项前端测试、生产 UI 构建通过；最终全量后台 race 状态和源码摘要见 artifacts/service-deployment-20261119/verification.json。
+- 证据与变更范围：artifacts/service-deployment-20261119/。本轮未部署测试环境，未修改线上数据；截图中历史缺号需更新后由原初始化补齐。
+
 
 ## 2026-11-19 待办发布异常与过期范围确认处理入口
 
