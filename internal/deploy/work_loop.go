@@ -15,17 +15,18 @@ import (
 )
 
 type WorkLoopSpec struct {
-	DraftOnly     bool     `json:"draft_only,omitempty"`
-	WorkItemID    int64    `json:"work_item_id"`
-	Environment   string   `json:"environment"`
-	Applications  []string `json:"applications"`
-	ExpiresAt     int64    `json:"expires_at"`
-	MaxIterations int      `json:"max_iterations"`
-	Acceptance    string   `json:"acceptance"`
-	CompleteScope bool     `json:"complete_scope"`
-	Resolution    string   `json:"resolution,omitempty"`
-	ResolvedBuild string   `json:"resolved_build,omitempty"`
-	AssignedTo    string   `json:"assigned_to,omitempty"`
+	PersonalFollow bool     `json:"personal_follow,omitempty"`
+	DraftOnly      bool     `json:"draft_only,omitempty"`
+	WorkItemID     int64    `json:"work_item_id"`
+	Environment    string   `json:"environment"`
+	Applications   []string `json:"applications"`
+	ExpiresAt      int64    `json:"expires_at"`
+	MaxIterations  int      `json:"max_iterations"`
+	Acceptance     string   `json:"acceptance"`
+	CompleteScope  bool     `json:"complete_scope"`
+	Resolution     string   `json:"resolution,omitempty"`
+	ResolvedBuild  string   `json:"resolved_build,omitempty"`
+	AssignedTo     string   `json:"assigned_to,omitempty"`
 }
 type WorkLoopGrant struct {
 	Spec           WorkLoopSpec            `json:"spec"`
@@ -136,9 +137,15 @@ func (s *Store) workLoopSource(ctx context.Context, w *WorkItem, actor string, s
 	if e := s.canReadResearchItem(ctx, actor, w); e != nil {
 		return nil, e
 	}
+	if w.Status == WorkItemClosed || w.ExternalStatus == "closed" {
+		return nil, fmt.Errorf("工作项已关闭，开发跟进已结束")
+	}
 	if w.Source == "manual" {
 		if actor != w.Owner && actor != w.AssignedTo {
 			return nil, fmt.Errorf("仅工作项创建人或负责人可授权自动跟进")
+		}
+		if !spec.CompleteScope && spec.ExpiresAt == 0 {
+			return map[string]any{"kind": w.Kind, "source": w.Source, "action": "comment", "label": "仅添加本轮结果备注"}, nil
 		}
 		label := "已解决 · 待测试关闭"
 		if w.Kind == "requirement" {
@@ -149,6 +156,12 @@ func (s *Store) workLoopSource(ctx context.Context, w *WorkItem, actor string, s
 	z, _, e := s.researchClient(ctx, w, actor)
 	if e != nil {
 		return nil, e
+	}
+	if !spec.CompleteScope && spec.ExpiresAt == 0 {
+		if _, err := z.researchReadItem(ctx, w, "view"); err != nil {
+			return nil, err
+		}
+		return map[string]any{"kind": w.Kind, "source": w.Source, "action": "comment", "label": "仅添加本轮结果备注"}, nil
 	}
 	if w.Kind == "requirement" {
 		remote, e := z.researchReadItem(ctx, w, "edit")
@@ -185,14 +198,21 @@ func (s *Store) workLoopSource(ctx context.Context, w *WorkItem, actor string, s
 	return map[string]any{"kind": w.Kind, "source": w.Source, "action": "resolve", "resolution": spec.Resolution, "label": "已解决 · 待测试关闭"}, nil
 }
 func (s *Store) previewWorkLoop(ctx context.Context, spec WorkLoopSpec, actor string) (*WorkLoopGrant, error) {
+	// Retired request fields are accepted from older clients but never constrain new tasks.
+	spec.ExpiresAt, spec.MaxIterations = 0, 0
+	return s.compileWorkLoop(ctx, spec, actor)
+}
+
+// Reproduce a frozen grant with its original fields when checking its digest.
+func (s *Store) compileWorkLoop(ctx context.Context, spec WorkLoopSpec, actor string) (*WorkLoopGrant, error) {
 	if actor == "" || actor == "local" {
 		return nil, fmt.Errorf("请登录本人账号后授权任务")
 	}
 	if spec.DraftOnly {
 		return s.previewDraftTracking(ctx, spec, actor)
 	}
-	if spec.ExpiresAt <= time.Now().Unix() || spec.ExpiresAt > time.Now().Add(7*24*time.Hour).Unix() || spec.MaxIterations < 1 || spec.MaxIterations > 10 {
-		return nil, fmt.Errorf("授权期限最多 7 天，开发轮次为 1–10")
+	if spec.PersonalFollow {
+		return nil, fmt.Errorf("开发跟进仅可登记草稿")
 	}
 	if len(spec.Applications) == 0 || len(spec.Applications) > 10 || strings.TrimSpace(spec.Acceptance) == "" || len(spec.Acceptance) > 4000 {
 		return nil, fmt.Errorf("请选择 1–10 个应用并填写验收条件")
@@ -262,7 +282,7 @@ func (s *Store) validateWorkLoop(ctx context.Context, t *WorkLoop, actor string)
 	if t.Revoked || t.Paused {
 		return fmt.Errorf("任务已暂停或撤销授权，在途执行仍保留原回执")
 	}
-	g, e := s.previewWorkLoop(ctx, t.Grant.Spec, actor)
+	g, e := s.compileWorkLoop(ctx, t.Grant.Spec, actor)
 	if e != nil {
 		return e
 	}

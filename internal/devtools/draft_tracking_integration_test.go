@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"logplatform/internal/deploy"
 )
@@ -30,7 +29,8 @@ func TestDraftTrackingIncrementalMCP(t *testing.T) {
 		}
 	}
 	work := map[string]any{"work_item_id": wid}
-	preview := call("create_change_tracking", map[string]any{"work_item_id": wid, "applications": []any{"orders"}, "expires_at": time.Now().Add(time.Hour).Unix()})
+	reject("create_change_tracking", map[string]any{"work_item_id": wid, "applications": []any{"orders"}, "expires_at": 1})
+	preview := call("create_change_tracking", map[string]any{"work_item_id": wid, "applications": []any{"orders"}})
 	confirm := map[string]any{"confirmation_id": preview["confirmation_id"], "confirm": true, "reason": "登记本人草稿"}
 	task := mapValue(call("confirm_platform_action", confirm)["result"])
 	id := stringArg(task, "id")
@@ -170,7 +170,7 @@ func TestDraftTrackingTwoDevelopersOnOneWorkItem(t *testing.T) {
 		}
 		k.verified = true
 		k.role = "member"
-		p := docCall(t, svc, &k, "create_change_tracking", map[string]any{"work_item_id": wid, "applications": []any{"orders"}, "expires_at": time.Now().Add(time.Hour).Unix()})
+		p := docCall(t, svc, &k, "create_change_tracking", map[string]any{"work_item_id": wid, "applications": []any{"orders"}})
 		return developer{k, mapValue(docConfirm(t, svc, &k, p)["result"])}
 	}
 	alice, bob := authorize("alice"), authorize("bob")
@@ -206,5 +206,23 @@ func TestDraftTrackingTwoDevelopersOnOneWorkItem(t *testing.T) {
 	d = content()
 	if len(d.Changes) != 2 || d.Changes[0].Owner != "alice" || d.Changes[0].Reference != "feature/a" || d.Changes[1].Owner != "bob" || d.Changes[1].Reference != "feature/b" {
 		t.Fatal("lost branch or author")
+	}
+}
+
+func TestWorkItemFollowMCPResumesDraftWithoutDelivery(t *testing.T) {
+	svc, key, st, id, _ := changesFixture(t)
+	hub := deploy.NewLogHub()
+	server := httptest.NewServer(deploy.Routes(st, deploy.NewBuilder(st, t.TempDir(), hub), hub, "", deploy.NewStepLib(t.TempDir())))
+	defer server.Close()
+	svc.up.Deploy = server.URL
+	key.Applications = []string{"*"}
+	key.Scopes = append(key.Scopes, "workitems:read")
+	args := map[string]any{"work_item_id": id}
+	first := mapValue(docCall(t, svc, key, "follow_work_item", args))
+	args["applications"] = []any{"orders"}
+	second := mapValue(docCall(t, svc, key, "follow_work_item", args))
+	spec := mapValue(mapValue(second["grant"])["spec"])
+	if stringArg(first, "id") == "" || first["id"] != second["id"] || second["confirmation_id"] != nil || spec["draft_only"] != true || spec["environment"] != "" {
+		t.Fatal("unexpected follow response", second)
 	}
 }

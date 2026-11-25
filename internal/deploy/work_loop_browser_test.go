@@ -59,7 +59,7 @@ func TestWorkLoopBrowserFixture(t *testing.T) {
 		// Metadata-only fixture. Prevent any nested dispatch by blocking entry to
 		// advance; the real coordinator is covered with disposable engine tests.
 		if r.Method != "GET" {
-			allowed := r.URL.Path == "/api/research/attention" || r.URL.Path == "/api/work-loops" || r.URL.Path == "/api/work-loops/preview" || strings.HasPrefix(r.URL.Path, "/api/work-loops/") && (strings.HasSuffix(r.URL.Path, "/control") || strings.HasSuffix(r.URL.Path, "/authorization") || strings.HasSuffix(r.URL.Path, "/authorization/preview"))
+			allowed := r.URL.Path == "/api/work-loops/follow" || r.URL.Path == "/api/research/attention" || r.URL.Path == "/api/work-loops" || r.URL.Path == "/api/work-loops/preview" || strings.HasPrefix(r.URL.Path, "/api/work-loops/") && (strings.HasSuffix(r.URL.Path, "/control") || strings.HasSuffix(r.URL.Path, "/authorization") || strings.HasSuffix(r.URL.Path, "/authorization/preview"))
 			if !allowed {
 				deliveryWriteError(w, 403, "隔离界面验收不执行交付")
 				return

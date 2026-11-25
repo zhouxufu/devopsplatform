@@ -45,7 +45,7 @@ func (s *Store) previewWorkLoopAuthorization(ctx context.Context, t *WorkLoop, r
 	if t.Revoked {
 		return nil, fmt.Errorf("授权已撤销，请新建跟进任务；原执行记录保留")
 	}
-	if req.Spec.DraftOnly != t.Grant.Spec.DraftOnly {
+	if req.Spec.DraftOnly && !t.Grant.Spec.DraftOnly {
 		return nil, fmt.Errorf("请为不同用途单独授权")
 	}
 	if req.Spec.WorkItemID != t.Grant.Spec.WorkItemID {
@@ -63,13 +63,6 @@ func (s *Store) previewWorkLoopAuthorization(ctx context.Context, t *WorkLoop, r
 	next := changed && !unfrozen
 	if next && !s.workLoopMayIterate(t) {
 		return nil, fmt.Errorf("范围发生变化，原轮次尚未安全结束；请在当前执行单核对并取消或完成后再续授权，不能替换已冻结范围")
-	}
-	count := len(t.Iterations)
-	if next {
-		count++
-	}
-	if g.Spec.MaxIterations < count {
-		return nil, fmt.Errorf("轮次预算至少为 %d", count)
 	}
 	p := &workLoopAuthorizationPreview{Revision: t.Revision, PreviousDigest: t.Grant.Digest, Grant: g, NewIteration: next, Differences: []workLoopGrantDifference{}}
 	// Field values contain policy and identity metadata only, never credentials.

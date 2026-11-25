@@ -145,6 +145,89 @@ func registerWorkLoopRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, m 
 		})
 		deliveryJSON(w, out)
 	})
+	mux.HandleFunc("POST /api/work-loops/follow", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			WorkItemID   int64    `json:"work_item_id"`
+			Applications []string `json:"applications"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		actor := deliveryActor(r)
+		spec := WorkLoopSpec{DraftOnly: true, PersonalFollow: true, WorkItemID: req.WorkItemID, Applications: req.Applications}
+		g, err := s.previewWorkLoop(r.Context(), spec, actor)
+		if err != nil {
+			deliveryWriteError(w, 403, err)
+			return
+		}
+		id := strings.TrimPrefix(digestJSON([]any{"follow", actor, req.WorkItemID}), "sha256:")[:32]
+		t, err := s.workLoop(id)
+		if err != nil {
+			// Older grants keep their exact limits and identity when a client reconnects.
+			prior, readErr := s.ownedWorkLoops(actor)
+			if readErr != nil {
+				deliveryWriteError(w, 500, readErr)
+				return
+			}
+			var existing *WorkLoop
+			for i := range prior {
+				row := &prior[i]
+				if row.Grant.Spec.WorkItemID != req.WorkItemID || row.ID == id || row.Revoked || row.State == "completed" {
+					continue
+				}
+				if existing != nil {
+					deliveryWriteError(w, 409, "已有多个跟进任务，请按任务编号继续")
+					return
+				}
+				existing = row
+			}
+			if existing != nil {
+				deliveryJSON(w, existing)
+				return
+			}
+			t = &WorkLoop{ID: id, Owner: actor, Authority: r.Header.Get("X-Work-Loop-Authority"), AuthorityKeyID: r.Header.Get("X-Work-Loop-Key-ID"), Grant: *g, Authorizations: []WorkLoopGrant{*g}, Iterations: []WorkLoopIteration{{Number: 1, GrantDigest: g.Digest, State: "developing"}}}
+			t.setState("developing", "development", "开发中，可登记本工作项的实际变更")
+			if err = s.saveWorkLoop(t); err != nil {
+				t, err = s.workLoop(id)
+				if err != nil {
+					deliveryWriteError(w, 409, err)
+					return
+				}
+			} else {
+				s.Audit(actor, "follow-work-item", "work-loop", id, g)
+			}
+		}
+		if t.Owner != actor || t.Grant.Spec.WorkItemID != req.WorkItemID {
+			deliveryWriteError(w, 409, ErrRunConflict)
+			return
+		}
+		if t.Grant.Spec.PersonalFollow && !t.Paused && !t.Revoked && t.Grant.Spec.DraftOnly {
+			if t.Authority == "mcp" && r.Header.Get("X-Work-Loop-Authority") == "mcp" && t.AuthorityKeyID != r.Header.Get("X-Work-Loop-Key-ID") {
+				deliveryWriteError(w, 403, "请使用原跟进 Key")
+				return
+			}
+			spec = t.Grant.Spec
+			spec.Applications = append(slices.Clone(spec.Applications), req.Applications...)
+			slices.Sort(spec.Applications)
+			spec.Applications = slices.Compact(spec.Applications)
+			if !slices.Equal(spec.Applications, t.Grant.Spec.Applications) {
+				g, err = s.previewWorkLoop(r.Context(), spec, actor)
+				if err != nil {
+					deliveryWriteError(w, 409, err)
+					return
+				}
+				t.Grant = *g
+				t.current().GrantDigest = g.Digest
+				t.Authorizations = append(t.Authorizations, *g)
+				if err = s.saveWorkLoop(t); err != nil {
+					deliveryWriteError(w, 409, err)
+					return
+				}
+				s.Audit(actor, "follow-draft-applications", "work-loop", id, g)
+			}
+		}
+		deliveryJSON(w, t)
+	})
 	mux.HandleFunc("POST /api/work-loops/preview", func(w http.ResponseWriter, r *http.Request) {
 		var spec WorkLoopSpec
 		if !decode(w, r, &spec) {
@@ -253,8 +336,8 @@ func registerWorkLoopRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, m 
 			}
 			t.Claimant = req.Claimant
 		case "next_iteration":
-			if !s.workLoopMayIterate(t) || len(t.Iterations) >= t.Grant.Spec.MaxIterations || t.Intent != nil && t.Intent.State == "dispatching" {
-				deliveryWriteError(w, 409, "当前轮次尚未收敛或已达到授权轮次预算")
+			if !s.workLoopMayIterate(t) || t.Intent != nil && t.Intent.State == "dispatching" {
+				deliveryWriteError(w, 409, "请先核对原执行结果，再开始下一轮")
 				return
 			}
 			if e := s.validateWorkLoop(r.Context(), t, t.Owner); e != nil {

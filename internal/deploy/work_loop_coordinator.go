@@ -220,6 +220,11 @@ func (s *Store) advanceWorkLoop(mux *http.ServeMux, r *http.Request, t *WorkLoop
 		return s.saveWorkLoop(t)
 	}
 	if run.Status == "failed" || run.Status == "canceled" {
+		for _, step := range run.Steps {
+			if step.Status == "failed" {
+				return fmt.Errorf("执行单 #%d · %s 失败：%s。请处理该节点后在原任务继续", run.ID, step.Name, step.Detail)
+			}
+		}
 		return fmt.Errorf("交付执行单 #%d 为 %s，请在本任务核对具体节点", run.ID, run.Status)
 	}
 	for _, step := range run.Steps {

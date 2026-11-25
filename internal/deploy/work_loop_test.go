@@ -67,7 +67,7 @@ func TestWorkLoopAuthorizationRevisionAndScope(t *testing.T) {
 	if foreign.Code != 403 {
 		t.Fatal(foreign.Code, foreign.Body.String())
 	}
-	for _, mutation := range []func(*WorkLoopSpec){func(s *WorkLoopSpec) { s.Environment = "prod" }, func(s *WorkLoopSpec) { s.ExpiresAt = time.Now().Unix() - 1 }, func(s *WorkLoopSpec) { s.Applications = []string{"not-authorized"} }, func(s *WorkLoopSpec) { s.MaxIterations = 100 }} {
+	for _, mutation := range []func(*WorkLoopSpec){func(s *WorkLoopSpec) { s.Environment = "prod" }, func(s *WorkLoopSpec) { s.Applications = []string{"not-authorized"} }} {
 		spec := task.Grant.Spec
 		mutation(&spec)
 		if _, e := s.previewWorkLoop(context.Background(), spec, "alice"); e == nil {

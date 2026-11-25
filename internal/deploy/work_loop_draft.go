@@ -25,14 +25,9 @@ type DraftTrackingReceipt struct {
 }
 
 func (s *Store) previewDraftTracking(ctx context.Context, spec WorkLoopSpec, actor string) (*WorkLoopGrant, error) {
-	now := time.Now()
-	if spec.ExpiresAt <= now.Unix() || spec.ExpiresAt > now.Add(7*24*time.Hour).Unix() {
-		return nil, fmt.Errorf("草稿登记有效期为未来 7 天以内")
+	if spec.Environment != "" || spec.CompleteScope || spec.Acceptance != "" || spec.Resolution != "" || spec.AssignedTo != "" || spec.ResolvedBuild != "" {
+		return nil, fmt.Errorf("登记草稿只需指定工作项和涉及的应用")
 	}
-	if spec.Environment != "" || spec.CompleteScope || spec.Acceptance != "" || spec.Resolution != "" || spec.AssignedTo != "" || spec.ResolvedBuild != "" || spec.MaxIterations > 1 || spec.MaxIterations < 0 {
-		return nil, fmt.Errorf("草稿授权仅指定工作项、应用与期限")
-	}
-	spec.MaxIterations = 1
 	w := s.GetWorkItem(spec.WorkItemID)
 	if w == nil || (w.Kind != "bug" && w.Kind != "requirement") {
 		return nil, fmt.Errorf("请选择需求或 Bug")
@@ -40,7 +35,10 @@ func (s *Store) previewDraftTracking(ctx context.Context, spec WorkLoopSpec, act
 	if err := s.canReadResearchItem(ctx, actor, w); err != nil {
 		return nil, err
 	}
-	if len(spec.Applications) == 0 || len(spec.Applications) > 10 {
+	if spec.PersonalFollow && (w.Status == WorkItemClosed || w.ExternalStatus == "closed" || (w.Owner != actor && w.AssignedTo != actor)) {
+		return nil, fmt.Errorf("仅创建人或负责人可接手未关闭工作项")
+	}
+	if (!spec.PersonalFollow && len(spec.Applications) == 0) || len(spec.Applications) > 10 {
 		return nil, fmt.Errorf("请选择 1–10 个应用")
 	}
 	slices.Sort(spec.Applications)
@@ -141,9 +139,6 @@ func checkTrackedDraftEdit(tx *deployTx, old Change, next *Change, workItem int6
 
 // Store generated IDs and advance the grant in the same transaction as its changes.
 func commitDraftTracking(tx *deployTx, t *WorkLoop, changes []Change) error {
-	if t.Grant.Spec.ExpiresAt <= time.Now().Unix() {
-		return fmt.Errorf("草稿授权已到期")
-	}
 	for _, c := range changes {
 		t.DraftReceipt.ChangeIDs = append(t.DraftReceipt.ChangeIDs, c.ID)
 	}

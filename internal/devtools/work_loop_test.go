@@ -9,12 +9,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestWorkLoopMCPAuthorizesOnceAndRechecksScopes(t *testing.T) {
 	var creates, advances atomic.Int32
-	spec := map[string]any{"work_item_id": 1, "environment": "test", "applications": []any{"orders"}, "expires_at": time.Now().Add(time.Hour).Unix(), "max_iterations": 2, "acceptance": "接口回归通过", "complete_scope": true}
+	spec := map[string]any{"work_item_id": 1, "environment": "test", "applications": []any{"orders"}, "acceptance": "接口回归通过", "complete_scope": true}
 	id := strings.Repeat("a", 32)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -46,6 +45,13 @@ func TestWorkLoopMCPAuthorizesOnceAndRechecksScopes(t *testing.T) {
 	tok := workflowToken(t, store)
 	tok.Scopes = append([]string{}, workLoopScopes...)
 	tok.reviewers = `["alice"]`
+	for _, retired := range []string{"expires_at", "max_iterations"} {
+		invalid := mapValue(cloneJSON(spec))
+		invalid[retired] = 1
+		if _, _, _, err := svc.Call(context.Background(), tok, "create_work_loop", map[string]any{"spec": invalid}); err == nil || !strings.Contains(err.Error(), retired) {
+			t.Fatalf("expected schema to reject %s, got %v", retired, err)
+		}
+	}
 	p := docCall(t, svc, tok, "create_work_loop", map[string]any{"spec": spec})
 	if creates.Load() != 0 {
 		t.Fatal("authorization preview executed")
@@ -74,7 +80,7 @@ func TestWorkLoopMCPAuthorizesOnceAndRechecksScopes(t *testing.T) {
 
 func TestWorkLoopMCPReauthorizationRequiresNewPreview(t *testing.T) {
 	var writes atomic.Int32
-	spec := map[string]any{"work_item_id": 1, "environment": "test", "applications": []any{"orders"}}
+	spec := map[string]any{"work_item_id": 1, "environment": "test", "applications": []any{"orders"}, "acceptance": "接口回归通过", "complete_scope": false}
 	id := strings.Repeat("b", 32)
 	digest := "preview-one"
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +90,7 @@ func TestWorkLoopMCPReauthorizationRequiresNewPreview(t *testing.T) {
 		case "/api/work-loops/" + id:
 			json.NewEncoder(w).Encode(map[string]any{"grant": map[string]any{"spec": spec}})
 		case "/api/work-loops/" + id + "/authorization/preview":
-			json.NewEncoder(w).Encode(map[string]any{"revision": 3, "grant": map[string]any{"spec": spec}, "digest": digest, "differences": []any{"expiry"}})
+			json.NewEncoder(w).Encode(map[string]any{"revision": 3, "grant": map[string]any{"spec": spec}, "digest": digest, "differences": []any{"acceptance"}})
 		case "/api/work-loops/" + id + "/authorization":
 			writes.Add(1)
 			json.NewEncoder(w).Encode(map[string]any{"id": id, "revision": 4})

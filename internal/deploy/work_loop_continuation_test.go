@@ -204,3 +204,67 @@ func TestWorkLoopResolvedBugNextIterationOnlyComments(t *testing.T) {
 		t.Fatal("followup replayed", count)
 	}
 }
+
+func TestWorkItemFollowAndUnboundedDelivery(t *testing.T) {
+	s, h, old, _ := workLoopFixture(t, "bug")
+	body := map[string]any{"work_item_id": old.Grant.Spec.WorkItemID}
+	post := func(actor string) WorkLoop {
+		t.Helper()
+		w := loopRequest(h, "POST", "/api/work-loops/follow", actor, body)
+		var task WorkLoop
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &task) != nil {
+			t.Fatalf("follow %d %s", w.Code, w.Body.String())
+		}
+		return task
+	}
+	if got := post("alice"); got.ID != old.ID {
+		t.Fatal("existing task not reused")
+	}
+	if _, e := s.db.Exec(`DELETE FROM deploy_meta WHERE key=?`, "work_loop:"+old.ID); e != nil {
+		t.Fatal(e)
+	}
+	first := post("alice")
+	body["applications"] = []string{"orders"}
+	second := post("alice")
+	third := post("alice")
+	if first.ID != second.ID || third.Revision != second.Revision || !second.Grant.Spec.DraftOnly || second.Grant.Spec.ExpiresAt != 0 {
+		t.Fatal("follow lost original draft scope")
+	}
+	if loopRequest(h, "POST", "/api/work-loops/follow", "bob", body).Code == 200 {
+		t.Fatal("unassigned follow")
+	}
+	full := old.Grant.Spec
+	full.MaxIterations = 0
+	full.ExpiresAt = 0
+	saved, _ := s.workLoop(first.ID)
+	preview, e := s.previewWorkLoopAuthorization(context.Background(), saved, workLoopAuthorizationRequest{Revision: saved.Revision, Spec: full})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = s.applyWorkLoopAuthorization(saved, preview); e != nil {
+		t.Fatal(e)
+	}
+	// Emulate a historical grant whose original time and round budget are both spent.
+	legacy := saved.Grant.Spec
+	legacy.ExpiresAt = 1
+	legacy.MaxIterations = 1
+	oldGrant, err := s.compileWorkLoop(context.Background(), legacy, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved.Grant = *oldGrant
+	for i := 0; i < 12; i++ {
+		saved.setState("awaiting_acceptance", "acceptance", "等待验收")
+		if e = s.saveWorkLoop(saved); e != nil {
+			t.Fatal(e)
+		}
+		r := loopRequest(h, "POST", "/api/work-loops/"+saved.ID+"/control", "alice", map[string]any{"revision": saved.Revision, "action": "next_iteration"})
+		if r.Code != 200 {
+			t.Fatal(r.Body.String())
+		}
+		saved, _ = s.workLoop(saved.ID)
+	}
+	if saved.ID != first.ID || len(saved.Iterations) != 13 || saved.Grant.Spec.DraftOnly {
+		t.Fatal("delivery lost original record")
+	}
+}
