@@ -37,6 +37,17 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 		t.Fatal(e)
 	}
 	mux := http.NewServeMux()
+	if os.Getenv("DOCUMENT_WORKSPACE_FIXTURE") == "1" {
+		mux.HandleFunc("GET /api/plugins", func(w http.ResponseWriter, r *http.Request) {
+			deliveryJSON(w, []map[string]any{{"name": "api-center", "display": "接口中心", "url": "/api/plugins/api-center/ui"}})
+		})
+		mux.HandleFunc("GET /api/registry/applications", func(w http.ResponseWriter, r *http.Request) { deliveryJSON(w, []any{}) })
+		mux.HandleFunc("GET /api/plugins/api-center/ui", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, filepath.Join(root, "api-center.html"))
+		})
+		mux.Handle("GET /api/plugins/api-center/assets/", http.StripPrefix("/api/plugins/api-center/", http.FileServer(http.Dir(root))))
+		mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(root, "assets")))))
+	}
 	mux.HandleFunc("GET /__fixture/stop", func(w http.ResponseWriter, r *http.Request) {
 		once.Do(func() { close(stop) })
 		fmt.Fprint(w, "stopping")
@@ -62,6 +73,7 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 		deliveryJSON(w, map[string]any{"username": "alice", "role": "admin", "auth_enabled": true})
 	})
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/plugins/api-center")
 		ledgerMu.Lock()
 		requests = append(requests, r.Method+" "+r.URL.RequestURI())
 		f := fault
@@ -76,6 +88,10 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/api-center.html" {
+			if r.URL.Path == "/" && os.Getenv("DOCUMENT_WORKSPACE_FIXTURE") == "1" {
+				http.ServeFile(w, r, filepath.Join(root, "shell.html"))
+				return
+			}
 			http.ServeFile(w, r, filepath.Join(root, "api-center.html"))
 			return
 		}

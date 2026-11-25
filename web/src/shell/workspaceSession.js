@@ -58,12 +58,15 @@ export function runtimeWorkspaceHash(value,plugin){
    for(const key of ['work_items','changes']){const ids=input.get(key);if(ids&&/^[1-9]\d{0,15}(,[1-9]\d{0,15}){0,499}$/.test(ids))query.set(key,ids)}
   }
   if(plugin==='research'&&/^\/work\/\d+$/.test(url.pathname)&&input.get('action')==='preview')query.set('action','preview')
-  if(plugin==='api-center'&&['/documents','/testing','/test-cases','/test-execution'].includes(url.pathname)){
+  if(plugin==='api-center'&&['/documents','/reports','/testing','/test-cases','/test-execution'].includes(url.pathname)){
+   for(const key of ['protocol','detail_protocol']){const v=input.get(key);if(['http','dubbo'].includes(v))query.set(key,v)}
+   for(const key of ['detail_service','detail_environment']){const v=input.get(key);if(v!==null&&/^[A-Za-z0-9_.-]{0,191}$/.test(v))query.set(key,v)}
+   const report=input.get('report');if(url.pathname==='/reports'&&/^[a-f0-9]{32}$/.test(report||''))query.set('report',report)
    for(const key of ['bug','suite','evidence_revision','evidence_suite_revision']){const v=input.get(key);if(/^[1-9]\d{0,18}$/.test(v||''))query.set(key,v)}
    const target=input.get('target');if(target&&/^[A-Za-z0-9_.:-]{1,191}$/.test(target))query.set('target',target)
    const caseID=input.get('case');if(/^[1-9]\d{0,18}$/.test(caseID||''))query.set('case',caseID)
    const id=input.get('snapshot');if(/^[1-9]\d{0,18}$/.test(id||''))query.set('snapshot',id)
-   const op=input.get('operation');if(op&&/^(get|post|put|patch|delete|head|options|trace) \/(?!\/)[^\r\n\\]{0,8192}$/.test(op))query.set('operation',op)
+   const op=input.get('operation');if(op&&(/^(get|post|put|patch|delete|head|options|trace) \/(?!\/)[^\r\n\\]{0,8192}$/.test(op)||input.get('protocol')==='dubbo'&&op.length<=8192&&!/[\r\n\\]/.test(op)))query.set('operation',op)
   }
   if(plugin==='logs'&&url.pathname==='/search'){
    if(input.get('evidence')==='1'){

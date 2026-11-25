@@ -6,9 +6,10 @@ import PersonalHome from './PersonalHome.vue'
 import LoginView from './LoginView.vue'
 import {loginPageURL,requestedLoginReturn} from '../shared/loginNavigation.js'
 import ConsoleNavigation from './ConsoleNavigation.vue'
-import {workspaceNavigation, homeWorkspaceTarget, workspaceBreadcrumb} from './navigation.js'
+import {workspaceNavigation, workspaceBreadcrumb} from './navigation.js'
 import {platformPage,platformWorkspacePlugin} from './platformPages.js'
 import {workspaceCloseTargets,nextWorkspaceAfterClose} from './workspaceActions.js'
+import {chooseWorkspace} from './workspaceTarget.js'
 
 
 import AppearanceSettings from './AppearanceSettings.vue'
@@ -82,10 +83,11 @@ onBeforeUnmount(()=>workspaceTabObserver?.disconnect())
 const activeWorkspace = computed(() => st.workspaces.find(w => w.id === st.active))
 const homeWorkspaces=computed(()=>st.workspaces.map(w=>({...w,displayTitle:workspaceTitle(w)})))
 const windowsReady=ref(false),authReady=ref(false)
+st._activationSeq=0
 let loginResumeURL='/'
 watch(()=>st.showLogin,value=>{document.documentElement.toggleAttribute('data-console-auth-page',value);document.title=value?'登录 · DevOps 控制台':'DevOps 控制台'},{immediate:true})
 function currentWorkspaceHash(w){
- try{if(w.el.contentWindow.location.origin===location.origin)return runtimeWorkspaceHash(w.el.contentWindow.location.hash||'#/',w.plugin.name)}catch{}
+ try{if(w.el.contentWindow.location.href!=='about:blank'&&w.el.contentWindow.location.origin===location.origin)return runtimeWorkspaceHash(w.el.contentWindow.location.hash||'#/',w.plugin.name)}catch{}
  return w.hash
 }
 function rememberWindows(){
@@ -96,34 +98,26 @@ watch(()=>[st.active,...st.workspaces.map(w=>[w.id,w.title,w.hash,w.context?.ser
 function openHome(){switchWs(0);st.plusOpen=false}
 function openPlatformWorkspace(view){
  if(!platformPage(view,st.me,st.plugins))return
- const hash='#/'+view,existing=st.workspaces.find(w=>w.plugin.name==='platform'&&w.hash===hash)
- if(existing)switchWs(existing.id)
- else openPlugin(platformWorkspacePlugin,hash,{context:windowContext({})})
+ openTarget(platformWorkspacePlugin,'#/'+view,{context:windowContext({})},{menu:true})
 }
 
+function workspaceRoute(w){try{if(w.el?.contentWindow?.location.origin===location.origin)return w.el.contentWindow.location.hash||w.hash}catch{}return w.hash}
+function openTarget(plugin,hash,source={context:windowContext({})},{menu=false,forceNew=false}={}){
+ const match=chooseWorkspace(st.workspaces.map(w=>({...w,hash:currentWorkspaceHash(w),routeHash:workspaceRoute(w)})),plugin.name,hash,{menu,forceNew,active:st.active,context:source.context})
+ if(match){const workspace=st.workspaces.find(w=>w.id===match.workspace.id);switchWs(workspace.id);if(match.navigate)workspace.el.contentWindow.postMessage({type:'workspace.navigate',hash:match.hash||hash},location.origin)}
+ else openPlugin(plugin,hash,source)
+}
 function navigationOpen(action){
- const plugin=st.plugins.find(p=>p.name===action.plugin)
- if(!plugin)return
- const hash=runtimeWorkspaceHash(action.hash||'#/',plugin.name)
- const candidates=st.workspaces.filter(w=>w.plugin.name===plugin.name)
- const destination=workspaceNavigation({plugin,hash})
- const workspace=candidates.find(w=>workspaceNavigation(w).id===destination.id)
- if(workspace){switchWs(workspace.id);if(currentWorkspaceHash(workspace)!==hash)workspace.el.contentWindow.postMessage({type:'workspace.navigate',hash},location.origin)}
- else openPlugin(plugin,hash,{context:windowContext({})})
- st.plusOpen=false
+ const plugin=st.plugins.find(p=>p.name===action.plugin);if(!plugin)return
+ openTarget(plugin,action.hash||'#/',{context:windowContext({})},{menu:true,forceNew:action.forceNew===true});st.plusOpen=false
 }
 function homeOpen(action){
- const plugin=st.plugins.find(p=>p.name===action.plugin)
- if(!plugin)return
- const hash=runtimeWorkspaceHash(action.hash||'#/',plugin.name)
- const target=homeWorkspaceTarget(st.workspaces.map(w=>({...w,hash:currentWorkspaceHash(w)})),plugin.name,hash)
- const existing=target&&st.workspaces.find(w=>w.id===target.id)
- if(existing){switchWs(existing.id);if(currentWorkspaceHash(existing)!==hash)existing.el.contentWindow.postMessage({type:'workspace.navigate',hash},location.origin)}
- else openPlugin(plugin,hash,{context:windowContext({})})
+ const plugin=st.plugins.find(p=>p.name===action.plugin);if(!plugin)return
+ openTarget(plugin,action.hash||'#/',{context:windowContext({})},{forceNew:action.forceNew===true})
 }
 const renameWorkspace=ref(null),workspaceName=ref('')
 const controlsContext=()=>({service:st.gSvc,environment:st.gEnv,range:[...(st.range||[])],rangeMinutes:st.rangeMinutes})
-function duplicateWorkspace(w){openPlugin(w.plugin,currentWorkspaceHash(w),{context:windowContext(w.context)})}
+function duplicateWorkspace(id){const w=st.workspaces.find(w=>w.id===Number(id));if(w)openTarget(w.plugin,workspaceRoute(w),{context:windowContext(w.context)},{forceNew:true})}
 function workspaceTitle(w){return formatWorkspaceTitle(w,st.workspaces)}
 function renameWs(w){renameWorkspace.value=w;workspaceName.value=workspaceTitle(w)}
 function saveWorkspaceName(){const value=workspaceName.value.trim();if(!value||value.length>60)return;renameWorkspace.value.title=value;renameWorkspace.value=null}
@@ -217,6 +211,7 @@ function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
 function switchWs(id) {
   if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
   st.active = id
+  if(activeWorkspace.value)activeWorkspace.value.lastActivated=++st._activationSeq
   const c=activeWorkspace.value?.context
   if(c){st.gSvc=c.service;st.gEnv=c.environment;st.range=[...(c.range||[])];st.rangeMinutes=c.rangeMinutes;if(c.rangeMinutes>0)st.range=recentRange(c.rangeMinutes)}
   st.workspaces.forEach(w => {w.el.style.display = w.id === id ? 'block' : 'none';try{w.el.contentWindow.postMessage({type:'workspace.visibility',active:w.id===id},location.origin)}catch{}})
@@ -417,7 +412,7 @@ window.addEventListener('message', e => {
   if (ws && e.data?.type === 'workspace.open') {
     const p = st.plugins.find(x => x.name === e.data.plugin)
     const hash = typeof e.data.hash === 'string' && e.data.hash.startsWith('#/') ? e.data.hash : ''
-    if (p) openPlugin(p, hash,{...ws,context:linkedWorkspaceContext(ws.context,e.data.context)})
+    if (p) openTarget(p,hash,{...ws,context:linkedWorkspaceContext(ws.context,e.data.context)},{forceNew:e.data.forceNew===true})
   }
   if (ws && e.data?.type === 'platform.open' && platformPage(e.data.view,st.me,st.plugins)) {
     st.platformPanel = e.data.view
@@ -497,7 +492,7 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
     :env-menu-groups="envMenuGroups"
     :current-app="st.gSvc"
     :current-env="st.gEnv"
-    @tab-change="handleHeaderTabChange"
+    @tab-change="handleHeaderTabChange" @tab-duplicate="duplicateWorkspace" @tab-close="closeWs"
     @app-select="item => { st.gSvc = item.value; ctxSync() }"
     @env-select="item => { st.gEnv = item.value; environmentChanged() }"
     @search-open="globalSearchOpen = true"

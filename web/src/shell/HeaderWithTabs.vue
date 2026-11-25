@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { Tabs, TabsList, TabsTrigger, Button, Separator } from '@/shared/shadcn-ui.js'
+import { Tabs, TabsList, TabsTrigger, Button, Separator, ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from '@/shared/shadcn-ui.js'
 import { Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb'
 import { ChevronDownIcon, SearchIcon } from '@lucide/vue'
 import ContextMenuButton from '../shared/components/ContextMenuButton.vue'
@@ -36,7 +36,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['tab-change', 'app-select', 'env-select', 'search-open'])
+const emit = defineEmits(['tab-change', 'tab-duplicate', 'tab-close', 'app-select', 'env-select', 'search-open'])
 
 const appLabel = computed(() => props.currentApp || '应用')
 const envLabel = computed(() => props.currentEnv || '环境')
@@ -68,14 +68,10 @@ const envLabel = computed(() => props.currentEnv || '环境')
       @update:model-value="value => $emit('tab-change', value)"
     >
       <TabsList variant="line" class="h-full! w-max min-w-full shrink-0 justify-start rounded-none bg-transparent p-0">
-        <TabsTrigger
-          v-for="tab in tabs"
-          :key="tab.value"
-          :value="String(tab.value)"
-          class="h-10 flex-none shrink-0 gap-2 rounded-none px-3"
-        >
+        <ContextMenu v-for="tab in tabs" :key="tab.value"><ContextMenuTrigger as-child>
+        <TabsTrigger :value="String(tab.value)" class="h-10 flex-none shrink-0 gap-2 rounded-none px-3" :title="tab.label">
           <span class="truncate">{{ tab.label }}</span>
-        </TabsTrigger>
+        </TabsTrigger></ContextMenuTrigger><ContextMenuContent v-if="String(tab.value)!=='0'"><ContextMenuItem @select="$emit('tab-duplicate',tab.value)">在新标签打开</ContextMenuItem><ContextMenuItem @select="$emit('tab-close',Number(tab.value))">关闭标签</ContextMenuItem></ContextMenuContent></ContextMenu>
       </TabsList>
     </Tabs>
 
