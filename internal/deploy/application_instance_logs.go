@@ -45,6 +45,21 @@ func (m *instanceManager) logs(t *ServiceEnvironment, sv *Service, h Host, fp st
 	} else {
 		return "", fmt.Errorf("日志脱敏配置不可用")
 	}
+	if jpomJava(sv) {
+		command, err := jpomInstanceLogCommand(sv, r, "/proc")
+		if err != nil {
+			return "", err
+		}
+		raw, err := m.exec(h, command, 20*time.Second)
+		if err != nil {
+			return "", fmt.Errorf("日志读取未确认，请检查输出路径和读取权限")
+		}
+		text, secrets, err := parseJpomInstanceLog(raw)
+		if err != nil {
+			return "", err
+		}
+		return redactInstanceLog(text, append(values, secrets...)), nil
+	}
 	var command string
 	if sv.TargetType == "docker-host" {
 		// Fetch env only into the redactor, never return/store it or an inspect dump.

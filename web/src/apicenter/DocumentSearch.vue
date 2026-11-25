@@ -6,7 +6,7 @@ import DataTable from '../shared/components/DataTable.vue'
 import OptionPicker from '../shared/components/OptionPicker.vue'
 import HelpTip from '../shared/components/HelpTip.vue'
 import {applicationName} from '../shared/applicationName.js'
-const props=defineProps({service:{type:String,default:''},search:{type:String,default:''},group:{type:String,default:''},maintainer:{type:String,default:''},environment:{type:String,default:'__all'},services:{type:Array,default:()=>[]},environments:{type:Array,default:()=>[]},opening:Boolean})
+const props=defineProps({protocol:{type:String,default:'http'},service:{type:String,default:''},search:{type:String,default:''},group:{type:String,default:''},maintainer:{type:String,default:''},environment:{type:String,default:'__all'},services:{type:Array,default:()=>[]},environments:{type:Array,default:()=>[]},opening:Boolean})
 const emit=defineEmits(['update:search','update:group','update:maintainer','open'])
 const rows=ref([]),groups=ref([]),page=ref(1),total=ref(0),snapshots=ref(0),loading=ref(false),error=ref('')
 let controller,timer,epoch=0
@@ -15,14 +15,14 @@ function appName(row){return applicationName(props.services.find(s=>s.name===row
 function envName(row){return props.environments.find(e=>e.name===row.environment)?.display_name||row.environment||'未区分环境'}
 async function refresh(){
  clearTimeout(timer);controller?.abort();controller=new AbortController();const token=++epoch;loading.value=true;error.value='';rows.value=[]
- const q=new URLSearchParams({q:props.search,group:props.group,maintainer:props.maintainer,page:String(page.value),page_size:'15'})
+ const q=new URLSearchParams({protocol:props.protocol,q:props.search,group:props.group,maintainer:props.maintainer,page:String(page.value),page_size:'15'})
  if(props.service)q.set('service',props.service)
  if(props.environment!=='__all')q.set('environment',props.environment==='__unassigned'?'':props.environment)
  try{const r=await fetch('api/api-documents/search?'+q,{signal:controller.signal}),body=await r.json();if(token!==epoch)return;if(!r.ok)throw Error(body.error||'接口检索失败');rows.value=body.items||[];groups.value=body.groups||[];total.value=body.total||0;snapshots.value=body.snapshots||0}
  catch(e){if(token===epoch&&e.name!=='AbortError'){error.value=e.message;total.value=0}}
  finally{if(token===epoch)loading.value=false}
 }
-watch(()=>[props.search,props.group,props.maintainer,props.environment,props.service],()=>{page.value=1;controller?.abort();epoch++;rows.value=[];loading.value=true;clearTimeout(timer);timer=setTimeout(refresh,250)})
+watch(()=>[props.protocol,props.search,props.group,props.maintainer,props.environment,props.service],()=>{page.value=1;controller?.abort();epoch++;rows.value=[];loading.value=true;clearTimeout(timer);timer=setTimeout(refresh,250)})
 function turn(value){page.value=value;refresh()}
 onMounted(refresh)
 onBeforeUnmount(()=>{epoch++;clearTimeout(timer);controller?.abort()})

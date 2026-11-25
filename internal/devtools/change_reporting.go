@@ -45,8 +45,15 @@ func validateChangeShape(schema map[string]any, value any, path string) error {
 		}
 	case "array":
 		items, ok := value.([]any)
-		if !ok || len(items) < 1 || len(items) > 200 {
-			return fmt.Errorf("%s 需要 1–200 项", path)
+		minItems, maxItems := 1, 200
+		if minimum, yes := schema["minItems"].(int); yes {
+			minItems = minimum
+		}
+		if maximum, yes := schema["maxItems"].(int); yes {
+			maxItems = maximum
+		}
+		if !ok || len(items) < minItems || len(items) > maxItems {
+			return fmt.Errorf("%s 需要 %d–%d 项", path, minItems, maxItems)
 		}
 		next, _ := schema["items"].(map[string]any)
 		for i, v := range items {

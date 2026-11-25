@@ -155,7 +155,7 @@ func registerDeliveryMCPRoutes(mux *http.ServeMux, s *Store, m *ReleaseManager, 
 	})
 	// The ordinary code executor already freezes sources and claims its revision
 	// before any merge/build. Keep the additional MCP environment boundary here.
-	for _, action := range []string{"start", "resume"} {
+	for _, action := range []string{"start", "resume", "retry-builds"} {
 		action := action
 		mux.HandleFunc("POST /api/delivery/mcp/code-preparations/{id}/"+action, func(w http.ResponseWriter, r *http.Request) {
 			p := s.CodePreparation(r.PathValue("id"))

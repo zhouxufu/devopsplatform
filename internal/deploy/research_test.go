@@ -342,7 +342,12 @@ func TestResearchWorkflowSequentialTasksAndScopeDrift(t *testing.T) {
 	s.CreateWorkItem(w)
 	c := &Change{Title: "operation", Kind: "manual", Summary: "核对", Owner: "alice"}
 	s.CreateChange(c)
-	s.SetChangeWorkItems(c.ID, []int64{w.ID})
+	if err = s.SetChangeWorkItems(c.ID, []int64{w.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SetChangeReady(c.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	template := &DeliveryTemplate{Name: "准备", Mode: "version", Workbench: "research", Owner: "alice", Nodes: []DeliveryNode{{ID: "confirm", Kind: "manual", Name: "解决人确认", Instructions: "确认版本内容", AssigneeSource: "work_item_resolvers", ApprovalMode: "all"}, {ID: "test", Kind: "approval", Name: "测试审批", Approvers: []string{"bob", "carol"}, ApprovalMode: "all"}, {ID: "product", Kind: "approval", Name: "产品审批", Approvers: []string{"dave"}, ApprovalMode: "any"}}}
 	if err = saveUnifiedPreparationFixture(s, template); err != nil {
 		t.Fatal(err)
@@ -381,9 +386,11 @@ func TestResearchWorkflowSequentialTasksAndScopeDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c = s.GetChange(c.ID)
-	c.Summary = "changed scope"
-	if err = s.UpdateChange(c); err != nil {
+	added := &Change{Title: "新增处理项", Kind: "manual", Summary: "changed scope", Owner: "alice"}
+	if err = s.CreateChange(added); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetChangeWorkItems(added.ID, []int64{w.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.ReviewResearchTask(run.ID, "product", "dave", run.Digest, "", true, enabled); err == nil {
@@ -539,6 +546,9 @@ func TestResearchCompletedCodeGeneratesNextConfirmationWithoutExecutingIt(t *tes
 		t.Fatal(err)
 	}
 	if err = s.SetChangeWorkItems(c.ID, []int64{w.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SetChangeReady(c.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	tpl := &DeliveryTemplate{Name: "代码后确认", Mode: "version", Workbench: "research", Owner: "alice", Nodes: []DeliveryNode{{ID: "code", Kind: "code-prepare", Name: "合入构建", Policies: map[string]CodePolicy{"orders": {Mode: "integration", TargetBranch: "dev"}}}, {ID: "confirm", Kind: "manual", Name: "确认", AssigneeSource: "work_item_resolvers", ApprovalMode: "all", Instructions: "确认本次交付"}}}

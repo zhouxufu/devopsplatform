@@ -71,10 +71,10 @@ func deliveryControlDecision(s *Store, run *DeliveryRun) (string, string) {
 		return "finish", "交付已停止：" + run.Status
 	}
 	for _, step := range run.Steps {
-		if step.Status == "success" {
+		if step.Status == "success" || step.Status == "skipped" {
 			continue
 		}
-		if step.Status == "executing" {
+		if step.Status == "executing" && !(step.Kind == "deploy" && step.ReleaseID > 0) {
 			if step.Kind == "extension" && step.LeaseUntil > time.Now().Unix() {
 				return "wait", "编排插件任务执行中"
 			}
@@ -154,7 +154,7 @@ func (s *Store) runDeliveryControlWithAdvance(id int64, lease string, advance fu
 		decision, message := deliveryControlDecision(s, run)
 		if decision == "pause" && run != nil && len(managers) > 0 {
 			for _, step := range run.Steps {
-				if step.Status == "success" {
+				if step.Status == "success" || step.Status == "skipped" {
 					continue
 				}
 				if step.ReleaseID > 0 {

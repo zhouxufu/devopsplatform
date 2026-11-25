@@ -109,7 +109,7 @@ func registerCodePreparationRoutes(mux *http.ServeMux, s *Store, pr *PipelineRun
 			deliveryJSON(w, p)
 		}
 	})
-	for _, action := range []string{"start", "resume", "cancel"} {
+	for _, action := range []string{"start", "resume", "cancel", "retry-builds"} {
 		action := action
 		mux.HandleFunc("POST /api/delivery/code-preparations/{id}/"+action, func(w http.ResponseWriter, r *http.Request) {
 			p := owned(w, r)
@@ -194,12 +194,26 @@ func registerCodePreparationRoutes(mux *http.ServeMux, s *Store, pr *PipelineRun
 				return
 			}
 			building := p.State == "building"
+			if action == "retry-builds" {
+				if req.ExpectedRevision <= 0 || len(req.TargetCommits) > 0 {
+					deliveryWriteError(w, 409, "重试必须使用原任务修订和原提交")
+					return
+				}
+				if err := s.prepareFrozenBuildRetry(p); err != nil {
+					deliveryWriteError(w, 409, err)
+					return
+				}
+				building = true
+			}
 			p.State = "merging"
 			if building {
 				p.State = "building"
 			}
 			p.LeaseUntil = time.Now().Add(7 * time.Minute).Unix()
 			p.Message = "正在核对合并并准备制品；不执行部署 / SQL / Nacos。"
+			if action == "retry-builds" {
+				p.Message = "已合并，正在从原提交和构建配置重试；尚未发布。"
+			}
 			if err := s.saveCodePreparation(p); err != nil {
 				deliveryWriteError(w, 409, err)
 				return
@@ -209,6 +223,7 @@ func registerCodePreparationRoutes(mux *http.ServeMux, s *Store, pr *PipelineRun
 			worker := s.CodePreparation(p.ID)
 			go func() {
 				if building {
+					defer s.reconcileResearchPreparation(worker.ID)
 					s.performPreparedBuilds(worker, pr)
 				} else {
 					s.performCodePreparation(worker, pr, action == "resume")

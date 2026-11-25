@@ -4,8 +4,65 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
+
+func buildAttemptTrigger(p *CodePreparation, b *PreparedBuild) string {
+	if len(b.PreviousRunIDs) == 0 {
+		return "code-preparation:" + p.ID + ":" + b.Service
+	}
+	return fmt.Sprintf("code-retry:%s:%d:%s", p.ID, len(b.PreviousRunIDs), b.Service)
+}
+
+func (s *Store) prepareFrozenBuildRetry(p *CodePreparation) error {
+	if p.State != "failed" || p.LeaseUntil > time.Now().Unix() || len(p.Repositories) == 0 {
+		return fmt.Errorf("只可恢复已结束且有合并回执的失败构建")
+	}
+	commits := map[string]string{}
+	for _, repo := range p.Repositories {
+		if repo.Status != "merged" || !fullBuildCommit.MatchString(repo.ResultCommit) {
+			return fmt.Errorf("合并结果尚未确认，请先核对原合并")
+		}
+		for _, service := range repo.Services {
+			if commits[service] != "" {
+				return fmt.Errorf("应用有多个合并结果，请核对")
+			}
+			commits[service] = repo.ResultCommit
+		}
+	}
+	var retry []int
+	for i, b := range p.Builds {
+		if commits[b.Service] != b.Commit || b.Commit == "" {
+			return fmt.Errorf("%s 的构建提交与合并回执不匹配", b.Service)
+		}
+		if b.Status == "success" || (b.Status == "pending" || b.Status == "queued") && b.RunID == 0 {
+			continue
+		}
+		run := s.GetRun(b.RunID)
+		if b.Status != "failed" || run == nil || run.Status != "failed" || run.Service != b.Service || run.Actor != p.Owner || run.Branch != b.Commit || run.Trigger != buildAttemptTrigger(p, &b) || run.AutoDeploy || run.ArtifactID != 0 || slices.Contains(b.PreviousRunIDs, run.ID) {
+			return fmt.Errorf("%s 缺少可安全重试的失败构建回执，请核对原操作", b.Service)
+		}
+		sv, _, commit, err := s.buildReplay(run.ID)
+		if err != nil {
+			return err
+		}
+		if sv.Name != b.Service || commit != b.Commit {
+			return fmt.Errorf("原构建配置与合并提交不匹配")
+		}
+		retry = append(retry, i)
+	}
+	if len(retry) == 0 {
+		return fmt.Errorf("没有已核对的失败构建")
+	}
+	for _, i := range retry {
+		b := &p.Builds[i]
+		b.PreviousRunIDs = append(b.PreviousRunIDs, b.RunID)
+		b.RunID, b.RunNumber, b.Status, b.Message = 0, 0, "queued", "等待按原提交和原配置构建"
+	}
+	p.BuildError = ""
+	return nil
+}
 
 // One coordinator owns the CAS document. Build runners are asynchronous;
 // polling all of them here avoids concurrent mutation of the preparation.
@@ -34,7 +91,7 @@ func (s *Store) advancePreparedBuilds(p *CodePreparation, start func(*PreparedBu
 		}
 		if b.RunID == 0 {
 			var existing int64
-			err := s.db.QueryRow(`SELECT id FROM pipeline_runs WHERE service=? AND trigger=? ORDER BY id DESC LIMIT 1`, b.Service, "code-preparation:"+p.ID+":"+b.Service).Scan(&existing)
+			err := s.db.QueryRow(`SELECT id FROM pipeline_runs WHERE service=? AND trigger=? ORDER BY id DESC LIMIT 1`, b.Service, buildAttemptTrigger(p, b)).Scan(&existing)
 			if err == nil {
 				b.RunID = existing
 			} else if err != sql.ErrNoRows {
@@ -45,7 +102,7 @@ func (s *Store) advancePreparedBuilds(p *CodePreparation, start func(*PreparedBu
 			continue
 		}
 		run := s.GetRun(b.RunID)
-		if run == nil || run.Service != b.Service || run.Actor != p.Owner || run.Branch != b.Commit || run.Trigger != "code-preparation:"+p.ID+":"+b.Service {
+		if run == nil || run.Service != b.Service || run.Actor != p.Owner || run.Branch != b.Commit || run.Trigger != buildAttemptTrigger(p, b) {
 			b.Status, b.Message = "failed", "构建身份或冻结提交不匹配，请核对原构建"
 			failed = b.Message
 			continue

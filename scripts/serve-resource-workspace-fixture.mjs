@@ -2,6 +2,8 @@
 import {createServer} from '../web/node_modules/vite/dist/node/index.js'
 import path from 'node:path'
 const enrollmentFixture=process.env.DEPLOYMENT_ENROLLMENT_FIXTURE==='1'
+const agentInstallFixture=process.env.AGENT_INSTALL_FIXTURE==='1'
+let agentInstallFailure=false,agentStatusDelay=180
 let enrollment=null,enrollmentTimer=null
 let saveFailure=false,readFailure=''
 const calls=[],writes=[],now=Math.floor(Date.now()/1000)
@@ -19,7 +21,7 @@ vite=await createServer({root:path.resolve('web'),configFile:path.resolve('web/v
  const u=new URL(req.url,'http://fixture'),p=u.pathname.replace(/^\/api\/resources\//,'/api/')
  const json=(value,status=200)=>{res.statusCode=status;res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value))}
  if(p==='/__fixture/state')return json({calls,writes,resources,agentConfig,appTargets,enrollment})
- if(p==='/__fixture/fault'){saveFailure=u.searchParams.get('save')==='1';readFailure=u.searchParams.get('read')||'';return json({saveFailure,readFailure})}
+ if(p==='/__fixture/fault'){saveFailure=u.searchParams.get('save')==='1';readFailure=u.searchParams.get('read')||'';agentInstallFailure=u.searchParams.get('install')==='1';agentStatusDelay=Number(u.searchParams.get('status_delay')||180);return json({saveFailure,readFailure,agentInstallFailure,agentStatusDelay})}
  if(p==='/__fixture/stop'){json({ok:true});setTimeout(()=>vite.close(),30);return}
  if(p.startsWith('/api/')){
   calls.push({method:req.method,path:p,query:Object.fromEntries(u.searchParams)})
@@ -41,6 +43,7 @@ vite=await createServer({root:path.resolve('web'),configFile:path.resolve('web/v
    if(p==='/api/services/orders/environments/test'&&req.method==='PUT'){appTargets=[{...body,service:'orders',display_name:'测试环境'}];return json(appTargets[0])}
    if(p==='/api/hosts/shared/agent/config'&&req.method==='PUT'){agentConfig={...body,token_available:true,configured:true,synchronized:false};return json(agentConfig)}
    if(p==='/api/hosts/shared/agent/config/apply'&&req.method==='POST')return json({...agentConfig,synchronized:true,applied_at:now})
+   if(agentInstallFixture&&p==='/api/hosts/shared/agent/install'&&req.method==='POST'){await new Promise(r=>setTimeout(r,350));return agentInstallFailure?json({error:'隔离升级失败，原配置保留'},502):json({ok:true,installed:true,active:true,agent_id:'agent_fixture',version:'fixture-upgraded',status:'active'})}
    if(p==='/api/services/orders/resources'&&req.method==='PUT'){resources=body;return json({ok:true})}
    if(['/api/connections/shared/test','/api/hosts/shared/test'].includes(p)&&req.method==='POST')return json({ok:true})
    return json({error:'Synthetic fixture rejects this mutation'},403)
@@ -48,9 +51,9 @@ vite=await createServer({root:path.resolve('web'),configFile:path.resolve('web/v
   if(enrollmentFixture&&p==='/api/hosts/shared/deployment')return json({options:[{service:'orders',root:'/srv/orders'}],enrollment})
   if(enrollmentFixture&&p==='/api/artifacts')return json([{id:15,service:'orders',kind:'jar',version:'cd137349491',source:'pipeline-run',source_id:28,source_number:10,digest:'sha256:753872288de67f4eaa8cf17d242833b0ef3977cb461be484d320d9aac4f2b6d4',size:252206085,created_at:1794208998,metadata:{build_variant:'test'}}])
   if(enrollmentFixture&&p==='/api/artifacts/15/build-compatibility')return json({compatible:true,reason:''})
-  if(p==='/api/hosts/shared/agent/status'){await new Promise(r=>setTimeout(r,180));return json({installed:true,active:true,status:'active',version:'fixture'})}
+  if(p==='/api/hosts/shared/agent/status'){await new Promise(r=>setTimeout(r,agentStatusDelay));return json({installed:true,active:true,status:'active',version:'fixture',...(agentInstallFixture?{agent_id:'agent_fixture'}:{})})}
   if(p==='/api/hosts/shared/agent/config')return json(agentConfig)
-  if(p==='/api/plugins/logs/api/stats')return json({agents:[{id:'test/shared',online:true}]})
+  if(p==='/api/plugins/logs/api/stats'||agentInstallFixture&&p==='/api/stats')return json({agents:[{id:agentInstallFixture?'agent_fixture':'test/shared',name:'test/shared',online:true}],services:{},events:0})
   if(p==='/api/registry/applications')return json([{application_id:'app-orders',name:'orders',display_name:'订单服务'}])
   if(p==='/api/services/orders')return json(enrollmentFixture?{...service,artifact_type:'jar'}:service)
   if(p==='/api/services')return json([service])
@@ -75,8 +78,8 @@ vite=await createServer({root:path.resolve('web'),configFile:path.resolve('web/v
   if(p==='/api/runners')return json([{name:'local',kind:'local',enabled:true,max_parallel:1}])
   return json([])
  }
- if(p==='/__resources'||p==='/__direct-hosts'){
-  res.setHeader('Content-Type','text/html');return res.end(await vite.transformIndexHtml(req.url,'<html lang="zh-CN"><head><meta charset="UTF-8"><title>资源中心交互验收（隔离数据）</title></head><body><div id="app"></div><script type="module" src="'+(p==='/__direct-hosts'?'/src/qa/directHostsFixture.js':'/src/qa/resourceWorkspaceFixture.js')+'"></script></body></html>'))
+ if(p==='/__resources'||p==='/__direct-hosts'||agentInstallFixture&&p==='/__agent-install'){
+  res.setHeader('Content-Type','text/html');return res.end(await vite.transformIndexHtml(req.url,'<html lang="zh-CN"><head><meta charset="UTF-8"><title>资源中心交互验收（隔离数据）</title></head><body><div id="app"></div><script type="module" src="'+(p==='/__agent-install'?'/src/qa/agentInstallFixture.js':p==='/__direct-hosts'?'/src/qa/directHostsFixture.js':'/src/qa/resourceWorkspaceFixture.js')+'"></script></body></html>'))
  }
  next()
 })}}],server:{host:'127.0.0.1',port:Number(process.env.RESOURCE_FIXTURE_PORT||20055),strictPort:true}})

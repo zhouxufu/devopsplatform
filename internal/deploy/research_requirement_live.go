@@ -245,6 +245,9 @@ func requirementMatches(row map[string]any, f researchLiveFilter) bool {
 
 func (s *Store) requirementDeliveryMatches(item *researchLiveItem, actor string, f researchLiveFilter) (bool, error) {
 	rows := []researchLiveItem{*item}
+	if e := s.decorateResearchReleaseMarks(rows); e != nil {
+		return false, e
+	}
 	if e := s.decorateResearchRelations(rows, actor); e != nil {
 		return false, e
 	}
@@ -274,6 +277,9 @@ func (s *Store) requirementDeliveryMatches(item *researchLiveItem, actor string,
 				item.SuccessfulDelivery = v.SuccessfulDelivery
 			}
 		}
+	}
+	if f.Delivery == "pending_release" && manuallyMarkedReleased(item.WorkItem) {
+		return false, nil
 	}
 	if f.MainCandidate && item.ExternalStatus == "closed" && item.SuccessfulDelivery || f.Delivery != "" && item.SuccessfulDelivery {
 		return false, nil

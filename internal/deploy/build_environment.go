@@ -17,10 +17,13 @@ import (
 // BuildEnvironment only changes compilation. Checkout and artifact archiving stay
 // on the runner; deployment never inherits the build container or its credentials.
 type BuildEnvironment struct {
-	Mode    string `json:"mode"` // local (backwards compatible) | container
-	Preset  string `json:"preset,omitempty"`
-	Image   string `json:"image,omitempty"`   // only used by custom preset
-	Network string `json:"network,omitempty"` // bridge (default) | host
+	Mode        string `json:"mode"` // local (backwards compatible) | container
+	Preset      string `json:"preset,omitempty"`
+	Image       string `json:"image,omitempty"`        // only used by custom preset
+	Network     string `json:"network,omitempty"`      // bridge (default) | host
+	ImageSource string `json:"image_source,omitempty"` // registry (default) | dockerfile
+	Dockerfile  string `json:"dockerfile,omitempty"`   // repository-relative
+	Context     string `json:"context,omitempty"`      // repository-relative; default .
 }
 
 var buildImages = map[string]string{
@@ -62,6 +65,9 @@ func validateBuildEnvironment(e *BuildEnvironment, sv *Service) error {
 	}
 	if e.Network != "" && e.Network != "bridge" && e.Network != "host" {
 		return fmt.Errorf("构建网络仅支持默认隔离网络或宿主机网络")
+	}
+	if err := validateBuildImageSource(e); err != nil {
+		return err
 	}
 	if sv != nil && e.Preset != "custom" {
 		if sv.BuildTool == "gradle" && !strings.HasPrefix(e.Preset, "gradle-") {
@@ -200,20 +206,18 @@ func (b *Builder) execBuildStepContext(parent context.Context, sv *Service, def 
 	ctx, cancel := context.WithTimeout(parent, 40*time.Minute)
 	defer cancel()
 	image := sv.BuildEnvironment.image()
-	// Resolve a tag once per step and run the exact local image ID we inspected.
-	inspect := func() ([]byte, error) {
-		return exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", image).Output()
-	}
-	imageID, err := inspect()
+	imageID, err := prepareBuildImage(ctx, sv.BuildEnvironment, b.buildDir(sv), emit,
+		func() (string, error) {
+			out, err := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", image).Output()
+			return strings.TrimSpace(string(out)), err
+		}, func(args []string) error {
+			if runBuildCommand(exec.CommandContext(ctx, "docker", args...), emit) != 0 {
+				return fmt.Errorf("Docker 命令失败")
+			}
+			return nil
+		})
 	if err != nil {
-		emit("⇣ 首次准备构建镜像：" + image + "（需要镜像仓库网络；离线可预先 docker load）\n")
-		if runBuildCommand(exec.CommandContext(ctx, "docker", "pull", image), emit) != 0 {
-			return -1
-		}
-		imageID, err = inspect()
-	}
-	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(imageID)), "sha256:") {
-		emit("✗ 无法解析构建镜像 ID\n")
+		emit("✗ " + err.Error() + "\n")
 		return -1
 	}
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(image)))

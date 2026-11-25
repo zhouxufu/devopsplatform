@@ -20,6 +20,7 @@ func registerResearchRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, ma
 	registerWorkLoopRoutes(mux, s, pr, manager)
 	registerWorkPersonnel(mux, s)
 	registerResearchDeliveryPolicy(mux, s)
+	registerResearchReleaseMarkRoutes(mux, s)
 	registerResearchLiveRoutes(mux, s)
 	registerResearchCollaboration(mux, s)
 	registerResearchPreparationActions(mux, s)

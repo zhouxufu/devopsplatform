@@ -60,7 +60,7 @@ func (s *ToolService) actionBaseline(ctx context.Context, t *AccessToken, a *Pla
 		}
 		return fingerprint(mapValue(v)["digest"]), nil
 	}
-	if a.Tool == "create_work_loop" {
+	if a.Tool == "create_work_loop" || a.Tool == "create_change_tracking" {
 		v, e := s.platformRequest(ctx, t, "POST", "/api/work-loops/preview", nil, a.Body["spec"])
 		if e != nil {
 			return "", e
@@ -120,11 +120,11 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 		if err := s.prepareWorkLoopReauthorization(ctx, t, args, &a); err != nil {
 			return nil, err
 		}
-	case "create_work_loop":
+	case "create_work_loop", "create_change_tracking":
 		if err := s.prepareWorkLoop(ctx, t, args, &a); err != nil {
 			return nil, err
 		}
-	case "create_delivery_run", "advance_delivery", "start_code_preparation", "resume_code_preparation", "confirm_delivery_scope", "record_delivery_manual_step", "mark_work_item_changes_ready":
+	case "create_delivery_run", "publish_delivery", "advance_delivery", "start_code_preparation", "resume_code_preparation", "retry_prepared_builds", "confirm_delivery_scope", "record_delivery_manual_step", "mark_work_item_changes_ready":
 		if err := s.prepareDeliveryAction(ctx, t, name, args, &a); err != nil {
 			return nil, err
 		}
@@ -264,6 +264,7 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 			return nil, fmt.Errorf("一次登记 1–50 项变更")
 		}
 		allowed := map[string]bool{"kind": true, "title": true, "service": true, "reference": true, "summary": true, "risk_level": true, "rollback_plan": true, "sql": true, "nacos": true, "redis": true, "delivery_ownership": true}
+		allowed["prerequisites"] = true
 		for _, r := range newRows {
 			c := mapValue(cloneJSON(r))
 			if len(c) == 0 || stringArg(c, "title") == "" {
@@ -453,6 +454,12 @@ func (s *ToolService) confirmAction(ctx context.Context, t *AccessToken, args ma
 	if !claimed {
 		return s.actions.actionStatus(t, id)
 	}
+	if a.Tool == "publish_delivery" {
+		if err := publicationAccess(t, a.Query.Get("environment")); err != nil {
+			s.actions.finishAction(id, "stale", nil, err)
+			return nil, err
+		}
+	}
 	if strings.HasPrefix(a.Scope, "resources:") {
 		if err := resourceAccess(t, a.Query.Get("service"), a.Query.Get("environment"), a.Tool == "configure_resource_connection"); err != nil {
 			s.actions.finishAction(id, "stale", nil, err)
@@ -487,7 +494,7 @@ func (s *ToolService) confirmAction(ctx context.Context, t *AccessToken, args ma
 			return nil, err
 		}
 	}
-	if a.Tool == "create_work_loop" || a.Tool == "reauthorize_work_loop" {
+	if a.Tool == "create_work_loop" || a.Tool == "create_change_tracking" || a.Tool == "reauthorize_work_loop" {
 		if err := workLoopAccess(t, mapValue(a.Body["spec"]), true); err != nil {
 			s.actions.finishAction(id, "stale", nil, err)
 			return nil, err
@@ -504,7 +511,7 @@ func (s *ToolService) confirmAction(ctx context.Context, t *AccessToken, args ma
 			s.actions.finishAction(id, "stale", nil, err)
 			return nil, err
 		}
-		if (a.Tool == "advance_delivery" && mapValue(a.Preview["plan"])["preparation_request"] != nil || a.Tool == "start_code_preparation" || a.Tool == "resume_code_preparation") && !t.HasScope("delivery:prepare") {
+		if (a.Tool == "advance_delivery" && mapValue(a.Preview["plan"])["preparation_request"] != nil || a.Tool == "start_code_preparation" || a.Tool == "resume_code_preparation" || a.Tool == "retry_prepared_builds") && !t.HasScope("delivery:prepare") {
 			err := fmt.Errorf("代码准备权限已变化")
 			s.actions.finishAction(id, "stale", nil, err)
 			return nil, err

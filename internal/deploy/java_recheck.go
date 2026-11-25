@@ -67,11 +67,11 @@ func (m *ReleaseManager) recheckManagedJava(id int64, exec javaExec) error {
 	}
 	root := path.Clean(sv.RemoteDir)
 	release := fmt.Sprintf("%s/releases/deploy-%d", root, id)
-	cmd := "base=" + shellQuote(root) + "; release=" + shellQuote(release) + `; { [ ! -e "$base/.deploy-lock" ] || test "$(cat "$base/.deploy-lock/owner")" = ` + shellQuote(fmt.Sprintf("deploy-%d", id)) + `; } && test "$(cat "$base/.devopsplatform-owner")" = ` + shellQuote(d.Service+"/"+d.Environment) + ` && test "$(readlink "$base/current")" = "$release" && test "$(sha256sum "$release/app.jar" | cut -d' ' -f1)" = ` + shellQuote(strings.TrimPrefix(d.ArtifactDigest, "sha256:")) + ` && { bash "$release/service.sh" agent-probe; result=$?; if [ "$result" = 20 ]; then pid=$(cat "$base/.devopsplatform.pid" 2>/dev/null); case "$pid" in ""|*[!0-9]*) exit 31;; esac; if [ -d "/proc/$pid" ] && [ "$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)" != Z ]; then exit 31; fi; fi; exit "$result"; }`
+	cmd := "base=" + shellQuote(root) + "; release=" + shellQuote(release) + `; { [ ! -e "$base/.deploy-lock" ] || test "$(cat "$base/.deploy-lock/owner")" = ` + shellQuote(fmt.Sprintf("deploy-%d", id)) + `; } && test "$(cat "$base/.devopsplatform-owner")" = ` + shellQuote(d.Service+"/"+d.Environment) + ` && test "$(readlink "$base/current")" = "$release" && test "$(sha256sum "$release/app.jar" | cut -d' ' -f1)" = ` + shellQuote(strings.TrimPrefix(d.ArtifactDigest, "sha256:")) + ` && { ` + managedJavaAbsentProcessProbe(root, release, "/proc") + ` bash "$release/service.sh" agent-probe; result=$?; if [ "$result" = 20 ]; then pid=$(cat "$base/.devopsplatform.pid" 2>/dev/null); case "$pid" in ""|*[!0-9]*) exit 31;; esac; if [ -d "/proc/$pid" ] && [ "$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)" != Z ]; then exit 31; fi; fi; exit "$result"; }`
 	out, e := exec(*h, cmd, 15*time.Second)
 	status := "success"
 	if e != nil {
-		if !knownJavaExit(e) {
+		if !knownJavaExit(e) && !javaStartRefused(e) {
 			detail := redactDeploymentText(strings.TrimSpace(out))
 			if len(detail) > 1000 {
 				detail = detail[:1000]

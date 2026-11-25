@@ -32,6 +32,7 @@ type ReleaseOrder struct {
 	Total                     int     `json:"total"`
 	Succeeded                 int     `json:"succeeded"`
 	Failed                    int     `json:"failed"`
+	RollbackFailed            int     `json:"rollback_failed_targets,omitempty"`
 	Actor                     string  `json:"actor"`
 	Approver                  string  `json:"approver,omitempty"`
 	DeployIDs                 []int64 `json:"deploy_ids,omitempty"`
@@ -179,7 +180,7 @@ func scanRelease(scanner interface{ Scan(...any) error }) (ReleaseOrder, error) 
 	var o ReleaseOrder
 	var hosts, target string
 	var ended sql.NullInt64
-	err := scanner.Scan(&o.ID, &o.Service, &o.ArtifactID, &o.Version, &o.Environment, &o.Reason, &o.Strategy, &o.Status, &o.BatchSize, &o.PauseBetweenBatches, &o.FailureThreshold, &hosts, &target, &o.runtimeEnvEncrypted, &o.NextIndex, &o.Total, &o.Succeeded, &o.Failed, &o.Actor, &o.Approver, &o.StartedAt, &ended, &o.Number)
+	err := scanner.Scan(&o.ID, &o.Service, &o.ArtifactID, &o.Version, &o.Environment, &o.Reason, &o.Strategy, &o.Status, &o.BatchSize, &o.PauseBetweenBatches, &o.FailureThreshold, &hosts, &target, &o.runtimeEnvEncrypted, &o.NextIndex, &o.Total, &o.Succeeded, &o.Failed, &o.Actor, &o.Approver, &o.StartedAt, &ended, &o.Number, &o.RollbackFailed)
 	if err != nil {
 		return o, err
 	}
@@ -189,7 +190,7 @@ func scanRelease(scanner interface{ Scan(...any) error }) (ReleaseOrder, error) 
 	return o, nil
 }
 
-const releaseSelect = `SELECT id,service,artifact_id,version,environment,reason,strategy,status,batch_size,pause_between_batches,failure_threshold,hosts,COALESCE(target_snapshot,'{}'),COALESCE(runtime_env_encrypted,''),next_index,total,succeeded,failed,actor,approver,started_at,ended_at,COALESCE((SELECT number FROM release_order_numbers n WHERE n.release_id=release_orders.id AND n.service=release_orders.service),0) FROM release_orders`
+const releaseSelect = `SELECT id,service,artifact_id,version,environment,reason,strategy,status,batch_size,pause_between_batches,failure_threshold,hosts,COALESCE(target_snapshot,'{}'),COALESCE(runtime_env_encrypted,''),next_index,total,succeeded,failed,actor,approver,started_at,ended_at,COALESCE((SELECT number FROM release_order_numbers n WHERE n.release_id=release_orders.id AND n.service=release_orders.service),0),(SELECT COUNT(*) FROM release_order_deploys rd JOIN deploys d ON d.id=rd.deploy_id WHERE rd.release_id=release_orders.id AND d.status='rollback-failed') FROM release_orders`
 
 func (s *Store) GetReleaseOrder(id int64) *ReleaseOrder {
 	o, err := scanRelease(s.db.QueryRow(releaseSelect+` WHERE id=?`, id))
@@ -697,6 +698,13 @@ func (m *ReleaseManager) startNextBatch(id int64) {
 	artifact := m.st.GetArtifact(o.ArtifactID)
 	if sv == nil || target == nil || artifact == nil {
 		m.st.SetReleaseStatus(id, "failed", "", true)
+		missing := "应用"
+		if artifact == nil {
+			missing = "制品"
+		} else if target == nil {
+			missing = "环境目标"
+		}
+		m.st.Audit(o.Actor, "fail", "release", fmt.Sprint(id), map[string]any{"error": "发布前检查未找到" + missing})
 		return
 	}
 	if err := m.st.validateArtifactBuildVariant(artifact, o.Environment); err != nil {
@@ -724,6 +732,7 @@ func (m *ReleaseManager) startNextBatch(id int64) {
 			h := m.st.GetHost(name)
 			if h == nil {
 				m.st.SetReleaseStatus(id, "failed", "", true)
+				m.st.Audit(o.Actor, "fail", "release", fmt.Sprint(id), map[string]any{"error": "发布前检查未找到主机：" + name})
 				return
 			}
 			if h.Environment != o.Environment {

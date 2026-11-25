@@ -87,7 +87,12 @@ func (s *Storage) request(ctx context.Context, method, path string, values url.V
 		return nil, fmt.Errorf("VictoriaLogs 请求失败")
 	}
 	if resp.StatusCode != 200 {
+		// Classify bounded upstream diagnostics without exposing queries or log data.
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
+		if strings.Contains(string(detail), "requires more than") && strings.Contains(string(detail), "memory") {
+			return nil, fmt.Errorf("日志查询超出存储内存限额，请缩小时间范围或按应用筛选后重试")
+		}
 		return nil, fmt.Errorf("VictoriaLogs 返回 HTTP %d", resp.StatusCode)
 	}
 	return resp, nil
@@ -186,12 +191,11 @@ func (s *Storage) Search(service, environment, host, level string, start, end in
 		if len(cursor) > 4096 || e != nil || json.Unmarshal(b, &c) != nil || c.From != start || c.To != end || c.Scope != scope || c.Sequence <= 0 || c.Ts < 0 || c.High < 0 {
 			return nil, queryError("分页游标无效或不属于本次查询")
 		}
-		filter += " AND (ts:<" + strconv.FormatInt(c.Ts, 10) + " OR (ts:=" + vlQuote(strconv.FormatInt(c.Ts, 10)) + " AND ingest_sequence:<" + strconv.FormatInt(c.Sequence, 10) + "))"
 	}
 	filter += " AND ingest_sequence:<=" + strconv.FormatInt(c.High, 10)
-	// The immutable event_key is the logical identity across at-least-once retries.
-	query := filter + " | stats by (event_key) row_any() as sample | unpack_json sample | delete sample | sort by (ts desc, ingest_sequence desc) | limit " + strconv.Itoa(limit+1)
-	rows, err := s.query(s.ctx, query, start, end)
+	ctx, cancel := context.WithTimeout(s.ctx, s.opts.RequestTimeout)
+	defer cancel()
+	rows, err := s.searchLogRows(ctx, filter, start, end, c, limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +218,58 @@ func (s *Storage) Search(service, environment, host, level string, start, end in
 	}
 	return out, nil
 }
+
+// Fetch bounded top-N batches rather than grouping every full log in the time
+// window. Replayed rows have the same event key, timestamp and sequence. Moving
+// past the last tuple therefore skips only copies, even when a batch cuts a run
+// of duplicates. The public cursor still points to the last returned logical row.
+func (s *Storage) searchLogRows(ctx context.Context, filter string, start, end int64, cursor logCursor, wanted int) ([]map[string]string, error) {
+	const batchLimit = 32
+	rows := make([]map[string]string, 0, wanted)
+	seen := make(map[string]bool, wanted)
+	responseBytes := 0
+	ts, sequence := cursor.Ts, cursor.Sequence
+	for len(rows) < wanted {
+		batchFilter := filter
+		if sequence > 0 {
+			batchFilter += " AND (ts:<" + strconv.FormatInt(ts, 10) + " OR (ts:=" + vlQuote(strconv.FormatInt(ts, 10)) + " AND ingest_sequence:<" + strconv.FormatInt(sequence, 10) + "))"
+		}
+		batch, err := s.query(ctx, batchFilter+" | sort by (ts desc, ingest_sequence desc) limit "+strconv.Itoa(batchLimit), start, end)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range batch {
+			rowTs, e1 := strconv.ParseInt(row["ts"], 10, 64)
+			rowSequence, e2 := strconv.ParseInt(row["ingest_sequence"], 10, 64)
+			if e1 != nil || e2 != nil || rowTs < start || rowTs > end || rowSequence <= 0 || rowSequence > cursor.High || row["event_key"] == "" {
+				return nil, fmt.Errorf("VictoriaLogs 日志缺少有效分页身份")
+			}
+			if sequence > 0 && (rowTs > ts || rowTs == ts && rowSequence >= sequence) {
+				return nil, fmt.Errorf("VictoriaLogs 分页结果未按游标推进")
+			}
+			if !seen[row["event_key"]] {
+				encoded, _ := json.Marshal(row)
+				responseBytes += len(encoded) + 1
+				if responseBytes > 32<<20 {
+					return nil, fmt.Errorf("查询结果过大，请缩小范围")
+				}
+				seen[row["event_key"]] = true
+				rows = append(rows, row)
+				if len(rows) == wanted {
+					return rows, nil
+				}
+			}
+		}
+		if len(batch) < batchLimit {
+			return rows, nil
+		}
+		last := batch[len(batch)-1]
+		ts, _ = strconv.ParseInt(last["ts"], 10, 64)
+		sequence, _ = strconv.ParseInt(last["ingest_sequence"], 10, 64)
+	}
+	return rows, nil
+}
+
 func decodeLogHit(row map[string]string) (types.Hit, error) {
 	ts, err := strconv.ParseInt(row["ts"], 10, 64)
 	if err != nil {

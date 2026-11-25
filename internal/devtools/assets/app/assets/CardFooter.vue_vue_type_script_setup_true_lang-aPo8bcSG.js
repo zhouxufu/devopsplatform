@@ -1,0 +1,1 @@
+import{d as o,o as r,x as t,J as n,g as c,I as d,f as l}from"./OptionPicker-Dj1TCQdl.js";const f=o({__name:"CardFooter",props:{class:{}},setup(e){const s=e;return(a,p)=>(r(),t("div",{"data-slot":"card-footer",class:n(c(d)("bg-muted/50 rounded-b-xl border-t p-4 group-data-[size=sm]/card:p-3 flex items-center",s.class))},[l(a.$slots,"default")],2))}});export{f as _};

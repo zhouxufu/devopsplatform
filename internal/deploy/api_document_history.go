@@ -12,15 +12,16 @@ import (
 	"time"
 )
 
-const documentMetadataColumns = `id,application_id,environment,service,run_id,artifact_id,artifact_digest,commit_ref,provider,provider_version,digest,created_at,baseline_id,comparison,'',COALESCE((SELECT maintainer FROM api_document_maintainers WHERE snapshot_id=api_document_versions.id),'')`
-const documentColumns = `id,application_id,environment,service,run_id,artifact_id,artifact_digest,commit_ref,provider,provider_version,digest,created_at,baseline_id,comparison,document,COALESCE((SELECT maintainer FROM api_document_maintainers WHERE snapshot_id=api_document_versions.id),'')`
+const documentProtocolSQL = `COALESCE((SELECT protocol FROM api_document_protocols WHERE snapshot_id=api_document_versions.id),'http')`
+const documentMetadataColumns = `id,application_id,environment,service,run_id,artifact_id,artifact_digest,commit_ref,provider,provider_version,digest,created_at,baseline_id,comparison,'',COALESCE((SELECT maintainer FROM api_document_maintainers WHERE snapshot_id=api_document_versions.id),''),` + documentProtocolSQL
+const documentColumns = `id,application_id,environment,service,run_id,artifact_id,artifact_digest,commit_ref,provider,provider_version,digest,created_at,baseline_id,comparison,document,COALESCE((SELECT maintainer FROM api_document_maintainers WHERE snapshot_id=api_document_versions.id),''),` + documentProtocolSQL
 
 type documentScanner interface{ Scan(...any) error }
 
 func scanDocument(row documentScanner) (APIDocumentSnapshot, error) {
 	var v APIDocumentSnapshot
 	var comparison, raw string
-	e := row.Scan(&v.ID, &v.ApplicationID, &v.Environment, &v.Service, &v.RunID, &v.ArtifactID, &v.ArtifactDigest, &v.Commit, &v.Provider, &v.ProviderVersion, &v.Digest, &v.CreatedAt, &v.BaselineID, &comparison, &raw, &v.DefaultMaintainer)
+	e := row.Scan(&v.ID, &v.ApplicationID, &v.Environment, &v.Service, &v.RunID, &v.ArtifactID, &v.ArtifactDigest, &v.Commit, &v.Provider, &v.ProviderVersion, &v.Digest, &v.CreatedAt, &v.BaselineID, &comparison, &raw, &v.DefaultMaintainer, &v.Protocol)
 	v.Document = json.RawMessage(raw)
 	var diff apidoc.Comparison
 	_ = json.Unmarshal([]byte(comparison), &diff)
@@ -36,13 +37,14 @@ func (s *Store) apiDocumentSnapshot(app string, id int64) (APIDocumentSnapshot, 
 func (s *Store) recordAPIDocument(sv *Service, snap APIDocumentSnapshot, raw []byte, expectedBaseline ...int64) (int64, error) {
 	s.apiDocumentMu.Lock()
 	defer s.apiDocumentMu.Unlock()
-	_, newOperations, digest, e := apidoc.Parse(raw)
+	parsed, newOperations, digest, e := apidoc.Parse(raw)
 	if e != nil {
 		return 0, e
 	}
 	if snap.Environment != "" && s.GetEnvironment(snap.Environment) == nil {
 		return 0, fmt.Errorf("文档环境不存在")
 	}
+	protocol := parsed.Protocol()
 	tx, e := s.db.Begin()
 	if e != nil {
 		return 0, e
@@ -50,7 +52,7 @@ func (s *Store) recordAPIDocument(sv *Service, snap APIDocumentSnapshot, raw []b
 	defer tx.Rollback()
 	if len(expectedBaseline) > 0 {
 		var latest int64
-		err := tx.QueryRow(`SELECT id FROM api_document_versions WHERE application_id=? AND environment=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, snap.Environment).Scan(&latest)
+		err := tx.QueryRow(`SELECT id FROM api_document_versions WHERE application_id=? AND environment=? AND `+documentProtocolSQL+`=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, snap.Environment, protocol).Scan(&latest)
 		if err != nil && err != sql.ErrNoRows {
 			return 0, err
 		}
@@ -76,7 +78,7 @@ func (s *Store) recordAPIDocument(sv *Service, snap APIDocumentSnapshot, raw []b
 	}
 	var baseline int64
 	var previous, previousDefault string
-	e = tx.QueryRow(`SELECT id,document,COALESCE((SELECT maintainer FROM api_document_maintainers WHERE snapshot_id=api_document_versions.id),'') FROM api_document_versions WHERE application_id=? AND environment=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, snap.Environment).Scan(&baseline, &previous, &previousDefault)
+	e = tx.QueryRow(`SELECT id,document,COALESCE((SELECT maintainer FROM api_document_maintainers WHERE snapshot_id=api_document_versions.id),'') FROM api_document_versions WHERE application_id=? AND environment=? AND `+documentProtocolSQL+`=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, snap.Environment, protocol).Scan(&baseline, &previous, &previousDefault)
 	if e != nil && e != sql.ErrNoRows {
 		return 0, e
 	}
@@ -117,6 +119,9 @@ func (s *Store) recordAPIDocument(sv *Service, snap APIDocumentSnapshot, raw []b
 	}
 	id, e = result.LastInsertId()
 	if e != nil {
+		return 0, e
+	}
+	if _, e = tx.Exec(`INSERT INTO api_document_protocols(snapshot_id,protocol) VALUES(?,?)`, id, protocol); e != nil {
 		return 0, e
 	}
 	ownerRaw, _ := json.Marshal(owners)
@@ -268,9 +273,9 @@ func registerEnvironmentDocumentRoutes(mux *http.ServeMux, st *Store, wj func(ht
 		}
 		st.Audit(actor(r), "import", "api-document", fmt.Sprint(id), map[string]any{"application_id": sv.ApplicationID, "environment": env})
 		if len(expected) > 0 {
-			wj(w, map[string]any{"id": id, "duplicate": id <= expected[0], "environment": env})
+			wj(w, map[string]any{"protocol": func() string { d, _, _, _ := apidoc.Parse(raw); return d.Protocol() }(), "id": id, "duplicate": id <= expected[0], "environment": env})
 		} else {
-			wj(w, map[string]any{"id": id})
+			wj(w, map[string]any{"id": id, "protocol": func() string { d, _, _, _ := apidoc.Parse(raw); return d.Protocol() }()})
 		}
 	})
 	mux.HandleFunc("GET /api/api-documents", func(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +288,16 @@ func registerEnvironmentDocumentRoutes(mux *http.ServeMux, st *Store, wj func(ht
 			return
 		}
 		q := `SELECT ` + documentMetadataColumns + ` FROM api_document_versions WHERE application_id=?`
-		args := []any{sv.ApplicationID}
+		protocol := r.URL.Query().Get("protocol")
+		if protocol == "" {
+			protocol = "http"
+		}
+		if protocol != "http" && protocol != "dubbo" {
+			fail(w, 400, "文档协议无效")
+			return
+		}
+		q += ` AND ` + documentProtocolSQL + `=?`
+		args := []any{sv.ApplicationID, protocol}
 		if r.URL.Query().Has("environment") {
 			q += ` AND environment=?`
 			args = append(args, env)
@@ -396,7 +410,7 @@ func registerEnvironmentDocumentRoutes(mux *http.ServeMux, st *Store, wj func(ht
 		if baseID > 0 {
 			var e error
 			base, e = st.apiDocumentSnapshot(v.ApplicationID, baseID)
-			if e != nil || base.Environment != v.Environment || baseID >= v.ID {
+			if e != nil || base.Environment != v.Environment || base.Protocol != v.Protocol || baseID >= v.ID {
 				fail(w, 409, "对比基线必须属于同应用、同环境，且早于当前快照")
 				return
 			}

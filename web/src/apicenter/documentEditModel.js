@@ -2,12 +2,13 @@ import {parse,stringify} from 'lossless-json'
 const methods=new Set(['get','put','post','delete','options','head','patch','trace'])
 export function parseDocumentText(text,validate=true){
  const doc=parse(text)
+ if(validate&&doc?.dubbo==='1.0'){if(!doc.info?.title||!doc.info?.version||!Array.isArray(doc.methods)||!doc.methods.length)throw Error('Dubbo 文档需包含 info 和 methods');return doc}
  if(validate&&(!doc||typeof doc!=='object'||!/^3\.[01]\./.test(doc.openapi||'')||!doc.info?.title||!doc.info?.version||!doc.paths||typeof doc.paths!=='object'||Array.isArray(doc.paths)))throw Error('请填写有效的 OpenAPI 3.0/3.1 文档，包含标题、版本和 paths')
  return doc
 }
 export function documentTextFromResponse(text){return stringify(parse(text).document,null,2)}
-export function documentOperations(doc){return Object.entries(doc.paths).flatMap(([path,item])=>Object.keys(item||{}).filter(method=>methods.has(method)).map(method=>({value:method+' '+path,label:method.toUpperCase()+' '+path,method,path}))) }
-export function operationAt(doc,key){const split=String(key).indexOf(' ');const method=key.slice(0,split),path=key.slice(split+1);if(!methods.has(method)||!Object.hasOwn(doc.paths,path)||(!doc.paths[path]||!Object.hasOwn(doc.paths[path],method)))return null;return doc.paths[path][method]}
+export function documentOperations(doc){return Object.entries(doc.paths||{}).flatMap(([path,item])=>Object.keys(item||{}).filter(method=>methods.has(method)).map(method=>({value:method+' '+path,label:method.toUpperCase()+' '+path,method,path}))) }
+export function operationAt(doc,key){const split=String(key).indexOf(' ');const method=key.slice(0,split),path=key.slice(split+1);if(!methods.has(method)||!Object.hasOwn(doc.paths||{},path)||(!doc.paths[path]||!Object.hasOwn(doc.paths[path],method)))return null;return doc.paths[path][method]}
 export function patchDocumentText(text,key,field,value){
  const doc=parseDocumentText(text,false)
  if(field.startsWith('info.')){

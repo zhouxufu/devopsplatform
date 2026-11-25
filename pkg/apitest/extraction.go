@@ -85,6 +85,9 @@ func ValidateExtractions(extractions []Extraction, mode string) error {
 				}
 			}
 		case "header":
+			if mode == "dubbo" {
+				return fmt.Errorf("Dubbo 不支持响应头提取")
+			}
 			if e.Path == "" || !responseHeaderName.MatchString(e.Path) {
 				return fmt.Errorf("请填写有效响应头名称")
 			}
@@ -185,7 +188,7 @@ func skippedExtractions(extractions []Extraction) ExtractionOutcome {
 	return out
 }
 func responsePassed(r Result) bool {
-	if r.Error != "" || r.OutcomeUnknown || r.Status < 200 || r.Status >= 400 {
+	if r.Error != "" || r.OutcomeUnknown || (r.Protocol != "dubbo" && (r.Status < 200 || r.Status >= 400)) || (r.Protocol == "dubbo" && !r.RPCSuccess) {
 		return false
 	}
 	for _, c := range r.Checks {
@@ -362,7 +365,11 @@ func BindStepRequest(r Request, env map[string]string, scope map[string]any) (Re
 		if e != nil {
 			return out, e
 		}
-		out.Headers[http.CanonicalHeaderKey(key)] = bound
+		if r.Mode == "dubbo" {
+			out.Headers[key] = bound
+		} else {
+			out.Headers[http.CanonicalHeaderKey(key)] = bound
+		}
 	}
 	var e error
 	for i, field := range out.Form {

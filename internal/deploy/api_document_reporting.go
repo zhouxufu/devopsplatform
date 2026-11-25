@@ -43,8 +43,12 @@ func applyDocumentMaintainer(ops []apidoc.Operation, fallback string) {
 
 // All writers use recordAPIDocument's mutex. Preview and commit share the same
 // immutable baseline; no MCP-specific document store or comparison engine.
-func (s *Store) documentBaseline(sv *Service, env string) (map[string]any, APIDocumentSnapshot, error) {
-	v, err := scanDocument(s.db.QueryRow(`SELECT `+documentColumns+` FROM api_document_versions WHERE application_id=? AND environment=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, env))
+func (s *Store) documentBaseline(sv *Service, env string, protocols ...string) (map[string]any, APIDocumentSnapshot, error) {
+	protocol := "http"
+	if len(protocols) > 0 && protocols[0] == "dubbo" {
+		protocol = "dubbo"
+	}
+	v, err := scanDocument(s.db.QueryRow(`SELECT `+documentColumns+` FROM api_document_versions WHERE application_id=? AND environment=? AND `+documentProtocolSQL+`=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, env, protocol))
 	if err != nil && err != sql.ErrNoRows {
 		return nil, v, err
 	}
@@ -71,7 +75,12 @@ func registerDocumentReportingRoutes(mux *http.ServeMux, st *Store, wj func(http
 		}
 		st.apiDocumentMu.Lock()
 		defer st.apiDocumentMu.Unlock()
-		baseline, _, err := st.documentBaseline(sv, env)
+		protocol := r.URL.Query().Get("protocol")
+		if protocol != "" && protocol != "http" && protocol != "dubbo" {
+			fail(w, 400, "文档协议无效")
+			return
+		}
+		baseline, _, err := st.documentBaseline(sv, env, protocol)
 		if err != nil {
 			fail(w, 500, err)
 			return
@@ -103,7 +112,7 @@ func registerDocumentReportingRoutes(mux *http.ServeMux, st *Store, wj func(http
 		}
 		st.apiDocumentMu.Lock()
 		defer st.apiDocumentMu.Unlock()
-		baseline, previous, err := st.documentBaseline(sv, env)
+		baseline, previous, err := st.documentBaseline(sv, env, doc.Protocol())
 		if err != nil {
 			fail(w, 500, err)
 			return

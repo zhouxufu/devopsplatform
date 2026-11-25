@@ -82,6 +82,8 @@ func ValidatePlan(p Plan) error {
 }
 
 type Operation struct {
+	Protocol       string          `json:"protocol,omitempty"`
+	RPC            *RPCMethod      `json:"rpc,omitempty"`
 	ID             string          `json:"id"`
 	Method         string          `json:"method"`
 	Path           string          `json:"path"`
@@ -94,7 +96,9 @@ type Operation struct {
 	Definition     json.RawMessage `json:"definition"`
 }
 type Document struct {
-	OpenAPI string `json:"openapi"`
+	Dubbo   string      `json:"dubbo,omitempty"`
+	Methods []RPCMethod `json:"methods,omitempty"`
+	OpenAPI string      `json:"openapi"`
 	Info    struct {
 		Title   string          `json:"title"`
 		Version string          `json:"version"`
@@ -109,6 +113,9 @@ func Parse(raw []byte) (*Document, []Operation, string, error) {
 		return nil, nil, "", fmt.Errorf("文档为空或超过 8 MiB")
 	}
 	var d Document
+	if json.Unmarshal(raw, &d) == nil && d.Dubbo != "" {
+		return parseDubbo(raw, &d)
+	}
 	if json.Unmarshal(raw, &d) != nil || !(strings.HasPrefix(d.OpenAPI, "3.0.") || strings.HasPrefix(d.OpenAPI, "3.1.")) || d.Info.Title == "" || d.Info.Version == "" || d.Paths == nil || len(d.Paths) > 2000 {
 		return nil, nil, "", fmt.Errorf("请选择有效的 OpenAPI 3.0/3.1 JSON 文档（需包含标题、版本与 paths）")
 	}

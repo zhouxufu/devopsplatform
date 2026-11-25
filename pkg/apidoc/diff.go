@@ -191,6 +191,13 @@ func (x *contractIndex) dependencies(v any) (map[string]any, error) {
 	return seen, nil
 }
 func operationContract(root map[string]any, op Operation) any {
+	if op.Protocol == "dubbo" {
+		var v any
+		d := json.NewDecoder(bytes.NewReader(op.Definition))
+		d.UseNumber()
+		_ = d.Decode(&v)
+		return v
+	}
 	paths, _ := root["paths"].(map[string]any)
 	item, _ := paths[op.Path].(map[string]any)
 	definition, _ := item[strings.ToLower(op.Method)].(map[string]any)

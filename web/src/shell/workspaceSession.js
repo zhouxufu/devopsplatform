@@ -8,7 +8,7 @@ export function safeWorkspaceHash(value){
   const url=new URL(value.slice(1),'https://workspace.invalid')
   if(url.origin!=='https://workspace.invalid'||!/^\/[\w/%.-]*$/.test(url.pathname)||/%(?:2f|5c|2e)/i.test(url.pathname))return '#/'
   const query=new URLSearchParams()
-  for(const key of ['view','quick','tab','mine','return','task','run','release','start','area','item','service','environment']){
+  for(const key of ['view','quick','tab','mine','return','task','run','preparation','release','start','area','item','service','environment']){
    const v=url.searchParams.get(key)
    if(key==='area'&&!['runs','templates'].includes(v))continue
    if(key==='item'&&!/^[1-9]\d{0,18}$/.test(v||''))continue
@@ -53,6 +53,11 @@ export function runtimeWorkspaceHash(value,plugin){
   if(safeWorkspaceHash(path)!==path)return safe
   const query=new URLSearchParams(safe.split('?')[1]||''),input=url.searchParams
   for(const key of ['service','environment']){const v=input.get(key);if(v&&/^[A-Za-z0-9_.-]{1,191}$/.test(v))query.set(key,v)}
+  if(plugin==='deploy'&&url.pathname==='/orchestration'){
+   for(const key of ['work_item','version','preparation']){const id=input.get(key);if(/^[1-9]\d{0,15}$/.test(id||''))query.set(key,id)}
+   for(const key of ['work_items','changes']){const ids=input.get(key);if(ids&&/^[1-9]\d{0,15}(,[1-9]\d{0,15}){0,499}$/.test(ids))query.set(key,ids)}
+  }
+  if(plugin==='research'&&/^\/work\/\d+$/.test(url.pathname)&&input.get('action')==='preview')query.set('action','preview')
   if(plugin==='api-center'&&['/documents','/testing','/test-cases','/test-execution'].includes(url.pathname)){
    for(const key of ['bug','suite','evidence_revision','evidence_suite_revision']){const v=input.get(key);if(/^[1-9]\d{0,18}$/.test(v||''))query.set(key,v)}
    const target=input.get('target');if(target&&/^[A-Za-z0-9_.:-]{1,191}$/.test(target))query.set('target',target)

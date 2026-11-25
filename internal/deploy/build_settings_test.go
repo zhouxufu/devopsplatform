@@ -15,7 +15,7 @@ func TestBuildSettingsCopyRemovedAfterContainerFailure(t *testing.T) {
 	}
 	capture := filepath.Join(root, "mounts")
 	// A local stub observes Docker arguments; it never runs a container or network.
-	script := "#!/bin/sh\nif [ \"$1\" = image ]; then echo sha256:fixture; exit 0; fi\nif [ \"$1\" = run ]; then printf '%s\\n' \"$@\" > \"$CAPTURE_MOUNTS\"; exit 1; fi\nexit 0\n"
+	script := "#!/bin/sh\nif [ \"$1\" = image ]; then echo sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; exit 0; fi\nif [ \"$1\" = run ]; then printf '%s\\n' \"$@\" > \"$CAPTURE_MOUNTS\"; exit 1; fi\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,6 @@
 import {createApp,h,reactive,ref,provide,nextTick} from 'vue'
 import Editor from './Editor.vue'
-import {deliveryDrafts} from '../deploy/deliveryDrafts.js'
+import {deliveryDrafts,deliveryDraftKey} from '../deploy/deliveryDrafts.js'
 import {TooltipProvider} from '../shared/shadcn-ui.js'
 import FeedbackHost from '../shared/components/FeedbackHost.vue'
 import {initTheme,themeSyncPayload} from '../shared/composables/theme.js'
@@ -15,7 +15,7 @@ window.addEventListener('message',function initialize(event){
  booted=true;window.removeEventListener('message',initialize)
  const port=event.ports[0],props=reactive(event.data.props),editable=new Set(),requests=new Map();let serial=0
  const notify=(name,value)=>port.postMessage(editorMessage({type:'event',name,value}))
- if(event.data.draft)deliveryDrafts.set(props.batch?'independent-batch':props.item?.id,event.data.draft)
+ if(event.data.draft)deliveryDrafts.set(deliveryDraftKey(props),event.data.draft)
  const api=(path,options={})=>new Promise((resolve,reject)=>{const id=++serial;requests.set(id,{resolve,reject});port.postMessage({type:'api',id,path,options:{method:options.method||'GET',body:options.body}})})
  const instance=ref(null)
  port.onmessage=async({data})=>{
@@ -24,7 +24,7 @@ window.addEventListener('message',function initialize(event){
   if(data.type==='command'){try{const result=await instance.value?.[data.name]?.();port.postMessage({type:'command-result',id:data.id,result:result??false})}catch(error){port.postMessage({type:'command-result',id:data.id,error:{message:error.message}})}}
  }
  port.start()
- createApp({setup(){provide('api',api);return()=>h(TooltipProvider,{},()=>[h(Editor,{...props,canManage:item=>editable.has(item.id),ref:instance,onState:value=>notify('state',value),onClose:()=>notify('close'),onSaved:()=>notify('saved'),onOpenSync:()=>notify('open-sync'),onConfigure:service=>notify('configure',service),onNextStep:value=>notify('next-step',value),onDraft:value=>notify('draft',value)}),h(FeedbackHost)])}}).mount('#app')
+ createApp({setup(){provide('api',api);return()=>h(TooltipProvider,{},()=>[h(Editor,{...props,canManage:item=>editable.has(item.id),ref:instance,onState:value=>notify('state',value),onClose:()=>notify('close'),onSaved:reason=>notify('saved',reason),onOpenSync:()=>notify('open-sync'),onConfigure:service=>notify('configure',service),onNextStep:value=>notify('next-step',value),onDraft:value=>notify('draft',value)}),h(FeedbackHost)])}}).mount('#app')
  // Inline editors participate in the host dialog's footer. They don't create a second modal.
  let scheduled=false
  const measure=()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;if(!props.inline)return;const root=document.querySelector('#app > section');if(root)notify('height',Math.ceil(root.getBoundingClientRect().height))})}

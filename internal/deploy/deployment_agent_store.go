@@ -45,6 +45,12 @@ func (s *Store) registerDeploymentAgent(v deploymentAgentRegistration) (string, 
 		return "", fmt.Errorf("主机与环境不匹配")
 	}
 	for _, name := range v.Services {
+		if name == "*" {
+			if len(v.Services) != 1 {
+				return "", fmt.Errorf("全部应用（*）不能与指定应用混选")
+			}
+			continue
+		}
 		if s.GetService(name) == nil {
 			return "", fmt.Errorf("应用不存在")
 		}
@@ -82,6 +88,33 @@ func (s *Store) registerDeploymentAgent(v deploymentAgentRegistration) (string, 
 	scopes, _ := json.Marshal(v.Services)
 	_, e = s.db.Exec(`INSERT INTO deployment_agents(agent_id,host_name,environment,services,token_hash,enabled,last_seen) VALUES(?,?,?,?,?,1,0) ON CONFLICT(agent_id) DO UPDATE SET services=excluded.services,token_hash=excluded.token_hash,enabled=1`, v.AgentID, v.Host, v.Environment, string(scopes), hex.EncodeToString(hash[:]))
 	return token, e
+}
+
+// A wildcard is scoped to this installation's host and environment. It never
+// makes an unbound service or an unsupported deployment target eligible.
+func (s *Store) deploymentAgentAllowsService(a *deploymentAgentRegistration, service string) bool {
+	if a == nil || !a.Enabled || service == "" || service == "*" {
+		return false
+	}
+	for _, name := range a.Services {
+		if name == service {
+			return true
+		}
+		if name == "*" && len(a.Services) == 1 {
+			h := s.GetHost(a.Host)
+			sv := s.GetService(service)
+			target := s.GetServiceEnvironment(service, a.Environment)
+			if h == nil || h.Environment != a.Environment || sv == nil || target == nil || !managedJava(target.Apply(sv)) {
+				return false
+			}
+			for _, host := range target.Hosts {
+				if host == a.Host {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (s *Store) deploymentAgent(id string) *deploymentAgentRegistration {
@@ -132,12 +165,26 @@ func (s *Store) validateDeploymentAgent(sv *Service, h Host) error {
 	if a == nil || !a.Enabled || a.Host != h.Name || a.Environment != sv.RuntimeEnvironment {
 		return fmt.Errorf("部署 Agent 未登记、已禁用或主机/环境不匹配")
 	}
-	for _, name := range a.Services {
-		if name == sv.Name {
-			return nil
+	if !s.deploymentAgentAllowsService(a, sv.Name) {
+		return fmt.Errorf("部署 Agent 未授权此应用")
+	}
+	// Application wildcard does not expand the local worker's proven roots.
+	if len(a.Services) == 1 && a.Services[0] == "*" {
+		if setup := s.enrollment(h.Name); setup != nil && setup.Plan.Scope.AgentID == id {
+			root := path.Clean(sv.RemoteDir)
+			roots := setup.Plan.Scope.Roots
+			if setup.Phase == "preview" {
+				roots = setup.Plan.ActiveRoots
+			}
+			for _, base := range roots {
+				if root != "/" && path.IsAbs(root) && base != "/" && path.IsAbs(base) && (root == base || strings.HasPrefix(root, base+"/")) {
+					return nil
+				}
+			}
+			return fmt.Errorf("应用部署目录尚未接入此 Agent，请在主机重新接入以更新目录授权，原设置会保留")
 		}
 	}
-	return fmt.Errorf("部署 Agent 未授权此应用")
+	return nil
 }
 
 func (s *Store) enqueueAgentTask(t deploytask.Task) error {

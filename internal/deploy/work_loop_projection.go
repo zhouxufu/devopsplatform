@@ -92,6 +92,9 @@ func (s *Store) projectWorkLoopTasks(actor, view string, tasks []ResearchTask, t
 		out = append(out, task)
 	}
 	for i := range loops {
+		if loops[i].Grant.Spec.DraftOnly {
+			continue
+		}
 		task := s.workLoopResearchTask(&loops[i])
 		terminal := attentionIsTerminal(task)
 		if !tracking && (view == "done") != terminal {

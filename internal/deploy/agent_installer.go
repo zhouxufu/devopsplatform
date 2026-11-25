@@ -350,11 +350,12 @@ if [ -f /usr/local/bin/logagent ]; then
  if [ -f /etc/systemd/system/logagent.service ]; then $SUDO cp -p /etc/systemd/system/logagent.service "$backup_dir/logagent.service"; fi
 fi
 $SUDO install -m 0755 %s /usr/local/bin/.logagent.new
-$SUDO mv -f /usr/local/bin/.logagent.new /usr/local/bin/logagent
 $SUDO install -m 0600 -o %s -g %s %s /etc/logagent/.agent.yaml.new
-if [ -f /etc/logagent/agent.yaml ] && /usr/local/bin/logagent -h 2>&1 | grep -q -- '-merge-collect-config'; then
- $SUDO /usr/local/bin/logagent -config /etc/logagent/agent.yaml -merge-collect-config /etc/logagent/.agent.yaml.new -deployment-run-user "$(stat -c %%U /etc/logagent/.agent.yaml.new)"
+if [ -f /etc/logagent/agent.yaml ]; then
+ /usr/local/bin/.logagent.new -h 2>&1 | grep -q -- '-merge-collect-config' || { echo "Agent 安装包不支持保留已有部署策略，请更新平台 Agent 安装包" >&2; exit 1; }
+ $SUDO /usr/local/bin/.logagent.new -config /etc/logagent/agent.yaml -merge-collect-config /etc/logagent/.agent.yaml.new -deployment-run-user "$(stat -c %%U /etc/logagent/.agent.yaml.new)"
 fi
+$SUDO mv -f /usr/local/bin/.logagent.new /usr/local/bin/logagent
 $SUDO mv -f /etc/logagent/.agent.yaml.new /etc/logagent/agent.yaml
 $SUDO install -m 0644 %s /etc/systemd/system/logagent.service
 $SUDO chown -R %s:%s /var/lib/logagent

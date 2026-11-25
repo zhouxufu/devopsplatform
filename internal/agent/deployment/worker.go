@@ -184,7 +184,7 @@ func RunWorker(dir string) error {
 		code, out := runScript(context.Background(), dir, step.Script)
 		if code != 0 {
 			state := "failed"
-			if step.UncertainOnError && code != 20 {
+			if step.UncertainOnError && code != 20 && code != 21 {
 				state = "needs_review"
 			}
 			if state == "failed" && code == 20 && step.RollbackOnExit {
@@ -267,6 +267,10 @@ func reconcile(dir string, j job) error {
 				return e
 			}
 			return releaseRoot(j)
+		}
+		if code == 21 {
+			// A rejected start never dispatched Java, including after a lost reply.
+			return knownFailure(dir, j, false, "start-rejected", scrub(j, out))
 		}
 		if code == 20 {
 			if j.Task.Rollback != nil {

@@ -45,8 +45,8 @@ test('logging and monitoring are separate menu groups with bounded children',()=
 })
 
 test('delivery subpages have distinct menu leaves, paths and workspace titles',()=>{
- const pages=[['#/orchestration?area=runs','orchestration','执行与审核'],['#/orchestration?area=templates','orchestration-templates','编排模板'],['#/changes?tab=work&item=12','delivery-work','交付工作项'],['#/changes?tab=changes&item=9','changes','变更列表']]
- for(const [hash,id,label] of pages){assert.equal(selectedNavigation('deploy',hash),id);assert.equal(selectedNavigation('deploy',safeWorkspaceHash(hash)),id);assert.equal(workspaceNavigation({plugin:{name:'deploy'},hash}).label,label);assert.equal(navigationPath(id).length,3)}
+ const pages=[['#/orchestration?area=runs','orchestration','发布记录',2],['#/orchestration?area=templates','orchestration-templates','编排模板',3],['#/changes?tab=work&item=12','work','需求与 Bug',2],['#/changes?tab=changes&item=9','changes','变更记录',2]]
+ for(const [hash,id,label,depth] of pages){assert.equal(selectedNavigation('deploy',hash),id);assert.equal(selectedNavigation('deploy',safeWorkspaceHash(hash)),id);assert.equal(workspaceNavigation({plugin:{name:'deploy'},hash}).label,label);assert.equal(navigationPath(id).length,depth)}
  assert.equal(selectedNavigation('deploy','#/orchestration?run=8'),'orchestration')
  assert.equal(selectedNavigation('deploy','#/changes'),'changes')
  assert.ok(navigationLeaves(availableGroups([{name:'research'}])).every(i=>i.plugin==='research'))

@@ -33,6 +33,7 @@ const (
 // WorkItem represents a requirement or bug. It may be synchronized from an
 // external system or entered manually. It has no release/environment owner.
 type WorkItem struct {
+	ReleaseMark *ResearchReleaseMark `json:"release_mark,omitempty"`
 	ResearchIssueFields
 	ReleaseOrigin     string `json:"release_origin,omitempty"`
 	ReleaseReason     string `json:"release_reason,omitempty"`
@@ -64,6 +65,7 @@ type WorkItem struct {
 // Change is an independent implementation change. The same record is promoted
 // through environments and is never copied for dev/test/prod.
 type Change struct {
+	Prerequisites     []ChangePrerequisite     `json:"prerequisites,omitempty"`
 	DeliveryOwnership *ChangeDeliveryOwnership `json:"delivery_ownership,omitempty"`
 	ID                int64                    `json:"id"`
 	Kind              string                   `json:"kind"`
@@ -301,6 +303,9 @@ func (s *Store) GetWorkItem(id int64) *WorkItem {
 		v.ReleaseOrigin = "unknown"
 		v.ReleaseReason = err.Error()
 	}
+	if mark, err := s.researchReleaseMark(id); err == nil && mark.Revision > 0 {
+		v.ReleaseMark = &mark
+	}
 	return &v
 }
 
@@ -495,6 +500,12 @@ func (s *Store) DeleteWorkItem(id int64) error {
 	if refs > 0 {
 		return fmt.Errorf("Bug 已有关联证据，请关闭保留记录")
 	}
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM research_release_marks WHERE work_item_id=? AND revision>0`, id).Scan(&refs); err != nil {
+		return err
+	}
+	if refs > 0 {
+		return fmt.Errorf("已有人工上线记录，请关闭保留历史")
+	}
 	result, err := tx.Exec(`DELETE FROM work_items WHERE id=?`, id)
 	if err == nil {
 		if n, _ := result.RowsAffected(); n == 0 {
@@ -522,6 +533,9 @@ func normalizeChange(v *Change) error {
 // Delivery drafts retain the author's SQL verbatim. Only metadata is saved;
 // readiness and execution still require the strict supported SQL dialect.
 func normalizeChangeForSave(v *Change, sqlDraft bool) error {
+	if err := validateChangePrerequisites(v); err != nil {
+		return err
+	}
 	v.Kind, v.Title, v.Service = strings.TrimSpace(v.Kind), strings.TrimSpace(v.Title), strings.TrimSpace(v.Service)
 	v.Reference, v.Summary = strings.TrimSpace(v.Reference), strings.TrimSpace(v.Summary)
 	v.RiskLevel, v.RollbackPlan = strings.TrimSpace(v.RiskLevel), strings.TrimSpace(v.RollbackPlan)
@@ -633,7 +647,7 @@ func (s *Store) Changes(status, service, query string, limit int) []Change {
 	rows.Close() // SQLite uses one connection: release it before loading associations.
 	for i := range out {
 		out[i].WorkItems = s.ChangeWorkItems(out[i].ID)
-		s.loadSQLPayload(&out[i])
+		loadChangePayload(s.db, &out[i])
 	}
 	return out
 }
@@ -644,7 +658,9 @@ func (s *Store) GetChange(id int64) *Change {
 		return nil
 	}
 	v.WorkItems = s.ChangeWorkItems(id)
-	s.loadSQLPayload(&v)
+	if loadChangePayload(s.db, &v) != nil {
+		return nil
+	}
 	return &v
 }
 
@@ -938,7 +954,11 @@ func (s *Store) GetReleaseVersion(id int64) *ReleaseVersion {
 	if err != nil {
 		return nil
 	}
-	v.Changes, v.Promotions = s.ReleaseVersionChanges(id), s.ReleasePromotions(id)
+	v.Changes, err = s.readVersionChanges(id)
+	if err != nil {
+		return nil
+	}
+	v.Promotions = s.ReleasePromotions(id)
 	s.loadVersionScope(&v)
 	return &v
 }
@@ -962,23 +982,34 @@ func (s *Store) UpdateReleaseVersion(v *ReleaseVersion) error {
 }
 
 func (s *Store) ReleaseVersionChanges(id int64) []Change {
+	out, _ := s.readVersionChanges(id)
+	return out
+}
+func (s *Store) readVersionChanges(id int64) ([]Change, error) {
 	rows, err := s.db.Query(changeSelect+` WHERE id IN (SELECT change_id FROM release_version_changes WHERE release_version_id=?) ORDER BY id`, id)
 	if err != nil {
-		return []Change{}
+		return nil, err
 	}
 	defer rows.Close()
 	out := []Change{}
 	for rows.Next() {
-		if v, err := scanChange(rows); err == nil {
-			out = append(out, v)
+		v, err := scanChange(rows)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, v)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
 	}
 	rows.Close()
 	for i := range out {
 		out[i].WorkItems = s.ChangeWorkItems(out[i].ID)
-		s.loadSQLPayload(&out[i])
+		if err = loadChangePayload(s.db, &out[i]); err != nil {
+			return nil, err
+		}
 	}
-	return out
+	return out, nil
 }
 
 func (s *Store) SetReleaseVersionChanges(id int64, changeIDs []int64) error {

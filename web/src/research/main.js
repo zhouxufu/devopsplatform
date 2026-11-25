@@ -11,5 +11,5 @@ import Versions from '../deploy/pages/ChangesView.vue'
 import { initTheme } from '../shared/composables/theme.js'
 initTheme()
 installPlatformAuthGuard()
-const router=createRouter({history:createWebHashHistory(),routes:[{path:'/',component:Inbox},{path:'/work',component:WorkItems},{path:'/work/:id',component:WorkDetail},{path:'/versions',component:Versions,props:{scope:'versions'}},{path:'/settings',component:Settings}]})
+const router=createRouter({history:createWebHashHistory(),routes:[{path:'/',component:Inbox},{path:'/work',component:WorkItems},{path:'/work/delivery',component:Versions,props:{scope:'delivery'}},{path:'/work/:id',component:WorkDetail},{path:'/versions',component:Versions,props:{scope:'versions'}},{path:'/settings',component:Settings}]})
 createApp(App).use(router).mount('#app')

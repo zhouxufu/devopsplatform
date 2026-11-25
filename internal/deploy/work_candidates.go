@@ -34,6 +34,7 @@ type WorkCandidateFilter struct {
 	Start, End, VersionID                            int64
 	IDs                                              []int64
 	ProductionOnly                                   bool
+	ExcludeManualRelease                             bool
 }
 type WorkCandidatePage struct {
 	Items    []WorkCandidate `json:"items"`
@@ -152,6 +153,9 @@ func (s *Store) WorkCandidates(f WorkCandidateFilter) (WorkCandidatePage, error)
 	changeCount := `(SELECT COUNT(*) FROM work_item_changes wc JOIN changes c ON c.id=wc.change_id WHERE wc.work_item_id=w.id` + owned + `)`
 	readyCount := `(SELECT COUNT(*) FROM work_item_changes wc JOIN changes c ON c.id=wc.change_id WHERE wc.work_item_id=w.id` + owned + ` AND c.status='ready')`
 	where, args := []string{"1=1"}, []any{}
+	if f.ExcludeManualRelease {
+		where = append(where, `NOT EXISTS(SELECT 1 FROM research_release_marks rm WHERE rm.work_item_id=w.id AND rm.marked=1)`)
+	}
 	if f.Relation != "" {
 		where = append(where, researchRelationClause("w", f.Relation))
 		args = append(args, f.RelationActor)

@@ -75,6 +75,13 @@ func (sshJarDriver) Validate(sv *Service, _ Host, a Artifact) error {
 	if !path.IsAbs(strings.TrimSpace(sv.RemoteDir)) {
 		return fmt.Errorf("远程目录必须是绝对路径")
 	}
+	if jpomJava(sv) {
+		if err := validateJpomJava(sv); err != nil {
+			return err
+		}
+		version, _ := strconv.Atoi(sv.DeployConfig["java_version"])
+		return validateJavaBytecode(a.URI, version)
+	}
 	if managedJava(sv) {
 		if err := validateManagedJava(sv); err != nil {
 			return err

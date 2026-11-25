@@ -45,6 +45,9 @@ func (s *Store) previewWorkLoopAuthorization(ctx context.Context, t *WorkLoop, r
 	if t.Revoked {
 		return nil, fmt.Errorf("授权已撤销，请新建跟进任务；原执行记录保留")
 	}
+	if req.Spec.DraftOnly != t.Grant.Spec.DraftOnly {
+		return nil, fmt.Errorf("请为不同用途单独授权")
+	}
 	if req.Spec.WorkItemID != t.Grant.Spec.WorkItemID {
 		return nil, fmt.Errorf("不能将任务授权转移到另一个工作项")
 	}

@@ -14,6 +14,7 @@ import (
 type Config = agentconfig.Config
 type CollectCfg = agentconfig.CollectCfg
 
+
 func LoadConfig(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

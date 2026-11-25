@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"logplatform/pkg/apitest"
+	"logplatform/pkg/dubborpc"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 type apiTestEntry = apitest.Entry
 type apiTestProfile = apitest.Profile
 type apiTestTarget struct {
+	Protocol                  string `json:"protocol,omitempty"`
 	CredentialReferencesValid bool   `json:"credential_references_valid"`
 	AuthMode                  string `json:"auth_mode,omitempty"`
 	LoginURL                  string `json:"login_url,omitempty"`
@@ -38,6 +40,7 @@ type apiTestTarget struct {
 	DeployID                  int64  `json:"deploy_id,omitempty"`
 }
 type apiTestStep struct {
+	TargetKey     string               `json:"target_key,omitempty"`
 	Service       string               `json:"service,omitempty"`
 	ApplicationID string               `json:"application_id,omitempty"`
 	Kind          string               `json:"kind,omitempty"`
@@ -260,11 +263,20 @@ func (s *Store) apiTestTargets(sv *Service, env *ServiceEnvironment, p apiTestPr
 	out := []apiTestTarget{}
 	seen := map[string]bool{}
 	appendTarget := func(key, label, base, host string) {
-		if _, e := apitest.Base(base); e != nil || seen[key] {
+		isDubbo := false
+		for _, entry := range p.Entries {
+			if key == "endpoint:"+entry.Key && entry.Kind == "dubbo" {
+				isDubbo = true
+			}
+		}
+		if _, e := apitest.Base(base); !isDubbo && e != nil || seen[key] {
 			return
 		}
 		seen[key] = true
 		t := apiTestTarget{Key: key, Label: label, BaseURL: base, Host: host}
+		if isDubbo {
+			t.Protocol = "dubbo"
+		}
 		auth := p.Auth
 		for _, entry := range p.Entries {
 			if key == "endpoint:"+entry.Key {
@@ -274,6 +286,20 @@ func (s *Store) apiTestTargets(sv *Service, env *ServiceEnvironment, p apiTestPr
 		}
 		safeAuth, referenceErr := apitest.ReferenceAuth(auth)
 		t.CredentialReferencesValid = referenceErr == nil
+		registryDigest := ""
+		if isDubbo {
+			t.CredentialReferencesValid = dubborpc.Available()
+			for _, entry := range p.Entries {
+				if key == "endpoint:"+entry.Key && entry.RegistryAlias != "" {
+					registry, err := s.dubboRegistry(sv.Name, env.Environment, entry)
+					if err != nil {
+						t.CredentialReferencesValid = false
+					} else {
+						registryDigest = s.privateOperationDigest(registry)
+					}
+				}
+			}
+		}
 		auth = safeAuth
 		t.AuthMode = auth.Mode
 		t.Injection = auth.Injection
@@ -292,10 +318,10 @@ func (s *Store) apiTestTargets(sv *Service, env *ServiceEnvironment, p apiTestPr
 		}
 		query += " ORDER BY id DESC LIMIT 1"
 		_ = s.db.QueryRow(query, args...).Scan(&t.DeployID, &t.ArtifactID, &t.ArtifactDigest)
-		configuration, _ := json.Marshal([]any{sv.ApplicationID, env.Environment, env.Protected, p.Revision, key, base})
+		configuration, _ := json.Marshal([]any{sv.ApplicationID, env.Environment, env.Protected, p.Revision, key, base, registryDigest})
 		cs := sha256.Sum256(configuration)
 		t.Configuration = hex.EncodeToString(cs[:])
-		identity, _ := json.Marshal([]any{sv.ApplicationID, env.Environment, env.Protected, p.Revision, key, base, t.ArtifactID, t.ArtifactDigest})
+		identity, _ := json.Marshal([]any{sv.ApplicationID, env.Environment, env.Protected, p.Revision, key, base, registryDigest, t.ArtifactID, t.ArtifactDigest})
 		digest := sha256.Sum256(identity)
 		t.Fingerprint = hex.EncodeToString(digest[:])
 		out = append(out, t)
@@ -304,7 +330,11 @@ func (s *Store) apiTestTargets(sv *Service, env *ServiceEnvironment, p apiTestPr
 		appendTarget("entry", "环境访问入口", p.BaseURL, "")
 	}
 	for _, entry := range p.Entries {
-		appendTarget("endpoint:"+entry.Key, entry.Label, strings.TrimSuffix(entry.BaseURL, "/")+entry.PathPrefix, "")
+		base := strings.TrimSuffix(entry.BaseURL, "/") + entry.PathPrefix
+		if entry.Kind == "dubbo" {
+			base = dubboEntryBase(entry)
+		}
+		appendTarget("endpoint:"+entry.Key, entry.Label, base, "")
 	}
 	applied := env.Apply(sv)
 	health, _ := url.Parse(strings.ReplaceAll(applied.HealthURL, "{host}", "127.0.0.1"))
@@ -466,7 +496,13 @@ func validateAPITestCase(v *apiTestCase) error {
 		if strings.TrimSpace(step.Name) == "" || len(step.Name) > 200 || len(step.Action) > 4000 || len(step.Expected) > 4000 {
 			return fmt.Errorf("步骤 %d 请填写名称并缩短说明", i+1)
 		}
-		if testNodeKind(*step) != "http" {
+		if step.Kind == "dubbo" && step.Request.Mode != "dubbo" || step.Kind == "http" && step.Request.Mode == "dubbo" {
+			return fmt.Errorf("步骤类型与调用协议不一致")
+		}
+		if len(step.TargetKey) > 200 || strings.ContainsAny(step.TargetKey, "\x00\r\n") {
+			return fmt.Errorf("节点入口标识无效")
+		}
+		if !isTestRequest(*step) {
 			if v.Graph == nil || step.Condition != nil && testNodeKind(*step) != "condition" || len(step.Extractions) > 0 || step.DocumentID != 0 {
 				return fmt.Errorf("控制节点配置无效")
 			}
@@ -515,7 +551,7 @@ func apiTestResultStatus(result apitest.Result) string {
 	if result.OutcomeUnknown {
 		return "unknown"
 	}
-	if result.Error != "" || result.Status < 200 || result.Status >= 400 {
+	if result.Error != "" || result.Protocol != "dubbo" && (result.Status < 200 || result.Status >= 400) {
 		return "failed"
 	}
 	for _, check := range result.Checks {
@@ -812,14 +848,25 @@ func (m *apiTestManager) startAuthorized(sv *Service, owner string, admin bool, 
 		}
 	}
 
+	runtimes, e := m.st.prepareProtocolTargets(sv.Name, in.Environment, p, *target, executionSteps, variables)
+	if e != nil {
+		return nil, e
+	}
+	for i, step := range executionSteps {
+		if runtime, ok := scenarioRuntimeFor(runtimes, step); ok && i < len(v.Steps) {
+			copy := runtime.Target
+			v.Steps[i].Target = &copy
+		}
+	}
+
 	if in.DocumentID > 0 {
 		if err := m.st.db.QueryRow(`SELECT artifact_id,commit_ref FROM api_document_versions WHERE application_id=? AND id=?`, sv.ApplicationID, in.DocumentID).Scan(&v.DocumentArtifactID, &v.DocumentCommit); err != nil {
 			return nil, fmt.Errorf("文档身份读取失败")
 		}
 	}
 	// Persist a redacted request snapshot; actual credentials live only for this execution.
-	v.Path = apitest.SafeURL(in.Request.Path, variables)
 	v.Request = apitest.SanitizeRequest(in.Request, variables)
+	v.Path = v.Request.Path
 	raw, _ = json.Marshal(v)
 	enc, e := m.st.encryptSecret(string(raw))
 	if e != nil {
@@ -852,7 +899,7 @@ func (m *apiTestManager) startAuthorized(sv *Service, owner string, admin bool, 
 		}
 		for _, unit := range planned {
 			if unit.Case.Graph != nil {
-				m.runGraphCases(ctx, &v, planned, *target, p, variables, caseBindings)
+				m.runGraphCases(ctx, &v, planned, *target, p, variables, caseBindings, runtimes)
 				return
 			}
 		}
@@ -890,7 +937,7 @@ func (m *apiTestManager) startAuthorized(sv *Service, owner string, admin bool, 
 			v.Request = apitest.SanitizeRequest(step.Request, variables)
 			v.Method = step.Request.Method
 			v.Mode = step.Request.Mode
-			v.Path = apitest.SafeURL(step.Request.Path, variables)
+			v.Path = v.Request.Path
 			v.Result = apitest.Result{Events: []apitest.Event{}, Checks: []apitest.Check{}}
 			persistProgress := func() {
 				if len(v.Steps) > 0 {
@@ -902,7 +949,8 @@ func (m *apiTestManager) startAuthorized(sv *Service, owner string, admin bool, 
 			}
 			persistProgress()
 			stepCtx, stepCancel := context.WithTimeout(ctx, time.Duration(step.Request.Timeout)*time.Second)
-			result, extraction := apitest.PerformScoped(stepCtx, m.client, target.BaseURL, step.Request, p.Auth, variables, scope, step.Extractions, func(event apitest.Event) { v.Result.Events = append(v.Result.Events, event); persistProgress() }, func(metadata apitest.Result) { v.Result = metadata; persistProgress() })
+			runtime, _ := scenarioRuntimeFor(runtimes, step)
+			result, extraction := apitest.PerformScoped(stepCtx, m.client, runtime.Target.BaseURL, step.Request, runtime.Auth, variables, scope, step.Extractions, func(event apitest.Event) { v.Result.Events = append(v.Result.Events, event); persistProgress() }, func(metadata apitest.Result) { v.Result = metadata; persistProgress() })
 			stepCancel()
 			if len(v.Steps) > 0 {
 				v.Steps[i].Extractions = extraction.Checks

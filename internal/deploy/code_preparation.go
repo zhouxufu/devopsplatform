@@ -39,15 +39,16 @@ type PreparedRepository struct {
 	Status               string           `json:"status"`
 }
 type PreparedBuild struct {
-	Message             string `json:"message,omitempty"`
-	RunNumber           int64  `json:"run_number,omitempty"`
-	Service             string `json:"service"`
-	Commit              string `json:"commit"`
-	ConfigurationDigest string `json:"configuration_digest"`
-	RunID               int64  `json:"run_id"`
-	ArtifactID          int64  `json:"artifact_id"`
-	ArtifactDigest      string `json:"artifact_digest"`
-	Status              string `json:"status"`
+	PreviousRunIDs      []int64 `json:"previous_run_ids,omitempty"`
+	Message             string  `json:"message,omitempty"`
+	RunNumber           int64   `json:"run_number,omitempty"`
+	Service             string  `json:"service"`
+	Commit              string  `json:"commit"`
+	ConfigurationDigest string  `json:"configuration_digest"`
+	RunID               int64   `json:"run_id"`
+	ArtifactID          int64   `json:"artifact_id"`
+	ArtifactDigest      string  `json:"artifact_digest"`
+	Status              string  `json:"status"`
 }
 type CodePreparation struct {
 	BuildError       string               `json:"build_error,omitempty"`
@@ -539,11 +540,21 @@ func (s *Store) performPreparedBuilds(p *CodePreparation, pr *PipelineRunner) {
 			if pr == nil {
 				return 0, fmt.Errorf("构建 Runner 不可用")
 			}
+			if len(b.PreviousRunIDs) > 0 {
+				sv, config, commit, err := s.buildReplay(b.PreviousRunIDs[len(b.PreviousRunIDs)-1])
+				if err != nil {
+					return 0, err
+				}
+				if sv.Name != b.Service || commit != b.Commit {
+					return 0, fmt.Errorf("原构建快照与冻结提交不匹配")
+				}
+				return pr.StartWithOptions(sv, false, PipelineRunOptions{Branch: commit, ReplayDelivery: config, Trigger: buildAttemptTrigger(p, b)}, p.Owner)
+			}
 			sv, err := s.preparedBuildService(b)
 			if err != nil {
 				return 0, err
 			}
-			return pr.StartWithOptions(sv, false, PipelineRunOptions{Branch: b.Commit, BuildEnvironment: p.Request.Environment, Trigger: "code-preparation:" + p.ID + ":" + b.Service}, p.Owner)
+			return pr.StartWithOptions(sv, false, PipelineRunOptions{Branch: b.Commit, BuildEnvironment: p.Request.Environment, Trigger: buildAttemptTrigger(p, b)}, p.Owner)
 		})
 		if err != nil {
 			fail(err)

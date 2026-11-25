@@ -189,7 +189,11 @@ func registerWorkLoopRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, m 
 			return
 		}
 		t := &WorkLoop{Authority: r.Header.Get("X-Work-Loop-Authority"), AuthorityKeyID: r.Header.Get("X-Work-Loop-Key-ID"), ID: req.ID, Owner: actor, Grant: *g, Authorizations: []WorkLoopGrant{*g}, Iterations: []WorkLoopIteration{{Number: 1, GrantDigest: g.Digest, ChangeIDs: []int64{}, State: "developing"}}, Events: []WorkLoopEvent{}}
-		t.setState("developing", "development", "等待人员或 Agent 接手开发；未启动编码进程")
+		if g.Spec.DraftOnly {
+			t.setState("developing", "development", "已授权在开发过程中登记本人变更草稿")
+		} else {
+			t.setState("developing", "development", "等待人员或 Agent 接手开发；未启动编码进程")
+		}
 		if e = s.saveWorkLoop(t); e != nil {
 			deliveryWriteError(w, 409, e)
 			return
@@ -219,6 +223,10 @@ func registerWorkLoopRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, m 
 			deliveryWriteError(w, 409, "任务已更新，请读取当前状态")
 			return
 		}
+		if t.Grant.Spec.DraftOnly && req.Action != "pause" && req.Action != "revoke" && req.Action != "resume" {
+			deliveryWriteError(w, 409, "草稿登记只支持暂停、恢复或撤销")
+			return
+		}
 		switch req.Action {
 		case "pause":
 			t.Paused = true
@@ -233,7 +241,11 @@ func registerWorkLoopRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, m 
 				deliveryWriteError(w, 409, e)
 				return
 			}
-			t.setState("running", t.Stage, "按原任务核对并继续，未知操作不重放")
+			if t.Grant.Spec.DraftOnly {
+				t.setState("developing", "development", "已恢复登记本人变更草稿")
+			} else {
+				t.setState("running", t.Stage, "按原任务核对并继续，未知操作不重放")
+			}
 		case "claim":
 			if t.Stage != "development" || len(req.Claimant) > 100 || strings.TrimSpace(req.Claimant) == "" {
 				deliveryWriteError(w, 409, "仅开发阶段可以由本人接手")
@@ -276,6 +288,22 @@ func registerWorkLoopRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, m 
 		if !decode(w, r, &req) {
 			return
 		}
+		if t.Grant.Spec.DraftOnly {
+			if t.Authority == "mcp" && r.Header.Get("X-Work-Loop-Authority") == "mcp" && t.AuthorityKeyID != r.Header.Get("X-Work-Loop-Key-ID") {
+				deliveryWriteError(w, 403, "请使用原授权 Key")
+				return
+			}
+			if err := s.validateWorkLoop(r.Context(), t, t.Owner); err != nil {
+				deliveryWriteError(w, 403, err)
+				return
+			}
+			if err := s.saveTrackedDrafts(t, req.Revision, &req.Content); err != nil {
+				deliveryWriteError(w, 409, err)
+				return
+			}
+			deliveryJSON(w, t)
+			return
+		}
 		if req.Revision != t.Revision || t.Stage != "development" {
 			deliveryWriteError(w, 409, "当前轮次已冻结或修订变化")
 			return
@@ -304,6 +332,10 @@ func registerWorkLoopRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, m 
 	mux.HandleFunc("POST /api/work-loops/{id}/start", func(w http.ResponseWriter, r *http.Request) {
 		t := owned(w, r)
 		if t == nil {
+			return
+		}
+		if t.Grant.Spec.DraftOnly {
+			deliveryWriteError(w, 403, "此授权仅可登记草稿")
 			return
 		}
 		var req struct {
@@ -345,6 +377,10 @@ func registerWorkLoopRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, m 
 	mux.HandleFunc("POST /api/work-loops/{id}/advance", func(w http.ResponseWriter, r *http.Request) {
 		t := owned(w, r)
 		if t == nil {
+			return
+		}
+		if t.Grant.Spec.DraftOnly {
+			deliveryWriteError(w, 403, "此授权仅可登记草稿")
 			return
 		}
 		var req struct {

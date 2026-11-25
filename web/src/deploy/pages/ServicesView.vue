@@ -19,6 +19,7 @@ import {applicationName,applicationIdentifier,validApplicationIdentifier,applica
 import {buildState, buildScroll} from '../buildNavigation.js'
 import PageHeader from "../../shared/components/PageHeader.vue"
 import BuildEnvironmentEditor from '../components/BuildEnvironmentEditor.vue'
+import {buildImageSourceError} from '../buildImageSource.js'
 import JavaCompileFields from '../components/JavaCompileFields.vue'
 import ImageBuildEditor from '../components/ImageBuildEditor.vue'
 import {defaultJavaImage, imageBuildError, imageCompiler} from '../imageBuildModel.js'
@@ -123,7 +124,7 @@ function validateStep() {
   if (wizardStep.value === 2) {
     if(javaBundleError(form.value))return toast(javaBundleError(form.value),'warning')
     if(form.value.build_tool==='maven'&&!validMavenThreads(form.value.maven_threads))return toast('Maven 并行线程须为正整数或 CPU 倍数，如 4、1C、2.5C','warning')
-    if (buildEnvironment.value.mode === 'container' && buildEnvironment.value.preset === 'custom' && !buildEnvironment.value.image?.trim()) return toast('填写构建镜像地址和版本', 'warning')
+    if (buildImageSourceError(buildEnvironment.value)) return toast(buildImageSourceError(buildEnvironment.value), 'warning')
     if (form.value.artifact_type === 'image' && !form.value.image_name?.trim()) return toast('填写镜像名称', 'warning')
     if(form.value.artifact_type==='image'&&imageBuildError(form.value))return toast(imageBuildError(form.value),'warning')
     if (form.value.artifact_type === 'jar' && form.value.build_tool === 'maven' && (!form.value.maven_executable?.trim() || !form.value.maven_goals?.trim())) return toast('填写 Maven 可执行文件和 Goals', 'warning')
@@ -134,6 +135,7 @@ function validateStep() {
 }
 async function save(){if(savingNew.value)return;savingNew.value=true;try{await saveApplication()}catch(e){toast(e.message,'error')}finally{savingNew.value=false}}
 async function saveApplication() {
+  if (buildImageSourceError(buildEnvironment.value)) return toast(buildImageSourceError(buildEnvironment.value), 'warning')
 	const body = { ...form.value, create_only:!editing.value }
 	body.tags = [...new Set((body.tags_text || '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean))].slice(0, 12)
 	delete body.tags_text

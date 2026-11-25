@@ -22,6 +22,7 @@ import (
 
 func integrationSchema(identity, doc string) []string {
 	return []string{
+		`CREATE TABLE IF NOT EXISTS api_document_protocols (snapshot_id BIGINT PRIMARY KEY, protocol VARCHAR(16) NOT NULL)`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_test_layouts (application_id VARCHAR(191) NOT NULL, case_id BIGINT NOT NULL, owner VARCHAR(191) NOT NULL, workspace VARCHAR(191) NOT NULL, document %s NOT NULL, revision BIGINT NOT NULL, PRIMARY KEY(application_id,case_id,owner,workspace))`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_lineage (snapshot_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_work_item_events (work_item_id BIGINT NOT NULL, snapshot_id BIGINT NOT NULL, document %s NOT NULL, PRIMARY KEY(work_item_id,snapshot_id))`, doc),

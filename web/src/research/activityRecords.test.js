@@ -39,3 +39,9 @@ test('manual item activity summaries tolerate malformed history and label transi
  assert.equal(localActivityContent({kind:'work-item-updated',content:'{"priority":["3","2"],"severity":["2","1"]}'}),'更新了：优先级、严重程度')
  for(const content of ['null','[]','invalid'])assert.equal(localActivityContent({kind:'work-item-updated',content}),'工作项信息已更新')
 })
+
+test('manual production marks have their own readable activity summaries',()=>{
+ assert.equal(localActivityContent({kind:'release-mark',content:'{"marked":true,"comment":"随版本上线"}'}),'人工确认已上线：随版本上线')
+ assert.equal(localActivityContent({kind:'release-mark',content:'{"marked":false}'}),'撤销了已上线标记')
+ assert.equal(localActivityContent({kind:'release-mark',content:'invalid'}),'人工上线记录')
+})

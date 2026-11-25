@@ -69,10 +69,10 @@ bash "$release/service.sh" check`
 	start := preamble + lease + owner + prior + `ln -sfn "$release" "$base/current.new"; mv -Tf "$base/current.new" "$base/current"
 if bash "$release/service.sh" start; then exit 0; fi
 result=0; bash "$release/service.sh" agent-probe || result=$?
-if [ "$result" = 20 ]; then exit 20; fi
+if [ "$result" = 20 ] || [ "$result" = 21 ]; then exit "$result"; fi
 exit 30`
 	probe := preamble + lease + owner + `test "$(readlink "$base/current")" = "$release"; bash "$release/service.sh" agent-probe`
-	t := deploytask.Task{Version: deploytask.Version, ID: taskID, DeployID: id, AgentID: agent, Host: h.Name, Service: sv.Name, Environment: sv.RuntimeEnvironment, Root: root, ArtifactDigest: a.Digest, ArtifactSize: a.Size, Files: files, Secrets: secrets, Bundle: descriptor, Steps: []deploytask.Step{{Name: "准备并核验冻结版本", Script: prepare, SyncRelease: true}, {Name: "优雅停止原版本", Script: stop, UncertainOnError: true}, {Name: "切换并启动新版本", Script: start, UncertainOnError: true, RollbackOnExit: true}}, Probe: probe, WarnAfterSeconds: 120}
+	t := deploytask.Task{Version: deploytask.Version, ID: taskID, DeployID: id, AgentID: agent, Host: h.Name, Service: sv.Name, Environment: sv.RuntimeEnvironment, Root: root, ArtifactDigest: a.Digest, ArtifactSize: a.Size, Files: files, Secrets: secrets, Bundle: descriptor, Steps: []deploytask.Step{{Name: "准备并核验冻结版本", Script: prepare, SyncRelease: true}, {Name: "优雅停止原版本", Script: stop, UncertainOnError: true}, {Name: "检查目标监听端口", Script: preamble + lease + owner + prior + `bash "$release/service.sh" prestart`}, {Name: "切换并启动新版本", Script: start, UncertainOnError: true, RollbackOnExit: true}}, Probe: probe, WarnAfterSeconds: 120}
 	if healthFailureAction(sv) == healthFailureRollback {
 		guard := preamble + lease + owner + `test "$(readlink "$base/current")" = "$release"; result=0; bash "$release/service.sh" agent-probe || result=$?; test "$result" = 20; previous=$(cat "$DEPLOY_TASK_DIR/previous"); test -n "$previous"; `
 		restore := guard + `ln -sfn "$previous" "$base/current.new"; mv -Tf "$base/current.new" "$base/current"; if bash "$previous/service.sh" start; then exit 0; fi; exit 30`

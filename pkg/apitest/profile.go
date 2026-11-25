@@ -2,6 +2,7 @@ package apitest
 
 import (
 	"fmt"
+	"logplatform/pkg/dubborpc"
 	"regexp"
 	"strings"
 )
@@ -9,12 +10,14 @@ import (
 // Profile is the existing application/environment test contract. Additional
 // named entries do not replace the legacy default or alter historical runs.
 type Entry struct {
-	Key        string `json:"key"`
-	Label      string `json:"label"`
-	Kind       string `json:"kind"`
-	BaseURL    string `json:"base_url"`
-	PathPrefix string `json:"path_prefix,omitempty"`
-	Auth       Auth   `json:"auth"`
+	RegistryAlias string `json:"registry_alias,omitempty"`
+	RegistryGroup string `json:"registry_group,omitempty"`
+	Key           string `json:"key"`
+	Label         string `json:"label"`
+	Kind          string `json:"kind"`
+	BaseURL       string `json:"base_url"`
+	PathPrefix    string `json:"path_prefix,omitempty"`
+	Auth          Auth   `json:"auth"`
 }
 type Profile struct {
 	Entries             []Entry `json:"entries,omitempty"`
@@ -32,10 +35,28 @@ func ValidateEntries(entries []Entry) error {
 	}
 	seen := map[string]bool{}
 	for _, e := range entries {
-		if !regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`).MatchString(e.Key) || seen[e.Key] || strings.TrimSpace(e.Label) == "" || len(e.Label) > 100 || (e.Kind != "direct" && e.Kind != "gateway") {
+		if !regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`).MatchString(e.Key) || seen[e.Key] || strings.TrimSpace(e.Label) == "" || len(e.Label) > 100 || (e.Kind != "direct" && e.Kind != "gateway" && e.Kind != "dubbo") {
 			return fmt.Errorf("入口标识、名称或类型无效或重复")
 		}
 		seen[e.Key] = true
+		if e.Kind == "dubbo" {
+			if e.PathPrefix != "" || e.Auth.Mode != "" && e.Auth.Mode != "none" {
+				return fmt.Errorf("Dubbo 入口不使用 HTTP 路径前缀或认证")
+			}
+			if e.RegistryAlias != "" {
+				if e.BaseURL != "" || len(e.RegistryAlias) > 191 || len(e.RegistryGroup) > 191 {
+					return fmt.Errorf("Nacos 入口不能同时填写直连地址")
+				}
+			} else {
+				if _, err := dubborpc.Endpoint(e.BaseURL); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if e.RegistryAlias != "" || e.RegistryGroup != "" {
+			return fmt.Errorf("注册中心仅用于 Dubbo 入口")
+		}
 		u, err := Base(e.BaseURL)
 		if err != nil {
 			return err

@@ -847,6 +847,9 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 	registerReleaseNoticeRoutes(mux, st)
 	registerIntegrationRoutes(mux, st)
 	registerInstanceRoutes(mux, st, SSHExec)
+	registerJpomDetectionRoutes(mux, st, func(ctx context.Context, h Host, cmd string) (string, error) {
+		return SSHExecContext(ctx, h, cmd, 20*time.Second)
+	})
 
 	// ---------- 需求、变更、版本与环境推进 ----------
 	changeID := func(r *http.Request) int64 {
@@ -913,6 +916,10 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return
+		}
+		out.ChangeDigests = make(map[int64]string, len(out.Changes))
+		for _, c := range out.Changes {
+			out.ChangeDigests[c.ID] = digestJSON(c)
 		}
 		wj(w, out)
 	})
@@ -1300,6 +1307,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 		}
 		wj(w, v)
 	})
+	mux.HandleFunc("GET /api/releases/{id}/diagnostics", st.releaseDiagnostics)
 	mux.HandleFunc("POST /api/releases", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Service     string `json:"service"`

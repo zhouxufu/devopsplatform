@@ -224,7 +224,7 @@ func TestReleaseRollbackFailureIgnoreKeepsFailureAndHistory(t *testing.T) {
 	if !found {
 		t.Fatal("ignore reason/history missing", done)
 	}
-	if s.GetDeploy(d.ID).Status != "rollback-failed" || s.GetReleaseOrder(o.ID).Status != "failed" {
+	if s.GetDeploy(d.ID).Status != "rollback-failed" || s.GetReleaseOrder(o.ID).Status != "failed" || s.GetReleaseOrder(o.ID).RollbackFailed != 1 {
 		t.Fatal("ignore forged successful execution")
 	}
 }

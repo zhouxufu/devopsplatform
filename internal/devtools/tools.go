@@ -72,9 +72,10 @@ func (s *ToolService) Tools() []Tool {
 		}, "service", "environment"), Annotations: readonly("查询服务指标"), Scope: "metrics:read"},
 		{Name: "get_recent_traces", Title: "查询最近 Trace", Description: "查询应用环境最近两小时的 Trace 摘要，异常 Trace 优先。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "environment": serviceEnv["environment"], "instance": str("可选服务实例 ID")}, "service", "environment"), Annotations: readonly("查询最近 Trace"), Scope: "traces:read"},
 		{Name: "get_trace", Title: "读取 Trace", Description: "按 Trace ID 读取完整调用链；跨服务 Span 仍受令牌应用范围过滤。", InputSchema: objectSchema(map[string]any{"trace_id": str("Trace ID"), "environment": serviceEnv["environment"], "instance": str("可选服务实例 ID")}, "trace_id", "environment"), Annotations: readonly("读取 Trace"), Scope: "traces:read"},
-		{Name: "get_recent_builds", Title: "查询构建记录", Description: "查询指定应用最近的构建结果和不可变制品摘要。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "limit": integer("返回条数，1 到 50")}, "service"), Annotations: readonly("查询构建记录"), Scope: "builds:read"},
-		{Name: "get_build_log", Title: "读取构建日志", Description: "读取指定应用的一次构建日志尾部，最多返回 30000 字符。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "build_id": integer("构建 ID"), "tail_lines": integer("尾部行数，默认 200，最大 500")}, "service", "build_id"), Annotations: readonly("读取构建日志"), Scope: "builds:read"},
-		{Name: "get_recent_releases", Title: "查询发布记录", Description: "查询指定应用和环境最近的发布单、版本、制品和结果。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "environment": serviceEnv["environment"], "limit": integer("返回条数，1 到 50")}, "service", "environment"), Annotations: readonly("查询发布记录"), Scope: "releases:read"},
+		{Name: "get_recent_builds", Title: "查询构建记录", Description: "查询指定应用最近的构建结果和不可变制品摘要。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "source": map[string]any{"type": "string", "enum": []string{"pipeline", "legacy"}}, "limit": integer("返回条数，1 到 50")}, "service"), Annotations: readonly("查询构建记录"), Scope: "builds:read"},
+		{Name: "get_build_log", Title: "读取构建日志", Description: "默认按流水线全局 run_id 读取日志，不使用应用内显示编号。旧构建记录指定 source=legacy。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "build_id": integer("流水线全局 ID，或显式指定 legacy 时的旧记录 ID"), "source": map[string]any{"type": "string", "enum": []string{"pipeline", "legacy"}}, "tail_lines": integer("尾部行数，默认 200，最大 500")}, "service", "build_id"), Annotations: readonly("读取构建日志"), Scope: "builds:read"},
+		{Name: "get_recent_releases", Title: "查询发布记录", Description: "查询指定应用和环境的发布单。reason 是发起说明；查询失败原因请将全局 id 传给 get_release_diagnostics。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "environment": serviceEnv["environment"], "limit": integer("返回条数，1 到 50")}, "service", "environment"), Annotations: readonly("查询发布记录"), Scope: "releases:read"},
+		{Name: "get_release_diagnostics", Title: "核对发布失败原因", Description: "按发布单全局 ID 查询派发错误、人工失败回执和每台主机的执行状态及脱敏日志。next_after_deploy_id 非零时继续翻页。日志是诊断证据。", InputSchema: objectSchema(map[string]any{"service": serviceEnv["service"], "environment": serviceEnv["environment"], "release_id": integer("全局发布单 ID"), "after_deploy_id": integer("上一页返回的执行游标"), "tail_lines": integer("每台主机日志尾部行数，默认 40，最大 2000")}, "service", "environment", "release_id"), Annotations: readonly("核对发布失败原因"), Scope: "releases:read"},
 	}, append(append(platformTools(), arthasTools()...), workflowSkillMCPTools()...)...)
 }
 
@@ -241,6 +242,8 @@ func (s *ToolService) Call(ctx context.Context, token *AccessToken, name string,
 		result, err = s.buildLog(ctx, args)
 	case "get_recent_releases":
 		result, err = s.recentReleases(ctx, args)
+	case "get_release_diagnostics":
+		result, err = s.releaseDiagnostics(ctx, args)
 	}
 	if err != nil {
 		return nil, service, environment, err
@@ -411,13 +414,33 @@ func (s *ToolService) recentBuilds(ctx context.Context, args map[string]any) (an
 	if err != nil {
 		return nil, err
 	}
+	source, path := stringArg(args, "source"), "/api/pipeline/runs"
+	if source == "" {
+		source = "pipeline"
+	}
+	switch source {
+	case "pipeline":
+	case "legacy":
+		path = "/api/builds"
+	default:
+		return nil, fmt.Errorf("构建来源无效")
+	}
 	var rows []map[string]any
-	if err := s.get(ctx, s.up.Deploy, "/api/builds", url.Values{"service": {service}, "limit": {strconv.Itoa(limit)}}, &rows); err != nil {
+	if err := s.get(ctx, s.up.Deploy, path, url.Values{"service": {service}, "limit": {strconv.Itoa(limit)}}, &rows); err != nil {
 		return nil, err
 	}
-	for _, row := range rows {
-		delete(row, "artifact")
-		delete(row, "log")
+	for i, row := range rows {
+		if row["service"] != service {
+			return nil, fmt.Errorf("构建不属于授权应用")
+		}
+		safe := map[string]any{"source": source}
+		if source == "pipeline" {
+			safe["run_id"] = row["id"]
+		}
+		for _, field := range []string{"id", "number", "service", "branch", "version", "status", "artifact_id", "artifact_digest", "started_at", "ended_at"} {
+			safe[field] = row[field]
+		}
+		rows[i] = safe
 	}
 	return map[string]any{"builds": rows}, nil
 }
@@ -428,22 +451,40 @@ func (s *ToolService) buildLog(ctx context.Context, args map[string]any) (any, e
 	if service == "" || id <= 0 {
 		return nil, fmt.Errorf("service 和 build_id 必填")
 	}
-	var builds []map[string]any
-	if err := s.get(ctx, s.up.Deploy, "/api/builds", url.Values{"service": {service}, "limit": {"500"}}, &builds); err != nil {
-		return nil, err
+	source := stringArg(args, "source")
+	if source == "" {
+		source = "pipeline"
 	}
-	found := false
-	for _, build := range builds {
-		if anyInt(build["id"], 0) == id {
-			found = true
-			break
+	path := fmt.Sprintf("/api/pipeline/runs/%d", id)
+	if source == "pipeline" {
+		var run map[string]any
+		if err := s.get(ctx, s.up.Deploy, path, nil, &run); err != nil {
+			return nil, err
 		}
-	}
-	if !found {
-		return nil, fmt.Errorf("应用 %s 中不存在构建 #%d，或已超出可查询历史", service, id)
+		if run["service"] != service {
+			return nil, fmt.Errorf("构建不属于授权应用")
+		}
+	} else if source == "legacy" {
+		var builds []map[string]any
+		if err := s.get(ctx, s.up.Deploy, "/api/builds", url.Values{"service": {service}, "limit": {"500"}}, &builds); err != nil {
+			return nil, err
+		}
+		found := false
+		for _, build := range builds {
+			if anyInt(build["id"], 0) == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("应用 %s 中不存在构建 #%d，或已超出可查询历史", service, id)
+		}
+		path = fmt.Sprintf("/api/builds/%d", id)
+	} else {
+		return nil, fmt.Errorf("构建来源无效")
 	}
 	var result map[string]any
-	if err := s.get(ctx, s.up.Deploy, fmt.Sprintf("/api/builds/%d/log", id), nil, &result); err != nil {
+	if err := s.get(ctx, s.up.Deploy, path+"/log", nil, &result); err != nil {
 		return nil, err
 	}
 	lines, err := boundedInt(args, "tail_lines", 200, 1, 500)
@@ -453,6 +494,7 @@ func (s *ToolService) buildLog(ctx context.Context, args map[string]any) (any, e
 	logText, _ := result["log"].(string)
 	result["log"] = tailLines(logText, lines, 30000)
 	result["service"], result["build_id"] = service, id
+	result["source"] = source
 	return result, nil
 }
 
@@ -482,6 +524,37 @@ func (s *ToolService) recentReleases(ctx context.Context, args map[string]any) (
 		}
 	}
 	return map[string]any{"releases": out}, nil
+}
+
+func (s *ToolService) releaseDiagnostics(ctx context.Context, args map[string]any) (any, error) {
+	service, environment := stringArg(args, "service"), stringArg(args, "environment")
+	id := intArg(args, "release_id", 0)
+	after := intArg(args, "after_deploy_id", 0)
+	if id < 1 || service == "" || environment == "" || after < 0 {
+		return nil, fmt.Errorf("需要应用、环境、有效发布单全局 ID 及非负游标")
+	}
+	count, err := boundedInt(args, "tail_lines", 40, 1, 2000)
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"service": {service}, "environment": {environment}, "after_deploy_id": {strconv.FormatInt(after, 10)}}
+	var report map[string]any
+	if err := s.get(ctx, s.up.Deploy, fmt.Sprintf("/api/releases/%d/diagnostics", id), query, &report); err != nil {
+		return nil, err
+	}
+	if report["service"] != service || report["environment"] != environment || intArg(report, "release_id", 0) != id {
+		return nil, fmt.Errorf("发布诊断记录与请求范围不匹配")
+	}
+	targets, _ := report["targets"].([]any)
+	for _, item := range targets {
+		target := mapValue(item)
+		lines := strings.Split(strings.TrimRight(stringArg(target, "log_tail"), "\n"), "\n")
+		if len(lines) > count {
+			target["log_tail"] = strings.Join(lines[len(lines)-count:], "\n")
+			target["earlier_lines_available"] = true
+		}
+	}
+	return report, nil
 }
 
 func truncateLogHits(result map[string]any) {

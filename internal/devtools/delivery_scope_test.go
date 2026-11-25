@@ -10,7 +10,7 @@ import (
 )
 
 func TestMCPScopePreviewAndFrozenSelfConfirmation(t *testing.T) {
-	for _, kind := range []string{"success", "stale", "scope-changed", "disabled-after-preview", "permission-revoked", "wrong-person-admin", "approval", "verify", "foreign-work-item", "already-confirmed", "missing-permission", "protected"} {
+	for _, kind := range []string{"success", "delivery-initiator", "stale", "scope-changed", "disabled-after-preview", "permission-revoked", "wrong-person-admin", "approval", "verify", "foreign-work-item", "already-confirmed", "missing-permission", "protected"} {
 		t.Run(kind, func(t *testing.T) {
 			var writes atomic.Int32
 			revision := 1
@@ -24,13 +24,22 @@ func TestMCPScopePreviewAndFrozenSelfConfirmation(t *testing.T) {
 				reviews = []any{map[string]any{"actor": "alice", "approved": true, "work_item_ids": []any{24}}}
 			}
 			scopeTitle := "Frozen requirement"
+			runOwner := "someone-else"
+			people := []any{"alice", "bob"}
+			assignments := map[string]any{"alice": []any{24}, "bob": []any{25}}
+			source := "specified"
+			if kind == "delivery-initiator" {
+				runOwner, source = "alice", "delivery_initiator"
+				people = []any{"alice"}
+				assignments = map[string]any{"alice": []any{24}}
+			}
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
 				case "/api/environments":
 					json.NewEncoder(w).Encode([]any{map[string]any{"name": "test", "purpose": "test", "protected": protected}})
 				case "/api/delivery/runs/9":
-					json.NewEncoder(w).Encode(map[string]any{"id": 9, "owner": "someone-else", "revision": revision, "digest": "scope-digest", "status": "waiting_confirmation", "plan": map[string]any{"environment": map[string]any{"name": "test"}, "template": map[string]any{"workbench": "research"}, "preparation_request": map[string]any{"environment": "test"}, "scope": map[string]any{"work_items": []any{map[string]any{"id": 24, "title": scopeTitle}}}, "nodes": []any{map[string]any{"id": "scope", "kind": nodeKind, "approvers": []any{"alice", "bob"}, "assigned_work_items": map[string]any{"alice": []any{24}, "bob": []any{25}}}}}, "steps": []any{map[string]any{"node_id": "scope", "kind": nodeKind, "status": "reviewing", "reviews": reviews}}})
+					json.NewEncoder(w).Encode(map[string]any{"id": 9, "owner": runOwner, "revision": revision, "digest": "scope-digest", "status": "waiting_confirmation", "plan": map[string]any{"environment": map[string]any{"name": "test"}, "template": map[string]any{"workbench": "research"}, "preparation_request": map[string]any{"environment": "test"}, "scope": map[string]any{"work_items": []any{map[string]any{"id": 24, "title": scopeTitle}}}, "nodes": []any{map[string]any{"id": "scope", "kind": nodeKind, "assignee_source": source, "approvers": people, "assigned_work_items": assignments}}}, "steps": []any{map[string]any{"node_id": "scope", "kind": nodeKind, "status": "reviewing", "reviews": reviews}}})
 				case "/api/delivery/mcp/runs/9/confirm-scope":
 					var body map[string]any
 					json.NewDecoder(r.Body).Decode(&body)
@@ -96,7 +105,7 @@ func TestMCPScopePreviewAndFrozenSelfConfirmation(t *testing.T) {
 				tok.reviewers = `[]`
 			}
 			_, _, _, err = s.Call(context.Background(), tok, "confirm_platform_action", map[string]any{"confirmation_id": p["confirmation_id"], "confirm": true, "reason": "I confirm the shown scope"})
-			if kind != "success" {
+			if kind != "success" && kind != "delivery-initiator" {
 				if err == nil || writes.Load() != 0 {
 					t.Fatal("stale/revoked scope executed", kind, err, writes.Load())
 				}

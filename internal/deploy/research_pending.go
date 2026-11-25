@@ -110,7 +110,7 @@ func (s *Store) livePendingRelease(ctx context.Context, z *zentaoLegacy, c *Reso
 				intent = "yes"
 			}
 		}
-		candidates, err := s.WorkCandidates(WorkCandidateFilter{IDs: f.RegisteredIDs, Source: "zentao:" + c.Name, Delivery: delivery, ProductionOnly: productionOnly, WorkItemFilter: WorkItemFilter{Kind: "bug", ReleaseRequired: intent, Relation: f.Relation, RelationActor: f.RelationActor, Page: page, PageSize: 100}})
+		candidates, err := s.WorkCandidates(WorkCandidateFilter{IDs: f.RegisteredIDs, Source: "zentao:" + c.Name, Delivery: delivery, ProductionOnly: productionOnly, ExcludeManualRelease: productionOnly, WorkItemFilter: WorkItemFilter{Kind: "bug", ReleaseRequired: intent, Relation: f.Relation, RelationActor: f.RelationActor, Page: page, PageSize: 100}})
 		if err != nil {
 			return out, true, err
 		}

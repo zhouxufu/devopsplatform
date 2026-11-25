@@ -45,7 +45,7 @@ export function runSummary(run){
  const steps=run.steps||[],checks=steps.length?steps.flatMap(s=>s.result?.checks||[]):run.result?.checks||[]
  return {total:steps.length,passed:steps.filter(s=>s.status==='success').length,skipped:steps.filter(s=>s.status==='skipped').length,checks:checks.length,failedChecks:checks.filter(c=>!c.passed).length,firstFailure:steps.findIndex(s=>['failed','unknown','canceled'].includes(s.status))}
 }
-export const checkType=type=>({status:'HTTP 状态码',json:'JSON 字段',header:'响应头',contains:'正文包含',sse_count:'SSE 事件数',regex:'正文正则',json_regex:'字段正则',json_range:'数值范围',duration:'耗时上限',schema:'JSON Schema',sse_json:'SSE 字段',sse_contains:'SSE 数据包含'})[type]||type
+export const checkType=type=>({rpc_success:'RPC 调用成功',exception:'RPC 异常类型',status:'HTTP 状态码',json:'JSON 字段',header:'响应头',contains:'正文包含',sse_count:'SSE 事件数',regex:'正文正则',json_regex:'字段正则',json_range:'数值范围',duration:'耗时上限',schema:'JSON Schema',sse_json:'SSE 字段',sse_contains:'SSE 数据包含'})[type]||type
 export function sseSelection(events,index){
  if(!Number.isInteger(index)||!events[index])throw Error('SSE 事件不存在')
  const event=events[index].event||'message',count=events.slice(0,index+1).filter(e=>(e.event||'message')===event).length

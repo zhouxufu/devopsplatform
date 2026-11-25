@@ -70,9 +70,11 @@ type DeliveryRequest struct {
 	Reason            string            `json:"reason"`
 	Artifacts         map[string]int64  `json:"artifacts"`
 	// A run may override/add/remove nodes without changing the reusable template.
-	Nodes             []DeliveryNode `json:"nodes,omitempty"`
-	reviewerDirectory string
-	previewDrafts     bool // Set only by the read-only preview route, never from JSON.
+	Nodes              []DeliveryNode `json:"nodes,omitempty"`
+	changeDeploymentID string
+	publication        *deliveryPublication
+	reviewerDirectory  string
+	previewDrafts      bool // Set only by the read-only preview route, never from JSON.
 }
 type DeliveryService struct {
 	Service           string             `json:"service"`
@@ -81,6 +83,7 @@ type DeliveryService struct {
 	DestinationDigest string             `json:"destination_digest"`
 }
 type DeliveryPlan struct {
+	Checklist                 []ReleaseChecklistStep   `json:"checklist,omitempty"`
 	Scene                     string                   `json:"scene,omitempty"`
 	PreparationRunID          int64                    `json:"preparation_run_id,omitempty"`
 	PreparationRequest        *DeliveryRequest         `json:"preparation_request,omitempty"`
@@ -162,6 +165,7 @@ func deliverySchema(dialect string) []string {
 	}
 	queries := []string{
 		instanceOperationSchema,
+		`CREATE TABLE IF NOT EXISTS delivery_publications (id VARCHAR(64) PRIMARY KEY,run_id BIGINT NOT NULL UNIQUE,owner VARCHAR(191) NOT NULL,authority VARCHAR(8) NOT NULL,key_id VARCHAR(191) NOT NULL,environment VARCHAR(64) NOT NULL,digest VARCHAR(80) NOT NULL,expires_at BIGINT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS delivery_script_locks (host VARCHAR(191) PRIMARY KEY, run_id BIGINT NOT NULL, node_id VARCHAR(191) NOT NULL)`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS feature_branch_plans (id VARCHAR(64) PRIMARY KEY, document %s NOT NULL, revision BIGINT NOT NULL)`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS delivery_observations (observation_key VARCHAR(80) PRIMARY KEY, run_id BIGINT NOT NULL, document %s NOT NULL, revision BIGINT NOT NULL)`, doc),
@@ -388,6 +392,9 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	tpl, env := &draft.Template, s.GetEnvironment(req.Environment)
 	nodes := draft.Nodes
 	if req.Nodes != nil {
+		if err := validateChangeOrderGates(draft, req.Nodes); err != nil {
+			return nil, nil, err
+		}
 		if err := validateManualRecordOverrides(nodes, req.Nodes); err != nil {
 			return nil, nil, err
 		}
@@ -437,6 +444,16 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	}
 	p := &DeliveryPlan{RequestDigest: deliveryRequestDigest(req), StrategyKind: draft.StrategyKind, StrategyVersion: draft.StrategyVersion, PolicySnapshot: &draft.PolicySnapshot, PolicyDigest: draft.PolicyDigest, CodePreparationID: req.CodePreparationID, Template: *tpl, Environment: *env, Reason: strings.TrimSpace(req.Reason), Nodes: nodes, Services: []DeliveryService{}, Blockers: []string{}, Warnings: []string{}}
 	p.Scene, p.PreparationRunID = req.Scene, req.PreparationRunID
+	defer func() {
+		p.Checklist = releaseChecklist(p)
+		for _, step := range p.Checklist {
+			for _, item := range step.Items {
+				if item.Status == "blocked" && len(item.Prerequisites) > 0 {
+					p.Blockers = append(p.Blockers, fmt.Sprintf("变更 #%d：%s", item.ID, item.Reason))
+				}
+			}
+		}
+	}()
 	if tpl.Workbench != "" {
 		policy, err := s.workbenchPolicy(tpl.Workbench, env.Name)
 		if err != nil {
@@ -653,6 +670,10 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 		p.Warnings = append(p.Warnings, fmt.Sprintf("按目标环境将 %d 个编排节点拆分为 %d 个执行节点；顺序执行，不保证跨资源原子性。", len(nodes), len(expanded)))
 	}
 	nodes, p.Nodes, p.ResourceTargets = expanded, expanded, targets
+	if _, err := orderChangeNodes(nodes, p.Scope, false); err != nil {
+		p.Blockers = append(p.Blockers, err.Error())
+		return p, secrets, nil
+	}
 	allocated := map[string]int{}
 	sqlAllocated := map[int64]int{}
 	manualCount := 0
@@ -952,6 +973,9 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := checkChangeDeliveryOwner(tx, req, p); err != nil {
+		return nil, err
+	}
 	if err := lockArtifactReferences(tx, planArtifactIDs(p)...); err != nil {
 		return nil, err
 	}
@@ -999,6 +1023,16 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 			return nil, fmt.Errorf("请先关联版本制品，再重新预检")
 		}
 		if err != nil {
+			return nil, err
+		}
+	}
+	if req.changeDeploymentID != "" {
+		if _, err = tx.Exec(`INSERT INTO deploy_meta(key,value) VALUES(?,?)`, "change_delivery:"+req.changeDeploymentID, fmt.Sprint(run.ID)); err != nil {
+			return nil, err
+		}
+	}
+	if req.publication != nil {
+		if err = req.publication.insert(tx, run, nonce); err != nil {
 			return nil, err
 		}
 	}
@@ -1463,6 +1497,7 @@ func (s *Store) advanceDeliveryRunState(v *DeliveryRun, actor string, confirmMan
 }
 
 func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManager) {
+	registerPublicationRoutes(mux, st, manager)
 	registerDeliveryDeploymentRecoveryRoutes(mux, st, manager)
 	registerOperationRoutes(mux, st)
 	registerDeliveryExperienceRoutes(mux, st, manager)

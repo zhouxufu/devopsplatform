@@ -15,6 +15,7 @@ import (
 )
 
 type WorkLoopSpec struct {
+	DraftOnly     bool     `json:"draft_only,omitempty"`
 	WorkItemID    int64    `json:"work_item_id"`
 	Environment   string   `json:"environment"`
 	Applications  []string `json:"applications"`
@@ -61,23 +62,24 @@ type WorkLoopIntent struct {
 	Result json.RawMessage `json:"result,omitempty"`
 }
 type WorkLoop struct {
-	Authority      string              `json:"authority,omitempty"`
-	AuthorityKeyID string              `json:"authority_key_id,omitempty"`
-	Authorizations []WorkLoopGrant     `json:"authorizations,omitempty"`
-	ID             string              `json:"id"`
-	Owner          string              `json:"owner"`
-	Revision       int64               `json:"revision"`
-	Grant          WorkLoopGrant       `json:"grant"`
-	State          string              `json:"state"`
-	Stage          string              `json:"stage"`
-	Message        string              `json:"message"`
-	Paused         bool                `json:"paused"`
-	Revoked        bool                `json:"revoked"`
-	Claimant       string              `json:"claimant,omitempty"`
-	Iterations     []WorkLoopIteration `json:"iterations"`
-	Events         []WorkLoopEvent     `json:"events"`
-	Intent         *WorkLoopIntent     `json:"intent,omitempty"`
-	UpdatedAt      int64               `json:"updated_at"`
+	DraftReceipt   *DraftTrackingReceipt `json:"draft_receipt,omitempty"`
+	Authority      string                `json:"authority,omitempty"`
+	AuthorityKeyID string                `json:"authority_key_id,omitempty"`
+	Authorizations []WorkLoopGrant       `json:"authorizations,omitempty"`
+	ID             string                `json:"id"`
+	Owner          string                `json:"owner"`
+	Revision       int64                 `json:"revision"`
+	Grant          WorkLoopGrant         `json:"grant"`
+	State          string                `json:"state"`
+	Stage          string                `json:"stage"`
+	Message        string                `json:"message"`
+	Paused         bool                  `json:"paused"`
+	Revoked        bool                  `json:"revoked"`
+	Claimant       string                `json:"claimant,omitempty"`
+	Iterations     []WorkLoopIteration   `json:"iterations"`
+	Events         []WorkLoopEvent       `json:"events"`
+	Intent         *WorkLoopIntent       `json:"intent,omitempty"`
+	UpdatedAt      int64                 `json:"updated_at"`
 	raw            string
 }
 
@@ -185,6 +187,9 @@ func (s *Store) workLoopSource(ctx context.Context, w *WorkItem, actor string, s
 func (s *Store) previewWorkLoop(ctx context.Context, spec WorkLoopSpec, actor string) (*WorkLoopGrant, error) {
 	if actor == "" || actor == "local" {
 		return nil, fmt.Errorf("请登录本人账号后授权任务")
+	}
+	if spec.DraftOnly {
+		return s.previewDraftTracking(ctx, spec, actor)
 	}
 	if spec.ExpiresAt <= time.Now().Unix() || spec.ExpiresAt > time.Now().Add(7*24*time.Hour).Unix() || spec.MaxIterations < 1 || spec.MaxIterations > 10 {
 		return nil, fmt.Errorf("授权期限最多 7 天，开发轮次为 1–10")

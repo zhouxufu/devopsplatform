@@ -3165,6 +3165,66 @@ fixture.html 为临时组件验收页备份，测试后已从 web/ 移除。只�
 - 最终核验：源码清单 SHA-256 与已验收版本一致；7 项交互、独立忽略提交与 16 个布局场景均有结构化回执；Ego TaskSpace 19 已结束，20539 临时服务已停止并核对无监听。本轮未发布到测试环境。
 
 
+## 2026-11-19 工作项待上线人工标记
+
+- 按截图场景，在“与我相关的待上线”行内直接提供“标记已上线”，确认后移出待上线；全部列表显示“已上线（人工）”，更多菜单可撤销，详情基本信息/活动保留操作人、时间、说明。
+- 新增独立人工台账及数据库迁移清单；台账/活动同事务，修订CAS、相同请求去重、重启保留。相关成员/管理员权限及来源可见性校验继续生效；标记不改来源状态、release_required或successful_delivery，不触发业务执行。人工标记持久保留直到撤销，完整生产执行证据筛选不受该字段影响。
+- 后端定向race通过（26.961s），完整 `go test -race -ldflags=-linkmode=external ./... -timeout=12m` 通过（deploy408.495s）；前端361/361、生产UI构建/官方组件/表格/隔离样式检查通过，embed同步；最终Linux amd64全部cmd编译通过。设计检测无发现。
+- 隔离浏览器使用mock来源和真实临时平台数据库：标记1→0、全部列表可见且原来源closed、撤销0→1、标记/撤销取消不写、401与409保留说明。PC1440列表主操作直接可见；390px布局文档宽度390，深色计算前景/背景正确。主题/视口切换时截图会捕捉过渡，不能以早期过渡截图宣称颜色验收；最终状态另行读取计算样式。夹具已stop、Go正常退出。
+- 边界：未部署、未操作截图中的真实Bug，未做真实MySQL升级/来源权限集成；全量后端使用其编译时快照，之后同步的生成资源由最终Linux构建验证。共享工作区另有同期工作流改动，不计为本功能。证据 `artifacts/work-item-release-mark-20261119/` 中 verification.json、scoped.patch、source-manifest.json、日志和隔离回执。
+
+## 2026-11-19 多人交付范围确认
+
+- 根因：MCP 只读查询准备单 #13，发起人是 yuanliwei，所选两条变更登记人为 zhouxufu，原模板 `change_submitters` 将确认分配给登记人。此次读取时确认已完成（revision=2、status=approved），代码节点 pending；没有代签或推进原单。
+- 新增 `delivery_initiator` 来源，按可信发起人冻结确认身份；允许不同有交付权限的成员各自使用团队已有变更，不转移变更作者。仅非受保护 development/test；生产和受保护环境拒绝使用此规则。指定人／工作项范围／摘要／CAS／审计和正式审批限制保持不变。
+- 页面新增“本次交付发起人（开发／测试）”，新建人工范围节点默认使用；旧配置不自动迁移。MCP 使用原确认接口，已授权 work_loop 支持新来源的本人确认，工作项及变更选择权限不扩大。其他成员不能据此接管已冻结任务；同应用环境发布互斥保持。
+- 定向 race 覆盖两名发起人复用团队内容、独立变更及工作项、all/any、停用／空身份／生产／受保护拒绝、MCP 正式审批隔离、旧修订重放、自动跟进。ToolService 预览确认与原权限／身份／摘要负例通过。完整后台 race 通过（deploy 414.993s、devtools 14.617s、platform 27.413s）；361 项前端测试及最终生产构建通过。
+- Ego 隔离真实 DeliveryNodeEditor：新增默认值、提交人规则往返切换和说明草稿保留；1440px 浅色、1280px 深色无横向溢出。深色最终截图为初始化后重载结果；早期热更新使页面重载和主题过渡截帧不计最终证据。TaskSpace 27 已结束，临时 Vite 19986 已停止。
+- 证据：`artifacts/collaborative-scope-20261119/`。本轮未部署、未修改线上模板或绑定、未执行业务合并／构建／发布／SQL／Nacos。部署后需明确切换开发／测试流程；已有在途任务应先完成或正式终止，不能改写原确认人解除阻塞。
+
+
+## 2026-11-19 全部待发布改动更新测试环境（已完成）
+
+- 测试入口 192.168.0.32:9800；完成时间 2026-11-19T11:42:47+08:00。发布冻结时全部 26 个手写变化文件，23 个实现／测试文件与先前隔离验收源码逐项匹配；五个运行模块和三个迁移工具均更新，回执 `updated`。按用户明确要求未备份。
+- 完整候选 Go race 通过（deploy 401.994s）、361/361 前端测试、生产 UI 构建及组件／表格／隔离样式检查通过，8 个 Linux amd64 程序构建通过。冻结构建源码摘要一致，原功能隔离浏览器证据沿用其逐文件匹配的验收版本。
+- 上线后独立回读：外部健康及首页成功，5 个实际进程与 8 个落盘文件摘要一致，完整 SHA256SUMS 通过；research_release_marks 已初始化，原接口测试元数据摘要不变。配置／加密 key 文件摘要不变，VictoriaLogs 原 PID／摘要不变，未更新业务 Agent。
+- 发布窗口等待已有真实构建及发布结束，未取消或推进原任务。旧交付父单 #14 无租约且协调器 idle，子发布 #31 与精确关联主机实例已结束、状态 failed；维护准入只读识别其等待／失败步骤，不修改任务。新增 32 项分类检查，运行／超时／中断／未知实例继续阻止该分类，全局持久活动计数仍须为 0。早期脚本函数顺序错误与多次活动拦截均发生在停服前，已留日志；实际切换仅发起一次。
+- 工作项人工“标记已上线／撤销”及多人交付发起人确认规则已包含；未自动改线上工作流模板、绑定或旧冻结确认人。开发／测试新规则需由业务明确配置，不能改写在途任务身份。
+- 验收边界：本轮发布后只做健康／版本／完整性／元数据核对，未触发真实业务构建、发布、来源 Bug、SQL、Nacos 或 Agent 操作；不将基础健康当作真实业务集成验收。
+- 证据：`artifacts/all-pending-publish-20261119/README.md`、`summary.json`、`deployment.json`、`remote-after.json`、`candidate-checks.json`、`prior-validation-match.json`、`terminal-child-admission-tests.json`。
+
+
+## 2026-11-19 Agent 全部应用（*）与重新接入设置复用（测试环境已更新）
+
+- 按用户明确授权，应用范围新增 `*`：与指定应用互斥，保存字面规则，匹配当前主机、当前环境已绑定的托管 Java 应用；应用发现、自动唯一 Agent 匹配和发布前校验共用同一规则。旧授权不自动扩为全部应用。目录仍具体冻结和由 Agent 本地独立验证，新增目录在重新接入时自动解析进预览。
+- 页面重新打开保留原应用范围／回连地址／执行用户和组；预览接口省略字段时也复用，显式空应用列表拒绝。新预览单独保留旧凭据已生效的目录，未确认的新目录、重复预览均不能提前放行；旧令牌继续有效到新 worker 回连证明通过。活动／待核对任务、过期预览、原主机身份和配置漂移保护保持。
+- 定向 race（5.889s）及最终完整后台 `go test -race -ldflags=-linkmode=external ./... -timeout=12m` 通过（deploy 388.346s）；最终 Linux deploy 编译通过。361 项前端测试和生产 UI 构建／组件／表格／样式检查通过；最后后台保护修改后的前端和嵌入资源逐文件匹配原已验收构建，没有把旧后台候选当作最终回归。
+- Ego 本地隔离真实组件 8 项交互通过：应用与 `*` 互斥切换、预览返回保留、保存后重新打开恢复、401／409 保留输入、重复点击只提交一次、确认持久保存 `*`。1440 浅色／390 深色无文档横向溢出；最终截图等动画和提示结束后采集，同次调用设置并核对视口。TaskSpace 33 已结束，19987 临时 Vite 服务已正常停止。
+- 测试期间共享工作区出现其他接入／资源页面改动；保留原文件并排除在此次冻结候选之外。最初全工作区一致性检查因此阻止发布，确认候选相对已部署基准只含本轮7个文件和已有验收文档后，按范围核对并保留漂移记录。线上基准和所有候选摘要仍严格核验。
+- 发布完成 2026-11-19T12:39:16+08:00，192.168.0.32:9800，回执 `updated`，仅替换 deploy 模块；依用户要求未备份。全部落盘文件／5个运行进程摘要及完整 SHA256SUMS、外部健康和首页检查通过；原配置／加密 key、接口测试元数据不变，VictoriaLogs 原 PID／摘要不变。
+- 边界：没有更新 192.168.0.3 或其他业务机器 Agent、没有启用真实授权或触发业务发布；管理员仍需自行选择并确认 `*`。不把基础健康当作真实远程接入／业务发布验收。早期测试夹具缺少主机／完整环境、浏览器错误选择器和过渡截图的问题已修正，仅最终结构化证据记为通过。
+- 证据：`artifacts/agent-wildcard-20261119/`；最终冻结、回归与发布：`artifacts/agent-wildcard-final-publish-20261119/README.md`、`summary.json`、`deployment.json`、`remote-after.json`。
+
+
+## 2026-11-19 Agent 安装／升级入口与配置保护修复
+
+- 实测问题：资源中心安装入口直接执行或误走配置下发；日志页持久 Agent ID 无法对应主机；SSH 检测阻塞打开编辑器，读取错误关闭窗口。后端生成的采集配置携带空 deployment 节点，触发原部署策略覆盖保护；配置校验失败前已替换正式程序。
+- 修复：安装／升级统一先打开编辑器并保留明确意图；唯一当前身份解析主机，拒绝歧义及历史别名重定向；SSH 状态读取不阻塞配置，读失败保留窗口、禁写并可重试。生成采集配置省略空部署策略，保留原部署授权防护；暂存程序先合并／核对配置，再替换与重启。
+- 已验证：配置生成及重复更新、启用／禁用部署策略保留、旧 UID／授权覆盖防护、脚本替换顺序；前端 363 项测试与生产构建；本地实际 Vue 页面验证安装／升级、配置下发、持久身份入口、读错重试、失败后保留已保存配置、同步重复点击去重、关闭慢读后重开。1440px 明色及 1280px 暗色无页面横向溢出并已目检。
+- 全量回归：首次业务包通过，但另一任务的 before 源码快照缺少模块边界导致总体失败；已隔离该快照并重跑。最终完整 race 通过（deploy 377.531s、devtools 12.077s），回执见 artifacts/agent-install-repair-20261119/verification.json。
+- 证据：artifacts/agent-install-repair-20261119/。没有真实 SSH 安装、systemd 重启、业务机器升级或环境发布。隔离夹具与浏览器会话已清理。
+
+
+## 2026-11-19 全部完成改动统一更新测试环境（已完成）
+
+- 用户要求“都改完后更新到测试环境”；合并上一轮已上线的 Agent `*` 应用范围和重新接入设置复用，以及剩余安装／升级／持久主机身份／配置错误恢复修复。冻结范围8个剩余实现、测试和夹具文件，前两轮15个已验收文件与最终候选逐项匹配；没有遗漏当时其他已完成源码改动。
+- 最终冻结候选完整 Go race 通过（deploy 378.749s）、363项前端测试及生产构建／组件／表格／隔离资源检查通过；5个运行模块、3个迁移工具及amd64／arm64 Agent包，共10个Linux编译目标通过。构建后源摘要一致；两轮隔离交互证据按源码匹配复用，未重复触发真实机器安装。
+- 部署完成 2026-11-19T12:49:57+08:00，192.168.0.32:9800，回执 updated。替换8个程序、2个供安装的Agent包及其SHA256SUMS，共11个文件；未运行迁移工具。按用户要求未备份。唯一systemd更新请求，切换前活动执行检查与线上基准摘要检查通过。
+- 部署后外部健康／首页成功，所有落盘文件、5个实际运行进程、完整包清单及安装包嵌套清单校验通过。原配置／加密key和接口测试元数据不变；VictoriaLogs原PID／摘要不变。
+- 验收边界：没有向业务主机安装／升级／启用Agent，没有触发真实业务构建／部署／SQL／Nacos或来源Bug写入；供安装包更新不代表业务机器运行版本已更新。已有应用授权未自动扩为*。
+- 证据：`artifacts/remaining-completed-publish-20261119/README.md`、`summary.json`、`deployment.json`、`remote-after.json`、`candidate-checks.json`、`prior-validation-match.json`、`working-source-readback.json`。前序开发记录中的“未部署”保留原时点含义，以本条统一发布结果为准。
+
+
 ## 2026-11-19 · 日志采集项删除入口
 
 - 用户实操问题：配置错误的采集项无法从页面删除。代码确认根因：删除按钮放在官方 AccordionContent 不支持的 extra 插槽，未渲染；原处理函数又阻止删除最后一项。
@@ -3173,3 +3233,267 @@ fixture.html 为临时组件验收页备份，测试后已从 web/ 移除。只�
 - 布局：默认、紧凑、分层、柔和四主题各 1440px 明色和 390px 暗色，大字体共 8 场景，按钮无嵌套且位于面板内，无文档横向溢出，桌面和手机截图已目检。机械样式检测无告警。
 - 验证过程：初次自动化“关闭”同时匹配右上角和页脚两个按钮，改为明确页脚选择器后通过；独立页面不接收 iframe 专用主题同步消息，随后用主题模块设置并核验实际主题/暗色/字号，8 场景已更正重跑。
 - 边界：本次未更新测试服、未操作真实采集配置/Agent/业务机器；后端未改动，未重跑全量 race，不据此前端验证宣称完整发布就绪。证据：artifacts/agent-collection-delete-20261119/。
+
+
+## 2026-11-19 · 日志查询 HTTP 400 内存修复（已部署）
+
+- 实测根因：原故障时间窗对全部正文执行 event_key 分组 row_any 聚合，超过 VictoriaLogs 102 MB 内存限额。不是采集连接或查询语法错误。
+- 修复：每次最多取 32 条物理记录，按不可变事件身份去重并推进原时间／序号游标；保留冻结高水位、分页作用域及回放队列语义。整次请求沿用超时并限制累计响应，异常不返回部分成功，内存错误使用脱敏中文提示。
+- 验证：真实临时 VictoriaLogs 128 MiB 限额下 6000 条约 33 KB 日志，旧算法超限、新查询和分页成功；跨批重复投递、同时间戳、并发插入和失败恢复通过。隔离真实页面查询／续页共 330 条且无重复，短语筛选、离线保留旧结果并标明失败、恢复重查通过。夹具退出与浏览器清理完成。
+- 冻结候选：完整 Go race 通过（deploy 407.971s、server 9.836s），363 项前端测试与生产构建通过；Linux logserver 构建和源摘要核对通过。
+- 部署：2026-11-19T13:16:39+08:00，192.168.0.32:9800，仅替换 logserver。切换前活动执行及基线校验通过；切换后服务健康、实际运行进程摘要、完整包清单通过；配置、接口测试元数据与 VictoriaLogs 原 PID／摘要不变。遵照用户要求未备份、未执行发布后业务验收。
+- 边界：未删除日志、调整存储内存配置、升级业务 Agent、执行真实业务构建／发布。共享工作区另一任务的 Agent 采集项删除 UI 不包含于本日志补丁。
+- 证据：artifacts/log-query-memory-20261119/verification.json、browser.json、search-recovered.png；artifacts/log-query-memory-publish-20261119/deployment.json、remote-after.json、candidate-checks.json。
+
+
+## 2026-11-19 · 按环境选择 Java / Docker 发布
+
+- 用户约束：同应用允许开发环境使用 JAR、测试环境使用 Docker；相同部署方式的应用保持原默认，不增加配置层级或必填项。
+- 实现：环境编辑器沿用现有“发布方式”选择器。Java 镜像应用可选择 Java 进程（JAR）或原 Docker 自动发布；普通 JAR、静态、整包及无 Java 输出的镜像应用保留原菜单默认。模式切换仅在本次编辑器内保存各自目录、启停、检查及运行配置草稿，Docker 挂载与 Agent 通道不会混入新 Java 配置；主机和环境范围保留。
+- 后端：按环境 Driver 判定所需制品。镜像应用的 JAR 必须来自原成功构建、具有持久化摘要/父镜像关联；保持原镜像为主制品，不修改应用公共构建类型。统一交付、一次授权构建发布、独立发布复用环境制品选择；等待中的流水线续接也改为选择该环境的输出，并在认领前检查完成及环境构建契约。未生成所需输出则阻止，不能转换制品或信任展示元数据。
+- 发布界面：按目标环境筛选 JAR/镜像；切换到不兼容环境清空原选择，不静默替换成另一版本。原审批、冻结目标、构建方案、制品摘要、运行变量与去重保护继续执行。
+- 自动验证：全量后端 race 通过，17 个有测试包（deploy 394.706s）；367 项前端测试全部通过；生产前端构建及组件/表格/样式/编辑器资源检查通过。新增后端用例覆盖环境间制品选择、冻结 JAR 发布单、环境构建方案、伪造关联/摘要/来源/作业、未完成/失败构建、丢失关联及未认领错误任务；前端用例覆盖普通菜单不变、Java 镜像的两种选择、模式草稿隔离及制品筛选。
+- 浏览器真实组件隔离验证：开发环境由 Docker 切换 Java、目录和就绪端口来回切换保留、401 保存失败保留草稿、显式重试后仅 dev 变为 Java/test 仍为 Docker、开发只显示 JAR、测试只显示镜像、切换环境清空不兼容选择。记录的两个 PUT 均为本地模拟配置保存（一次 401、一次成功）；无构建或发布请求。四主题各 1440px 明色/390px 暗色、大字体共 8 场景无文档横向溢出，菜单和按钮在视口内，截图已目检。
+- 测试过程修正：最初错误等待 dialog，实际环境编辑器是内嵌页面；核对当前页面后改为现有配置区域检查。成功通知短时覆盖右上角按钮，等待实际可点击后继续，未绕过遮挡执行发布。没有将这些自动化等待问题当作功能通过依据。
+- 边界：未修改真实应用环境、未构建业务项目、未执行 SSH/Agent/容器/SAE 发布，未更新测试服；真实部署仍需按对应环境的现有资源和审批验证。前端产物仅 web/dist，未替换仓库中的共享嵌入产物。证据：artifacts/environment-deployment-modes-20261119/。
+
+
+## 2026-11-19 · 环境发布方式与采集项删除发布到测试服
+
+- 用户追加授权后已更新 `192.168.0.32:9800`，补丁 `environment-modes-20261119`，完成于 2026-11-19T14:54:26+08:00。平台壳、deploy、devtools、logserver、monitor 已更新，两个功能均已上线。
+- 候选以实际线上摘要匹配的最新两批源码为基准，保留 Agent 接入及日志查询内存修复。最初较旧基准被摘要检查拒绝后更正，未据此覆盖线上新补丁。仅叠加本轮环境发布与采集项删除的 10 个文件/验收记录，重新同步嵌入资源并冻结。
+- 最终候选全量 Go race（17 包）、367 项前端测试、生产构建和 5 个 Linux 程序编译全部通过。唯一切换任务成功，切换前无活动执行，历史父单按精确已结束子实例及空闲租约核验；未恢复、重放或创建业务任务。
+- 发布后服务健康、运行进程及落盘摘要、完整校验清单、外部首页和两个功能的实际服务 JS 摘要均通过。配置/加密 key、原接口测试元数据和 VictoriaLogs PID/摘要保持不变。没有更新业务 Agent 或改变应用部署方式，未执行真实业务构建/发布；按先前要求未生成备份。
+- 回执与校验：`artifacts/environment-modes-publish-20261119/`。本次发布状态替代此前“尚未更新测试服”的阶段记录。
+
+
+## 2026-11-19 · 住房宝开发实际 Jpom 日志路径修正
+
+- 用户授权后已为 dev / 住房宝开发（192.168.0.3）的 gateway、house、admin、auth、broker、statistics 六项增加各自进程标准输出的 Jpom 日志路径。房源采用已确认成功启动实例的 test_copy 同名路径，未据目录名猜环境。现有其他路径、应用 ID、多行正则及运行参数保留。
+- 平台登录过期返回 401 后由用户恢复登录，以 zhouxufu 会话保存并且只下发一次；回读已同步，源排查窗口确认 Agent 打开六个文件。没有调用 Agent 安装/升级或业务构建/发布接口。
+- 唯一一次二手列表请求返回 HTTP 200，响应 Trace `logverify-2b726b6320f84529bd7663c3d9d9db49` 已由 MCP 在网关新增路径命中；该次请求的房源实例尚未确定，.3 源文件及房源查询没有该 Trace。未把 HTTP 200 或单侧日志当作业务/全链路通过。
+- 被动复用已有请求 Trace `07221275472888051589120`，MCP 在网关与 .3 房源新增路径均查到，确认两条采集链路正常；未另发请求。.163 无既有受信 SSH 连接，未修改其配置；二手请求具体路由归属仍待跟进。
+- 配置/下发/MCP/源核对证据：`artifacts/zfb-log-paths-20261119/`，完成于 2026-11-19T15:19:04.293711+08:00。本次无源码变更，不需要新增实现测试。
+
+### 2026-11-20 日志搜索筛选区域合并（本地隔离验证）
+
+- 实测问题：应用／环境／时间在壳顶部，数据源／机器／级别／关键词在日志页标题下，形成两个独立筛选区域。日志搜索现将全部条件放到标题下同一个表单区域；仅搜索路由隐藏壳筛选，实时日志等原入口保留。
+- 保留契约：应用目录仍由壳提供，已归档应用不由历史日志重新加入；每个工作区独立保存应用、环境和时间；关键词与 iframe 原实例在标签往返后保留。双向同步校验时间结构，不接收任意附带字段；壳回显不会再次触发相同查询。独立日志入口也可选择环境。
+- 验证：前端完整测试 370/370 通过，生产 UI 构建和组件／表格／迁移样式／编辑器资源检查通过；4 种主题 × 明暗 × 1440/390 共 16 个大字号场景，无页面横向溢出、筛选控件越界或重复壳筛选。日期时间浮层可操作，修改时间只新增一次查询。切至个人工作台／实时日志再返回，原条件、关键词与 iframe 保留；实时日志仍显示一组壳上下文。独立入口应用／环境各一个。模拟 401 后壳出现重新登录提示，关键词保留，查询失败状态不冒充新结果。
+- 证据：`artifacts/log-filter-layout-20261120/` 下的 `frontend-tests.log`、`build.log`、`browser-layout.json`、`browser-interactions.json`、`browser-final.json`、`fixture-state.json` 和截图；隔离服务写操作 0。设计检测无确定性发现。
+- 边界：本轮仅前端布局和工作区消息，未改采集配置、下发 Agent 或部署测试服。未重跑后端 race 全集，未验证真实 VictoriaLogs／外部日志插件接口；不据此宣称整轮部署就绪。
+
+- 2026-11-20 测试服更新回执：以已安装的 environment-modes 基线隔离加入本轮 5 个源码文件和验收记录；370 项前端测试、后端 race 全部 17 个有测试包、生产构建及 5 个 Linux 程序编译通过。测试服 192.168.0.32:9800 已切换，进程／文件摘要、健康检查及壳与日志入口 38 个静态资源摘要核对通过；配置、VictoriaLogs 与接口测试元数据保持原值，未触发业务执行或更新业务 Agent。证据：`artifacts/log-filter-publish-20261120/summary.json`、`deployment.json`、`remote-after.json`、`served-features.json`。未在真实业务页面执行日志查询或业务请求。
+
+### 2026-11-20 明确启动拒绝不再滞留待核对（开发中）
+
+- 已确认问题：estate-bus/test 发布单全局 ID 41（应用内 #14）因 4010 端口占用未启动新进程，旧脚本退出 2 被当作未知；原 PID 缺失又导致只读核对无法结束。
+- 修正：先做只读端口预检；启动前明确拒绝使用独立退出码及按版本持久回执，SSH／Agent 均收敛为失败，不启动回滚或停止占用端口的其他进程。旧 SSH 记录仍先验证原目录归属、版本链接、制品及锁归属；PID 缺失时再完整检查本次 JVM／启动器，证据完整且均不在才判失败。缺目录／无法读取进程、仍有启动器、PID/身份冲突及断连继续保护原执行，不能据超时重放。
+- 针对性 race 验证已通过：真实占用本机隔离端口且不调用 Java；拒绝回执／冲突 PID；未接收启动请求时失败与已派发但未知时保留保护；新单及历史单只读核对收敛；Agent 独立 worker 拒绝后的失败与不回滚；原超时、断连、回滚与去重用例。首轮新测试曾将获得锁误认为释放锁、以及在终态回执落盘后立即检查异步释放锁，测试判定已修正；生产保护未为通过测试被放宽。
+- 证据：`artifacts/java-start-refusal-20261120/targeted.log`、`recovery-tests.log`。本轮尚未部署、未改发布单状态、未停止或重发业务进程；后续完整回归结果另记。
+- 完整回归完成：17 个有测试的后端包 race 通过，前端 370/370 与生产构建通过，含 logagent 在内 6 个 Linux 程序编译通过。候选基于测试服已安装的日志筛选版本隔离生成，仅加入本轮 11 个源码／验收文件，冻结源与范围校验一致。
+- 对业务主机 192.168.0.8 执行了新探测代码的只读预演：目录／锁归属、current、JAR 摘要与平台原部署一致；新代码完整扫描后返回 20（原版本无进程、无活动启动器），证明 #14 可判失败。此次未释放远端锁、未写平台状态、未停止占用 4010 的进程，也未重新发布。证据：`remote-probe-result.json`、`remote-evidence.json`；尚未更新测试服，Agent 新出口的完整恢复行为需更新 Agent 后生效，新增端口预检步骤本身兼容旧 Agent 的普通失败契约。
+
+- 2026-11-20 测试服已更新本修复：仅替换 deploy 程序和 amd64/arm64 Agent 安装下载包，运行摘要、安装包校验、健康、配置、VictoriaLogs 和接口测试元数据核对通过。现有业务 Agent 未升级。原 estate-bus/test 发布 #14（全局 41）经真实管理员会话调用原 recheck 接口，从 needs_review 收敛为 failed（失败 1/1），没有新发布单，应用环境无活动发布占位。4010 占用进程未停止。
+- 更新前检查最初检测到 service_deployment=1；只读核对为袁立伟的原任务在 release 阶段观察原发布 40，无执行租约，子实例已暂停自动核对。仅对该冻结身份、原应用/环境/制品和等待原子实例的情形设精确更新准入，其他活动计数必须为 0；20 个正反例通过。原任务未取消，发布 40 状态与归属未改变。证据：`artifacts/java-refusal-publish-20261120/summary.json`、`deployment.json`、`remote-after.json`、`original-release-result.json`、`release-reservation-check.json`、`waiting-service-guard-tests.json`。已删除本次远端上传载荷，保留回执与运行文件。
+
+### 2026-11-23 开发／测试 Jpom 兼容覆盖发布（开发中）
+
+- 用户选择：不新增跨平台锁，允许覆盖并以人工检查兜底。新增可选 Jpom 兼容方式，普通平台托管 JAR 保持原表单和行为；兼容方式通过 SSH、按原 Jpom 项目 ID 与 basedir 识别实例，覆盖原同名 JAR，不自动回滚。失败表示发布流程未完成，不以该状态断言 JVM 已退出。
+- 只读现场证据：estate-bus/test 的 Jpom 原进程 PID 10885，`-DJpom.application=estate-bus`、`-DJpom.basedir=/home/work/business/optimize/bus/jar`，JAR 为 `service-bus-hzfc-0.0.1.jar`，工作目录相同；官方 Jpom JvmUtil 的标识协议与现场一致。证据：`artifacts/jpom-shared-runtime-20261123/bus-test-runtime.json` 与保存的官方源码；没有停服务或覆盖业务文件。
+- 针对性 race 验证通过：生成脚本识别并停止隔离的旧 Jpom 标识进程、新启动使用同一协议；不同 basedir 的同名项目未被停止，多实例歧义拒绝操作，参数保持字面值。覆盖只替换命名 JAR，上传／停止／替换／启动错误均无自动回滚或重发，未出现 flock／共享目录锁。配置与执行入口均限制非受保护开发／测试，Agent 通道拒绝静默接入。
+- 前端新增模式仅在对应环境可选，原运行参数保留，切换兼容模式明确使用 SSH。字段校验可定位原项目 ID／JAR 文件名／日志路径；其余环境和默认托管模式不增加必填项。后续完整回归和浏览器结果另记。
+
+- 最终页面验收：373/373 前端测试与生产构建通过；4 种主题 × 明暗 × 1440/390 共 16 个大字号场景通过，新增字段和底部按钮无横向越界。手机环境分区标签使用既有横向滚动，未把屏外标签误算为表单溢出。桌面新增字段已改为跨父网格整行，内部双列／手机单列。
+- 实际隔离交互：缺少项目 ID 时阻止保存并在按钮恢复后定位错误字段；切换分区保留 JVM 参数；只保存一次测试环境配置，重新打开值一致；修改后取消出现离开保护，确认放弃不写配置；生产模式选项禁用，生产目标未改变。未改通用 OptionPicker；自动化需在实际输入框派发 Escape 关闭浮层后操作，初次等待条件和隐藏节点匹配失败按当前页面恢复，未作为业务通过证据。
+- 浏览器证据：`browser-layout.json`、`browser-interactions.json`、`editor-*-*.png`；只有内存隔离测试环境的 1 次配置写入，无业务构建／发布。TaskSpace 22 已结束，隔离服务已停止。真实业务配置未保存、JAR 未覆盖、进程未重启，尚未更新测试服。bus/test 配置建议另存 `bus-test-configuration-plan.json`；dev 及其他应用原 JAR 文件名未逐个核实，不猜填。
+- 验证阶段先前一次完整流水线由人工中断，保留 `backend-race-cancelled.log`，不能算通过；最终完整后端结果另记。最终前端另修正保存后的错误焦点时序，使用最终页面完成上述浏览器验收和前端测试／生产构建；隔离后端候选与最终全部本轮 Go 源码逐文件相同，该 UI 焦点调整不修改后端代码。
+- 完整后端 race 最终通过（17 个有测试包，deploy 包 480.769s），6 个 Linux 程序编译通过。最终前端 373/373、生产构建通过。没有执行真实 Jpom→DevOps→Jpom 往返发布，官方协议与隔离进程用例不冒充现场发布验收。最终汇总为 `artifacts/jpom-shared-runtime-20261123/verification.json`。
+
+### 2026-11-23 Jpom 启动方式只读自动识别（本地实现）
+
+- 用户要求自动判断兼容方式。编辑已有的迁移目录／原 Jpom 标识／旧自定义 JAR 环境时自动检测，唯一匹配后将启动方式、原目录、项目 ID、同名 JAR、Java 版本／目录、工作目录、JVM／应用参数和控制台日志填入当前草稿；保存仍沿用原环境配置入口。新建应用与普通托管目录不自动探测；明确手动选择记录 `java_detection=manual`，后续打开保留该选择，仍可主动重新识别。
+- 新增管理员只读检测接口，只接受登记应用、非受保护开发／测试环境和当前环境登记主机／主机组。迁移目录只按精确 `.devopsplatform/<service>` 后缀及已保存原目录解析；进程必须同时匹配 Jpom 项目标识与 basedir，并核对实际 JAR、cwd、JDK release 和 fd/1，不以端口占用／显示名猜归属。所有目标主机必须得到唯一且一致的配置，才返回候选；进程资料缺失、SSH 不可读、多实例、多机差异及明显含密码／令牌的参数均保留原配置并提示人工核对。不读取进程环境、不运行 Java/Jpom 命令，不保存检测结果或触发构建／发布。
+- 后端针对性 race 通过：真实隔离文件／软链接上的检测脚本只读行为、原文件未变、字面值路径、过滤其他项目、协议截断／畸形、敏感参数不进入返回值、不同主机一致性、未保存目标、权限与跨环境保护。首轮编译使用了 api.go 内部局部帮助函数，已改为现有 delivery 帮助函数并重新通过，不放宽权限。
+- 浏览器：自动识别时配置写入 0；实际保存一次后重新打开保留字段，取消修改有离开保护且无额外写入；多实例／401／未发现／资料不完整时保留手改草稿；检测期间修改字段，延迟响应被丢弃。受保护生产无检测入口，生产目标未变。最终收窄自动探测范围后再次验证：迁移目录仍自动识别，用户改回托管并保存后再打开不探测、不改回 Jpom。两个独立内存 fixture 轮次各 1 次测试环境配置保存，无业务写入。
+- 最终前端全量 377/377 和生产构建通过；4 主题 × 明暗 × 1440/390 共 16 个大字号布局场景无页面横向溢出或新增字段／按钮越界，既有环境分区标签保持横向滚动。设计检测无确定性发现。最终范围收窄只改自动触发条件及相应前端测试，未改变布局或本轮 Go 源码；最终页面另完成手动选择保留验证。浏览器证据 `artifacts/jpom-auto-detection-20261123/browser-layout.json`、`browser-interactions.json`、`browser-final-scope.json`，完整后端结果另记。
+- 边界：历史迁移没有统一持久保存完整 Jpom 原资料，已停止且缺少资料的应用不能猜出原参数，提示手工核对。没有连接真实业务主机做本轮检测、没有修改业务应用或部署测试服；隔离候选继承上一轮 Jpom 兼容实现。未做真实 Jpom→DevOps→Jpom 发布验收。
+- 完整后端 race 通过（17 个有测试包，deploy 包 448.709s）；6 个 Linux 程序编译通过。最终本轮 Go 源码与 race 候选一致；最终前端 377/377、生产构建及范围收窄后的浏览器交互另有回执。TaskSpace 24 已结束，隔离服务已停止。汇总 `artifacts/jpom-auto-detection-20261123/verification.json`；本轮尚未部署到测试服。
+
+- 2026-11-23 用户授权后已更新测试服 `192.168.0.32:9800`，补丁 `jpom-compatible-20261123`，只替换 deploy 模块。最终 377 项前端测试、生产构建与 Linux deploy 编译通过；最终 Go 源码和此前全量 17 包 race 候选一致。在线基线摘要匹配上一轮，活动任务准入通过；更新后进程／落盘摘要、全量校验和、健康、配置、VictoriaLogs 和接口测试元数据通过，未更新业务 Agent 或触发业务执行。证据 `artifacts/jpom-compatible-publish-20261123/`。后续逐应用配置因网页登录 401 等待用户重新登录，当前尚未保存业务配置。
+
+- 2026-11-23 authenticated configuration pass: all 28 apps / 47 dev-test targets checked. Of 37 ordinary JAR targets, 26 configurations across 17 apps were saved once and read back twice (dev 17, test 9). Pre-save rereads matched the source configuration. Host bindings, runtime variable keys and release policies were preserved. The estate-bus/dev page shows the original JAR directory and Jpom compatibility. No business execution or Agent update was triggered.
+- Pending: ten incomplete test targets on 192.168.0.8 and one unmatched estate-ai-seek/dev runtime remain unchanged. Local public-key login is unavailable and QueryCraft has no authorized .8 connection; no platform credentials were extracted or alternate host used as a proxy. Requested an authorized read-only connection. Four Java bundles, five scripts, and one Docker target retain their deployment types; one application has no environment target. Evidence: artifacts/jpom-compatible-publish-20261123/configuration-report.md, configuration-results.json and configuration-final-readback.json.
+
+- 2026-11-23 continuation supersedes the preceding partial result: user supplied an authorized QueryCraft SSH connection for 192.168.0.8. Its ECDSA fingerprint matched known_hosts. Read-only process/JAR metadata identified the common incomplete reason: inline --jasypt.encryptor.password. No password values were returned or stored in artifacts. All ten targets already had the encrypted JASYPT_ENCRYPTOR_PASSWORD variable. Preserved its existing value and all other variables; saved a literal Spring placeholder argument instead of inline plaintext. An isolated Spring Core 5.3.3 check passed; no business application was started. All ten saves/readbacks passed, bringing the total to 36 targets / 19 apps (dev 17, test 19); second readback of every saved target passed. Both estate-bus environment cards show the original JAR directories and compatibility mode. No business execution, process restart, Agent update or Jpom configuration change occurred.
+- Remaining scope is explicit: estate-ai-seek/dev has no matching Jpom runtime and keeps its managed Java configuration. Four Java-bundle, five script and one Docker targets retain their existing deployment types; one app has no environment target. No live Jpom-to-DevOps-to-Jpom publication was performed. The configuration report and summary in artifacts/jpom-compatible-publish-20261123/ supersede earlier pending-access totals.
+- P2 observed follow-up: automatic detection currently treats an inline jasypt password as incomplete even when an encrypted runtime variable already exists. The ten records above were resolved by authorized read-only inspection plus explicit configuration saves; this task did not change that automatic detection behavior. A future safe-reference conversion should preserve the same privacy and draft guarantees.
+
+### 2026-11-23 Jpom shared-instance management (local implementation)
+
+- Gap confirmed: the environment button and instance manager target resolver only accepted managed Java and Docker, so switching to Jpom compatibility hid instance management. The existing page now also accepts configured ordinary JAR Jpom targets in unprotected development/test environments. No new business configuration fields or independent management page are required.
+- Shared ownership is read from the exact original project ID, basedir and main JAR. The probe verifies a unique Java process, PID generation, boot identity, canonical directory and current JAR digest; duplicate properties, a foreign process using the same JAR, unreadable evidence and overlapping registered bindings do not grant control. Stopped original JARs may be started without inventing a successful platform publication. The UI explicitly labels the shared JAR version unverified, and shows project, PID and actual observed Java version.
+- Start/stop/restart reuse existing administrator confirmation, request IDs, durable deduplication and active-publication checks. Remote guards recheck the reviewed PID generation/JAR before signaling; only graceful TERM is used. A post-operation identity ACK must match the observed result. No cross-platform file lock, artifact upload, forced kill, automatic retry or rollback is added. Unconfirmed operations retain existing uncertainty handling. Readiness commands are not offered for Jpom mode; a running JVM does not imply business acceptance.
+- Runtime variables are decrypted only inside the backend and passed directly to the Java process with literal env arguments; they cannot overwrite control-script variables. Bounded logs come from the verified stdout file (or configured stopped-instance log). Current process/environment redaction inputs stay in the backend; only the redacted 200-line / 64-KiB body reaches the client. Existing managed-Java and Docker control/log paths remain separate.
+- Targeted race tests passed, including actual isolated sleep/fake-Java processes: native recognition, foreign process preservation, PID/JAR drift rejection, original stop/start, literal runtime values, duplicate binding and protected-environment refusal, stale/duplicate/uncertain operations, guarded log reads and secret redaction. An initial fake /proc/stat contained a literal newline escape; the fixture was corrected and rerun. No business process or host was touched.
+- Frontend tests: 378/378; production build and official component/table/style/editor checks passed. Browser evidence: 16 scenes (4 themes, light/dark, 1440/390, large typography) with contained controls and preserved confirmation drafts; 11 interaction cases covered cancel, mobile expanded details/logs, restart/stop/start, stale identity, uncertain result, 401, unknown ownership, duplicate binding and unreachable host. Six synthetic action requests were sent, each action confirmation once; configuration writes and unknown requests were zero. The harness initially waited for a different wording of the existing no-retry message; resumed from the observed stale-result state without repeating the completed actions.
+- Evidence: artifacts/jpom-instance-management-20261123/targeted.log, frontend-tests.log, build.log, browser-layout.json, browser-interactions.json, fixture-state.json and screenshots. TaskSpace 29 ended and the isolated port is no longer listening. The previous full backend runs were interrupted (one intentionally before the foreign-JAR guard, one by the turn interruption); they do not count as passes. The final full race check is running against frozen final source; its result is recorded separately.
+- Limits: no real Jpom/DevOps instance lifecycle, business health check, publication, Agent update or test-server deployment was performed. This round only implements and validates locally; it does not change the 36 business configurations saved earlier.
+- Final result: all 17 tested backend packages passed race detection (deploy 453.907s), 378 frontend tests and production build passed, and all six Linux programs compiled. The frozen final source remained unchanged and all nine authored files match the candidate. Verification receipt: artifacts/jpom-instance-management-20261123/verification.json. Earlier interrupted runs are superseded; no test-server update or business instance operation was performed.
+
+- 2026-11-23 user-authorized test update completed: jpom-instance-20261123 on 192.168.0.32:9800. Only the deploy binary was replaced after the exact online baseline and active-task admission passed. Runtime/file digests, service health and 46 served UI assets match the validated candidate. All 28 application environment configuration snapshots, platform config/key, VictoriaLogs process and existing API-test metadata were preserved. No business publication, instance control or Agent update was invoked. Receipts: artifacts/jpom-instance-publish-20261123/summary.json, deployment.json, remote-after.json and served-feature.json. This deployment supersedes the earlier local-only status.
+
+### 2026-11-23：测试平台集中日志保留期调整
+
+- 用户要求将集中日志保留期改为 15 天。目标 `192.168.0.32`，仅将 `/home/devopsplatform/config/victorialogs.env` 的 `VLOGS_RETENTION_DAYS` 从 7 改为 15，保留文件权限/归属、8GiB 容量阈值、256MiB 内存限制及原数据目录。
+- 写入前核对配置摘要，复用既有只读活动任务检查；无活动执行器。仅保留核验过的原失败交付父记录和原待核对发布的无租约观察任务，不修改或重放这些业务记录。
+- 通过一次性 systemd 维护任务执行已安装的 `devopsplatformctl restart`，平台及 VictoriaLogs 重启成功。远端持久回执为 `applied_verified`，并再次独立回读核验。
+- 已确认引擎运行参数 `-retentionPeriod=15d`；平台及 logserver 进程环境均为 `DEVOPSPLATFORM_LOG_RETENTION_DAYS=15`，不存在 CLI 保留期覆盖。平台、deploy、devtools、monitor 和 VictoriaLogs 健康检查通过。
+- 所有平台运行二进制和 VictoriaLogs 引擎摘要、数据目录、主平台配置文件保持原样。未部署程序包，未重启业务应用或 Agent，未手动删除日志数据。本次仅配置调整，未重跑源码测试或浏览器矩阵。
+- 日志 stats 接口未获得可用于确认的返回值，未将其记为通过；配置、进程环境、引擎参数及健康检查提供生效证据。8GiB 磁盘阈值独立生效，可能使旧日志在 15 天前被淘汰；延长保留期不能恢复已被删除的日志。
+- 本地证据：`artifacts/log-retention-20261123/{before.json,after.json,receipt.json,runtime-verification.log,restart.log,preflight.log}`。远端保留同名回执目录，临时上传的脚本/检查器已清理。
+
+## 2026-11-23 Dubbo 文档、调用与混合用例
+
+- HTTP 保持文档首页默认；Dubbo 切换、跨应用搜索、精确方法签名、参数顺序、Group/Version、Long 示例在真实 Vue 页面核验。JSON 编辑生成快照 #3，保留 #1 和 HTTP #2，维护人及修订来源可读。
+- 真实隔离 Java 提供者调用 Long 9223372036854775806 返回精确值；页面保存用例成功。HTTP→Dubbo 混合画布执行 2/2 步通过、3/3 断言通过，步骤变量传递和冻结方法显示正确。HTTP/Dubbo 草稿切换保留；报告已修正 RPC 结果、方法签名和实际目标，不显示虚构 HTTP 状态。
+- 1440px 浅色、1280px 深色文档截图已检查，无文档横向溢出。初次切换主题截图捕获了颜色过渡，等待稳定后重新截图正常；不作为缺陷或已改动项。
+- 最终 Go race：所有真实源码包通过，deploy 468.167s、devtools 16.210s。直接 ./... 会扫描另一任务 artifacts/jpom-instance-management-20261123/before 的不完整源码副本；最终命令仅排除 logplatform/artifacts/ 归档包，未修改该任务文件、未排除真实源码包。
+- 前端 381/381 通过；生产构建及隔离资源路径检查通过。Java JUnit 2/2 通过；测试提供者已改用空闲端口，避免和浏览器提供者冲突。两项嵌入 Skill 校验通过。
+- 隔离兼容矩阵：Nacos 2.4.3 + Dubbo 2.7.23（Java8 提供者）；Dubbo 3.3.6（Java17 提供者、应用级发现，dubbo/tri）。每项均验证直连、发现、发现地址调用和 Long 精度。无真实业务调用。
+- 边界：JSON 导入/编辑与 MCP 上报，不含源码自动生成；不支持流式 RPC、自定义序列化、Nacos HTTPS/自定义上下文路径/临时令牌。执行器需要独立 JAR + JDK17 配置，当前打包脚本不自动安装。真实业务 Nacos 认证及跨版本定制扩展未验收。本轮未部署。
+- 证据：artifacts/dubbo-api-20261123/；部署契约：deploy/DUBBO-API.md、tools/dubbo-executor/README.md。
+
+### 2026-11-24：自定义编译工具镜像按仓库 Dockerfile 准备
+
+- 现场依据：GIS 全局流水线 51／应用构建 #1 在提交 `3ef20063f21d57064e0ea6468f9fd1d11eb36e04` 检出后失败，缺少本地 `estate-gis-builder:java21-node22`，旧路径直接从 Docker Hub 拉取该自定义标签而超时。原授权任务 `45cfcdbd139f66c1633720a69f93c43b` 已失败，无发布结果。本轮用户要求平台支持缺失镜像按 Dockerfile 构建，未确认新的 GIS 发布预览；未调用确认工具或创建新执行任务。
+- 自定义镜像新增准备来源 `image_source=registry|dockerfile`，旧配置默认 registry；Dockerfile 和上下文使用检出源码相对路径。镜像缺失时先构建工具镜像，再执行源码编译。失败不继续编译、不回退拉取自定义标签。已有镜像复用，执行仍固定到解析出的镜像 ID；更新工具镜像内容须更换版本标签。
+- 后端校验来源／标签／路径，拒绝绝对路径、父目录、`.git` 及符号链接越界；构建和拉取不注入业务变量或任意 build args。沿用所选构建网络，同名镜像在本进程并发准备时等待并重新检查，支持取消等待。配置持久化与历史重试保留原来源、Dockerfile、上下文，不跟随后续配置改变。
+- UI 复用应用设置和接入向导中的 `BuildEnvironmentEditor`，只给自定义镜像增加选项；业务运行镜像 Dockerfile 与工具镜像分开。有效性检查在保存前阻止错误路径，切换来源或设置分组保留路径草稿；取消后恢复已保存路径，返回保留构建列表筛选。
+- 针对性 race 测试通过：缺失构建、已有复用、registry 兼容、失败停止无回退、非法 ID、越界／缺失／类型不符输入、并发与取消、持久化与原构建快照、实际编译步骤前置顺序及变量隔离。旧测试 Docker inspect 的假 ID 更新为合法 64 位摘要，未放宽生产校验。
+- 完整 `go test -race -ldflags=-linkmode=external -timeout=12m ./...` 最终退出 0，18 个有测试包通过。首次命令被旧 `artifacts/jpom-instance-management-20261123/before` 的备份 Go 文件误识别为包；只增加该审计目录的独立 go.mod 隔离，保留备份内容，随后完整命令通过（复用已通过业务包缓存）。`backend-race-initial.log` 保留初次失败证据。
+- 前端 383/383 项通过，生产前端构建／官方组件与表格／样式／独立编辑器资源检查通过，embed 已同步。Linux amd64 部署模块编译通过；Impeccable 检测结果 `[]`。
+- ego TaskSpace 33 隔离浏览器：四主题 × 明暗 × 1440/390 共 16 场景均无文档横向溢出或字段越界；截图已查看。实际操作验证保存／回读、来源与分组切换草稿、非法路径零写入、取消恢复原路径和列表筛选。最终 fixture 只有一次应用配置 POST 和一次 delivery PUT，无真实构建／发布请求。fixture 未实现的 build-environments GET 不计为外部集成通过；本次未重测登录过期、真实工作区切换与业务运行镜像构建。
+- 真实 Docker 隔离验证在构建主机使用本次源码中的准备函数（单独编译的测试程序、FROM scratch 和两份临时文件）：缺失镜像成功构建，第二次复用同一 ID，仅一次准备命令，无业务容器启动。临时镜像、源码目录和上传测试程序已清理，日志保留。此验证不代表 GIS 的 Java21/Node22 基础镜像、apt/npm/Gradle 网络或整包应用构建发布通过。
+- 初始手动预加载探索停止：本地跨架构 apt 签名检查失败，随后 Docker 导出因本地 Docker 磁盘空间不足而失败；未成功导入 GIS 工具镜像。未关闭签名校验或修改 Docker daemon 网络。新增临时基础镜像标签已移除，原本地 Gradle 标签已恢复，未清理用户其他镜像、容器或卷。
+- 限制：Dockerfile 内 `FROM` 镜像仍需仓库连通或提前导入，apt/npm 等依赖源也需可访问；选择宿主机网络不等于修复 Docker 引擎拉取网络。未更新平台程序，未修改 GIS 业务配置、未启动 GIS 构建或发布，保留原日志 15 天策略。
+- 证据：`artifacts/gis-builder-recovery-20261124/` 下 targeted-tests、backend-race、frontend-tests、build、linux-build 日志，browser-layout/interactions、fixture-state、isolated-image-proof、source-manifest、scoped.patch；用法见 `deploy/BUILD-ENVIRONMENTS.md`。
+
+### 2026-11-24：GIS 构建重试与开发环境发布尝试
+
+- 用户授权重试 `estate-gis-service/dev`。平台当时仍运行旧 deploy 模块，先以已安装 `jpom-instance-management-20261123/source` 为基线，只叠加镜像 Dockerfile 功能相关 9 个文件，排除其他未发布改动。隔离候选前端 380 项通过、完整后端 race 通过、6 个 Linux 模块编译通过、冻结源码摘要复核通过。仅替换 deploy 模块；服务健康、运行二进制与清单校验通过。28 份应用环境快照、API 测试元数据、平台配置、Agent 包和 VictoriaLogs 进程均保持原样，日志保留期仍为 15 天。
+- 用公开镜像仓库的固定摘要下载 amd64 Node 22 和 Temurin 21 镜像，经独立配置摘要与架构校验后导入构建机。未修改 Docker daemon 网络；临时传输归档已删除，基础镜像保留供构建。平台按检出源码的 `deploy/jpom/Dockerfile.build` 成功生成工具镜像 `sha256:7d2d1d81f5891dceca3d24c0243395bf30fef1824fd409ef57be75ab41aee805`，Java 21.0.13.1、Node 22.23.2、npm 10.9.8 检查成功。
+- 用户重新登录后，通过实际登录会话保存 GIS 的 `image_source=dockerfile`、路径和上下文，保存前比较当前配置，回读确认其余构建连接／变量组／Runner 等字段保留。重启前的旧页面曾缓存登录失效状态，刷新后会话恢复；没有绕过认证或重放未知写入。
+- 经逐份冻结预览和用户明确确认，共执行三个独立服务任务，全部固定提交 `3ef20063f21d57064e0ea6468f9fd1d11eb36e04`：
+  - 流水线 52／应用构建 #2：工具镜像准备成功，源码构建脚本却将 Java 标准错误第一行 `Picked up JAVA_TOOL_OPTIONS` 误当版本号而失败，无制品和发布。
+  - 经断网工具版本探测复现后，仅更新 GIS 公共构建命令及 java-build COMMAND：将原 JAVA_TOOL_OPTIONS 转入 GRADLE_OPTS，再从发布脚本环境移除该变量，保留 JVM 属性和缓存目录，不改业务源码或运行参数。流水线 53／应用构建 #3：前端编译通过，Gradle Wrapper 9.5.1 下载触发 10000ms 超时，失败，无制品和发布。先前仅测试下载入口没有证明这一版本的实际下载可用，记录为检查不足。
+  - 保持上一份配置摘要不变，下载 Gradle 9.5.1，按官方 SHA-256 `bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f` 与 ZIP 完整性校验后预加载至本应用缓存。使用原 UID/GID 997:993，在 network=none 容器通过项目 Wrapper `--version` 验证；不执行项目业务构建。独立传输归档已删除，正式缓存保留。用户确认后，任务 `ac7b756a3207b5f77e47539904da14ee` 创建流水线 54／应用构建 #4，前端、Java 编译与整包归档全部成功。
+- 成功制品为 #42，类型 java-bundle，摘要 `sha256:61cccb69602babfc518a43e33139caffc60d1a94ce68dd40f13ab638d6d9dd17`，来源流水线 54。源码构建脚本使用 `-x test`，不将此业务打包称为重新通过业务测试；制品的 `code_confirmed=false` 未被改写，不声称工作项代码范围已完成平台确认。
+- 自动创建发布单 #1／全局发布记录 46／部署记录 46，目标住房宝开发 `192.168.0.3`。运行 JDK 21 检查通过，但预检发现目标配置的 8080 端口占用，明确返回“新版本尚未启动”。最终发布单 failed，成功 0／失败 1，服务任务 failed；不是待核对状态。没有强行停止未知进程、换端口、执行回滚或重复发布。
+- 部署配置 `java_port=8080`，无 `--server.port` 显式参数；检出源码 application-dev 默认 SERVER_PORT 也是 8080。占用者归属尚未证实。现有本机 SSH 身份对 .3 认证失败；QueryCraft 授权连接列表也未包含 .3，未导出平台保存的凭据或借其他主机绕行。后续须先确认端口归属／原 GIS 实例接管方式，或由用户指定其他端口，再使用已生成制品发布。
+- 实操待优化：P1，仓库脚本的 Java 版本探测应跳过 JAVA_TOOL_OPTIONS 提示行（当前构建命令为兼容修复，源码未改）；P2，整包归档的规范化 1970 年时间戳在目标 GNU tar 产生大量旧时间戳提示，非本次失败原因；P2，服务部署任务失败后无法在原授权范围恢复，缓存／网络修复即便不改提交配置也需新任务预览确认。
+- ego TaskSpace 34 展示最终真实发布记录。平台 API 回读确认发布失败、制品保留；未测试新版本运行健康、Dubbo 注册或房源分业务接口，因为新 JVM 未启动。证据位于 `artifacts/gis-builder-publish-20261124/`：候选回归、平台更新回执、构建配置回执、各次冻结预览与确认、Gradle 离线校验、流水线 54 成功记录、最终发布／任务／制品以及部署日志。
+
+## 2026-11-24　按需求登记前置变更并按环境发布
+
+- 在隔离工作项的实际交付编辑器中，为代码变更 #1 选择前置 SQL #2 并填写“先准备菜单数据，再启用读取逻辑”。保存草稿后，从服务端回读到原编号和该原因，重新展开编辑区仍可查看。用例只操作临时元数据库。独立变更编辑页复用同一个前置项组件。
+- SQL → 服务 → SQL 的排序按变更编号和依赖原因生成。回归覆盖依赖环、缺失记录、颠倒顺序、与审核关卡冲突和未就绪时禁止创建准备单。预检清单区分已有回执、环境例外及待执行项。代码、人工与 Redis 不凭其他环境的成功回执跳过。
+- 最终发布预检中的“按清单发布”与 MCP `publish_delivery` 使用同一执行单、预检凭证和执行器，适用于非受保护的开发、测试环境。`TestPublicationFromMCPConfirmationToBackground` 用隔离的真实平台路由完成预览、确认、重读同一确认和后台分派，最终只生成一张单并停在人工节点。`TestPublicationUsesOneFrozenRunAndStopsAtManual` 核对换 Key、重复提交及已仅建单后尝试自动执行。网关回归覆盖三类后台任务的分派及内部路由的公开访问限制。
+- 在一次性 MySQL 8.4 库上验证旧 `run_trigger VARCHAR(64)` 升级，保留原触发身份并成功写入长标识。构建恢复验证仅重试具备原配置快照及明确失败回执的构建。历史上没有生成 run ID 的执行不据此补写为成功。
+- 本轮未连接业务数据源执行 SQL、修改配置或部署业务服务。发布授权只覆盖最终预检中的冻结步骤，代码准备单独核对冻结提交，生产和受保护环境沿用原审批。前端 383 项回归通过，生产构建与隔离编辑器资源路径校验通过。
+- 最终 Go race 回归覆盖 37 个源码包，其中 18 个包有测试并通过，19 个包无测试文件。已排除 artifacts 下其他任务的历史源码副本。测试环境未部署本轮变更。
+
+### 2026-11-24：确认 8080 归属并完成 GIS 新实例切换
+
+- 用户先要求确认端口归属，随后明确要求“停了启动咱们新的”，并确认使用制品 #42 发布至开发环境。
+- 只读 HTTP 初查确认 `192.168.0.3:8080/` 返回“Valhalla 训练工作台”，健康接口 UP；当时仅作为 GIS 线索，不据此杀进程。本机与构建机 SSH 身份未通过 .3 认证，QueryCraft 无 .3 授权连接，未导出平台保存的密码或私钥。
+- 在用户已打开的 Chrome Jpom 页面发现可用管理入口 `192.168.0.5:2133`。首次会话失效，用户重新登录后使用其新标签页继续；未索取密码或自动处理验证码。Jpom 的住房宝开发节点 `192.168.0.3:2133` 明确显示项目 `gis-dev`／开发gis服务，目录 `/home/work/zfb/gis/service`，PID 13679，端口 9999、28880、8080。控制台也报告 running:13679，证实为旧 GIS，非仅凭网页标题推断。
+- 通过该项目控制台点击一次“停止”并确认，日志最终为 `[stop] estate-gis-service stopped`、`stopped`、执行结束 stop 0。中间出现过仍运行的状态轮询，未将中间结果当成已停止，也未重复发送停止。随后启动按钮可用、停止按钮禁用；从构建主机对 8080／28880／9999 的连接均返回 errno 111，确认端口释放后才派发新发布。
+- 已冻结并经用户确认的制品发布任务 `52a3a50257c28bd2d2507451d91feca0`，使用制品 42／版本 `3ef2006`／原 Java 整包目标，不重建、不改源码／端口／业务参数。创建发布单 #2／全局记录及部署 ID 47，最终 success，成功 1／1，失败 0。历史发布单 #1／记录 46 保留 failed，未覆盖。
+- 新平台实例回读：住房宝开发，PID 22922，版本 `3ef2006`，state=running、owned=true、controllable=true，属于 ssh-java-bundle。独立 HTTP 回读 `http://192.168.0.3:8080/actuator/health` 为 200／UP，首页 200，标题仍为 Valhalla 训练工作台。发布配置未设置 HTTP 健康 URL，因此该 HTTP 结果是此次额外只读核验，不冒充配置内自动健康检查；未执行房源分业务调用或验证 Dubbo 注册目录。
+- 实测 P2 待优化：已经打开的发布详情在后台完成后曾仍显示“运行中／排队中”，刷新页面后准确显示“成功 1／1”。初始截图因仅匹配泛化的“成功”文案误抓到旧视图，随后改为核对发布单 #2 的具体成功状态及 1／1，再保存最终截图；未修改产品代码修复该现象。
+- 操作证据：`artifacts/gis-port-takeover-20261124/` 中 old-instance-stop-receipt、旧实例停止截图、冻结预览与确认、最终服务任务及发布回执、new-instances、deploy47-log、HTTP 健康回执和成功截图。ego TaskSpace 34 保留最终新发布记录；原用户 Jpom 标签页保留，未删除项目或改自启动策略。
+
+## 2026-11-24 工作项开发期间持续登记草稿
+
+- 需求及 Bug 详情的「持续登记变更」可选择应用和期限，页面与 MCP 共用授权预览。登记权限仅覆盖本人草稿。Agent 在当前开发会话按内置 `devops-change-report` 1.3.0 的指引对照实际改动，保存后读取原编号及清单摘要。
+- 本轮检查为 Go 的 deploy、devtools 包编译，前端生产构建及其资源检查，内置 Skill 格式校验。尚未运行全量回归或浏览器端到端验收，未部署或写入业务工作项。
+
+### 持续登记的本地复验（2026-11-24）
+
+- 需求页面实际操作了按关联应用预选、预览、授权、暂停、恢复和刷新。标题与授权选择器均显示“登记草稿中”，在 1280 像素视口没有横向溢出。新 Bug 没有关联变更时，通过“补充应用”选择 `orders` 后完成授权，再从登记记录撤销。使用临时工作项与隔离存储，页面夹具已正常退出。
+- `TestDraftTrackingIncrementalMCP` 通过实际 MCP 服务、HTTP 路由与临时平台库，覆盖一次确认、重复请求、代码／SQL／Nacos 三类草稿、按原编号修订、添加／保留／清空前置依赖、清单冲突、跨应用／跨用户拒绝、禁止标记就绪，以及暂停、恢复和撤销。最终保持三条草稿、零交付执行单。
+- 修复了省略依赖与显式传空列表在同一修订上命中同一回执的问题。先用反例复现，再运行相同用例确认旧修订会拒绝不同意图；新修订能清空依赖。
+- 前端全量 383 项通过，生产构建及资源隔离检查通过。未安装个人 Skill，未向外部业务系统写入。
+- 双开发者回归使用同一工作项、相同初始清单摘要与两个独立账号。第一人提交后，第二人使用旧摘要被拒；重读后尝试覆盖对方编号仍被拒，随后可保存本人的代码草稿。回读保留两人的分支、归属与编号。该用例已随 `internal/devtools` 整包 race 回归通过。
+
+### GIS 开发环境 Dubbo 网卡修正（2026-11-24）
+- 制品42 / 提交3ef2006 的 dev 实例22922处于运行中；原实例日志含 `DubboServerHandler-172.17.0.1:28880` 与 `current host: 172.17.0.1`，确认 Dubbo 自动选址不符合目标主机192.168.0.3。
+- 已经认证平台环境 API 增量保存 `DUBBO_IP_TO_BIND=192.168.0.3`、`DUBBO_IP_TO_REGISTRY=192.168.0.3`；保留原三个运行变量，回读显示其他环境字段未变。未修改源码、Nacos配置或其他应用。
+- 托管实例 restart 读取原版本 service.sh/runtime.env，不能用其声称新变量已生效。已生成复用制品42的新发布预览，等待该冻结预览的用户确认；尚未发布，未宣称注册结果修复。
+- 本地证据：`artifacts/gis-dubbo-ip-20261124/config-receipt.json`。原日志读取超过浏览器单次15秒窗口，随后读取已完成的原请求结果，没有重复提交操作。
+- 最终版本对 36 个平台源码包执行 Go race 回归，命令正常退出。18 个包的测试通过，另外 18 个包无测试文件；排除归档源码和 `node_modules`。同步新增的双开发者用例另随 `internal/devtools` 整包复跑通过。未部署到测试服务器。
+
+### 持续登记回执与环境清单原页编辑（2026-11-24）
+
+- 本地构建记录：`go build ./internal/deploy ./internal/devtools` 成功。`npm --prefix web run build` 成功，含组件检查、生产打包和编辑器静态资源隔离检查。
+- 本次修改涉及需求／Bug 的登记授权与最近回执、按编号打开编辑器、发布清单单项维护，以及内置 `devops-change-report` 1.4.0 的并发核对指引。多人冲突由 Skill 在明确的清单版本冲突后重读和比对，保存仍需通过原版本校验。
+- 本轮未运行浏览器走查、双人并发回归或环境发布，尚无本轮运行时验收记录。
+
+### 持续登记与发布预检本地走查（2026-11-24）
+
+- 使用生产前端构建、真实 Go 路由和隔离数据验证。为示例 Bug 授权后，页面显示“已授权，尚无登记”。新增或更新草稿后，页面自动展示对应编号、标题和操作；点击回执编号可直接编辑该项。
+- 发布清单原有三项阻塞。从“补充这项”将其中一项标为就绪后，留在同一预检页，阻塞降到两项。回读确认另外两项仍是草稿。修复重复打开单项编辑器时传递 Vue 响应式对象导致的白屏；实测可重新打开已就绪条目、退回草稿、编辑并再次就绪。
+- 发布清单中先将乙移到甲前，刷新并重新预检后仍保留顺序；随后将甲设为乙的前置，刷新后按甲、乙排列并展示原因。浏览器分别验证了保留手动顺序、根据最新范围重新生成步骤的提示。[发布清单截图](../artifacts/draft-checklist-ux-20261124/checklist.png)
+- 两位开发者通过 MCP 维护同一工作项的隔离回归通过，覆盖过期版本冲突、归属校验、重读后保存自己的变更，以及逐项摘要和新增／更新回执。清单状态、SQL → 服务 → SQL 顺序和 SQL 拆分约束的专项 Go race 回归通过。前端 383 项测试通过，生产构建通过。本次仅做本地验证，未部署或执行业务变更。
+
+### 2026-11-24：测试服更新原生 Dubbo 文档能力
+
+- 使用已上线 GIS builder 修复的隔离源码作为基线，只叠加此前 Dubbo 能力清单；保留共享工作区的其他改动。最终候选65项源码摘要已冻结，替换测试服 `192.168.0.32` 的 deploy、devtools 两个模块（patch `dubbo-docs-20261124`）。未发布或重启 GIS 等业务应用，未更新 Agent、日志存储或调用业务 RPC。
+- 上线准备发现 MCP 原生 Dubbo 上报／局部编辑的基线核对遗漏协议：HTTP 与 Dubbo 并存时，确认错误地查询 HTTP 基线。新增端到端测试在修复前实测失败（目标状态变化），修复后通过；基线协议从已解析文档／冻结候选导出，不信任调用方协议提示。测试覆盖HTTP更新不使独立Dubbo预览失效、局部编辑、Dubbo过期预览拒绝及HTTP历史不变。
+- 最终完整后端 race 通过；383项前端测试、生产构建、六个Linux程序编译全部通过。此前完整回归成功记录保留在 initial-passed；最终回归包含上述MCP修复。隔离页面重验HTTP默认／Dubbo切换、精确方法签名、大整数示例、详情返回保留协议和1440浅色／390深色布局，未执行合成或真实RPC。此前Dubbo 2.7/3.x Java/Nacos兼容矩阵未在本次重复执行。
+- 持久systemd更新任务一次执行成功；二进制／进程摘要、健康检查、25项接口中心HTML与资源、全部28个应用环境配置摘要、平台配置、凭据密钥、原API测试元数据及VictoriaLogs原进程均核验保持预期。原15天日志保留设置未改动。
+- 页面资源校验最初未计入后端动态注入的 `<base href="../">`，修正校验器后25项通过。旧页同URL导航保留旧JS，真实reload后进入登录页；平台重启后网页登录需重新登录，未冒充已登录的线上UI交互通过。新页面交互证据来自隔离候选，线上由实际资源摘要与MCP读取／原生文档预览确认新模块生效。
+- GIS dev现有快照38为OpenAPI、paths为空、x-dubbo扩展含1个方法；已保留原components/info/示例转换原生Dubbo候选，并核对部署提交3ef2006的接口和实现注解。原生预览识别1个新增方法、24个首次登记字段；无删除／修改、未关联需求、维护人为本人Key绑定用户zhouxufu。原HTTP文档38保留，尚未确认入库；不把首次登记字段计为代码新增，不声称全量GIS接口已生成或注册IP已激活。
+- 证据：artifacts/dubbo-docs-publish-20261124/ 下的candidate-checks、scoped-source、backend-race、dubbo-confirm-before/after-fix、browser-verification、deployment、remote-after、served-feature、environment-verification与document-preview。文档保存待本次冻结预览的用户确认。
+
+### 持续登记、发布清单与 Dubbo 文档合并部署（2026-11-24）
+
+文档发布包未包含持续登记回执、单项编辑器修复和手动顺序恢复。以已部署的文档包为基线补入变更，并同步了最后的 Dubbo 文档确认基线修正。合并候选通过完整 Go race 回归、383 项前端测试和生产构建。MCP 的双人登记、增量回执和 Dubbo 确认专项用例也在同一候选上通过。测试服已更新 `devopsplatform`、`deploy`、`devtools`，核对运行中程序摘要、服务健康及交付、研发和文档入口共 60 项静态资源；28 个应用的环境配置摘要一致。按要求未备份或执行业务验收。可查阅[部署回执](../artifacts/draft-checklist-publish-20261124/deployment.json)和[资源核验](../artifacts/draft-checklist-publish-20261124/served-feature.json)。
+
+### 2026-11-24：接口详情 Markdown 修复（已验证，按用户要求暂缓上线）
+- 用户截图对应GIS dev原生Dubbo快照40，接口description原文已有19行Markdown。原详情使用普通p插值，换行被折叠，标题／表格／行内代码显示为原始符号。仅修改App.vue和DubboOperation.vue：接口说明、Dubbo参数说明和返回值说明复用现有安全MarkdownContent；HTTP接口说明同步使用同一路径。未改文档正文、修订、维护人、服务配置或业务调用。
+- 原生文档40只读摘要：sha256:4ac2d6a8030981eb9555797557c34249e57ba120ab1f0b61050f58b34b007372。未确认旧的文档上报预览；该修订已由其他操作存在，本轮仅读取作展示依据。
+- 隔离页面使用该说明和本地合成安全测试内容，实测2个标题、10行表格、16处行内代码正常；参数／返回值Markdown、HTTP说明、4主题×1440浅色／390深色大字共8场景通过，无文档横向溢出。脚本／事件属性／javascript链接被移除，未执行测试脚本。Impeccable detector为空。浏览器场景的首次HTTP返回时曾遇数据加载／背景页可见性问题；从已观察状态恢复，等待具体控件并bringToFront后通过，没有重复业务写入。
+- 383项前端测试、生产构建、完整后端race（18个有测试包）与六个Linux编译全部通过。第一次候选基于dubbo-docs更新；切换前检测到另一窗口已部署draft-checklist-20261124，未覆盖它。中止旧基线回归，改用已部署最新冻结源码，只叠加两处UI改动并重新完成全部检查。旧基线中止不计通过；清理自己被替代的source/bin约129MB，保留日志。
+- 更新包已上传个人任务临时stage，但没有启动systemd更新单元，也没有重启或替换服务器程序。预检先遇正在执行的MCP操作，随后因字典构建55／发布49阻止；二者成功结束后另一个窗口又启动bus构建56。用户明确选择“让现有业务任务继续，稍后更新”，因此本轮状态为deferred_by_user。未停止、取消、恢复或重跑任何业务任务。
+- 证据：artifacts/dubbo-markdown-20261124/{verification.json,summary.json,baseline-coverage.json,candidate-checks.json,browser-verification.json,source-changes.json,scoped.patch,remote-stage.txt,preflight-blocked-active-pipeline.log}及构建日志和截图。TaskSpace48已结束，隔离fixture已停止。后续上线须重新检查远端程序／配置摘要和活动任务；本记录不宣称已在服务器生效。
+
+## 2026-11-24 MCP 发布失败诊断
+
+- 测试服只读核对 `zfb-data-intelligence/dev` 应用发布单 #1（全局 51，制品 45，提交 c16438d）。MCP 列表返回一台失败。执行记录 51 的原日志显示 `Selected Java is not executable`，检查运行 JDK 时退出码为 2。冻结配置选用 `/home/work/runtime/jdk-25`。未核实目标机上该文件的存在性或权限。
+- 本地增加 `get_release_diagnostics`，按应用、环境和全局发布单 ID 校验归属，读取派发审计错误、人工失败说明和分页的逐目标执行日志。仅从实际错误标记提取错误，保留运行变量脱敏，并显式提示缺少失败证据的历史记录。
+- DevTools 包和发布相关回归通过 race 检测。最终定向用例覆盖任务按权限给出诊断入口、构建与发布阶段区分、跨应用和环境拒绝、日志脱敏、派发前错误以及多主机分页。本轮未对服务器部署新的 MCP 或重试业务发布。
+
+### 2026-11-25 交付导航与工作项入口
+
+- 研发协作的「需求与 Bug」打开全部列表，「待上线与批量交付」进入同一工作区的环境视图。原交付工作项地址保留，发布版本继续独立使用。
+- 发布记录按当前用户与执行节点提供「待我审核」筛选，放在分页计数之前。原执行单和准备单仍使用原详情入口。
+- 本次检查包括前端生产构建、资源隔离检查和 Go 交付包编译。浏览器人工走查及测试环境部署尚未执行。
+
+2026-11-25 测试环境发布已完成。本地只读夹具验证首页进入需求与 Bug、待上线列表和返回，以及发布记录的本人审核筛选。383 项前端测试、生产构建及全量 Go race 回归通过。测试环境已回读平台与交付服务进程摘要、控制台入口、交付与研发页面静态资源及健康状态。发布过程未触发业务执行。回执位于 `artifacts/delivery-navigation-publish-20261125/`。
+
+### 2026-11-25 GIS 开发环境停机与回滚诊断
+
+- 开发发布 #4（全局 56）停止旧实例超时。主机日志显示关闭连接池到 13:48:17，接近原 30 秒上限。#5（全局 57）已通过停机，新版和回滚版均在 `online_dictionary` 池连接 MySQL 时超时。另两个池各自记录 `Start completed`。从开发主机连接 Nacos 快照内的该 RDS 端点也超时，8080 健康检查未取得 HTTP 响应。
+- 开发环境已单独保存该字典池的延迟初始化配置。Spring Boot Binder 本地检查确认保留已有数据源名、URL 和其他池设置。业务发布和 HTTP 恢复需要另据执行回执确认。
+- 平台发布详情与发布查询读取目标的回滚失败数，兼容旧记录及原发布状态判断。诊断接口分别保留发布和恢复步骤的错误及各自最内层的 Java `Caused by`。新生成的 SSH 托管 Java 启动脚本将优雅停机等待延长到 60 秒，超时保留进程。隔离浏览器验证实际详情文案为“成功 0 / 1 · 未成功 1 · 1 个目标回滚失败”，前端 383 项及生产构建通过。此记录不代表平台补丁已上线。
+
+### 2026-11-25 独立代码变更发布一次确认
+
+- 范围为单个已就绪的独立代码变更、一个应用和非受保护开发／测试环境的公共分支。整次预览列出源提交、目标基线、准备步骤、发布步骤与目标实例，发布制品必须来自本次合并结果的构建。原准备单仅在本人、环境、范围及候选均匹配时接续。
+- `TestChangeDeploymentOneConfirmation` 使用临时 Git HTTP 服务测试真实合并、推送、构建和本机夹具发布。覆盖新建、接续已确认并生成候选的原准备单、重复提交及授权后公共分支前移。前两条路径各只有一份发布回执，基线变化时没有构建或发布。
+- `TestIndependentChangeMCPReturnsOriginalInsteadOfAnotherConfirmation` 经工具注册表预览、确认后再次请求发布，取得原任务，另测缺失准备权限时拒绝写入。此 MCP 检查使用模拟上游，真实准备和执行引擎在上一项独立验证。
+- 桌面浏览器在隔离组件夹具中点击一次“确认并发布”，刷新后仍显示相同任务和原准备单、制品及发布记录，未新增提交。页面夹具使用模拟回执，未连接业务服务。包含 SQL、配置或多个应用的发布继续使用原交付流程。本次未操作真实 #17。
+- 兼容旧客户端显式提交 `mode=build` 和功能分支。就绪独立变更唯一匹配时，预览包含完整合并与发布范围。构建结束时若两个协调器竞争更新准备单，只接受同一节点、同一代码任务的成功回执。修复后新建、接续和基线变化三个隔离场景连续四轮通过。
+- 最终回归通过。Go 产品源码包（`cmd`、`internal`、`pkg`、`examples`）均通过 race 检查，其中 `internal/deploy` 耗时 457.532 秒。前端 383 项测试全部通过，生产构建成功。
