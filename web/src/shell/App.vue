@@ -28,6 +28,10 @@ import {applicationOption} from '../shared/applicationName.js'
 import {currentApplications} from './applicationCatalog.js'
 import {DEFAULT_RECENT_MINUTES, inferRecentMinutes, recentRange, restoreTimeRange} from '../shared/timeRange.js'
 
+import HeaderWithTabs from './HeaderWithTabs.vue'
+import GlobalSearchCommand from '../shared/components/GlobalSearchCommand.vue'
+import { useGlobalShortcuts } from '../shared/composables/useGlobalShortcuts.js'
+import '../shell/layout-optimization.css'
 const dark = themeDark
 function switchTheme() {
   dark.value = toggleTheme()
@@ -131,6 +135,59 @@ const showTimeContext=computed(()=>{
 })
 const contextFields=computed(()=>activeWorkspace.value?.contextFields||{service:showContext.value,environment:showContext.value})
 function openDefault() { openHome() }
+
+const globalSearchOpen = ref(false)
+const { register: registerShortcut } = useGlobalShortcuts()
+
+const appMenuGroups = computed(() => {
+  if (!showContext.value) return []
+  return [{
+    label: '应用',
+    items: st.services.map(s => ({
+      value: s.name,
+      label: applicationOption(s).label + (s.managed ? '' : ' · 未接入部署'),
+      selected: st.gSvc === s.name
+    }))
+  }]
+})
+
+const envMenuGroups = computed(() => {
+  if (!showContext.value) return []
+  return [{
+    label: '环境',
+    items: st.environments.map(e => ({
+      value: e.name,
+      label: (e.protected ? '🔒 ' : '') + e.display_name,
+      selected: st.gEnv === e.name
+    }))
+  }]
+})
+
+const headerTabs = computed(() => {
+  const result = [{ value: '0', label: '个人工作台' }]
+  for (const w of st.workspaces) {
+    result.push({
+      value: w.id,
+      label: workspaceTitle(w)
+    })
+  }
+  return result
+})
+
+function handleHeaderTabChange(value) {
+  switchWs(Number(value))
+}
+
+function handleGlobalSearch(item) {
+  if (item.type === 'app') {
+    st.gSvc = item.value
+    ctxSync()
+  } else if (item.type === 'env') {
+    st.gEnv = item.value
+    environmentChanged()
+  }
+}
+
 
 function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
   if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
@@ -378,6 +435,9 @@ window.addEventListener('message', e => {
       ctxSync([ws])
       loadServices()
     }
+  registerShortcut('ctrl+k', () => {
+    globalSearchOpen.value = true
+  })
   }
 })
 
@@ -433,15 +493,50 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
 <SidebarProvider v-show="authReady&&!st.showLogin" class="h-svh min-h-0" :style="{'--sidebar-width':'var(--console-sidebar-width,15rem)'}" :inert="st.showLogin?true:undefined">
  <ConsoleNavigation :plugins="st.plugins" :workspace="activeWorkspace" :home="st.active===0" :admin="st.me.role==='admin'" @home="openHome" @open="navigationOpen" @platform="openPlatformWorkspace"/>
  <SidebarInset class="h-svh min-w-0 overflow-hidden">
-  <header data-slot="shell-header" class="flex h-14 shrink-0 items-center gap-2 border-b px-4"><SidebarTrigger aria-label="切换主导航"/><Separator orientation="vertical" class="mx-1 h-4"/><Breadcrumb class="min-w-0"><BreadcrumbList class="flex-nowrap text-sm"><template v-for="(label,i) in workspaceBreadcrumb(st.active===0?null:activeWorkspace)" :key="i"><BreadcrumbSeparator v-if="i" class="hidden sm:block"/><BreadcrumbItem :class="i===0&&st.active!==0?'hidden sm:inline-flex':'min-w-0'"><BreadcrumbPage v-if="i===workspaceBreadcrumb(st.active===0?null:activeWorkspace).length-1" class="truncate font-normal">{{label}}</BreadcrumbPage><span v-else>{{label}}</span></BreadcrumbItem></template></BreadcrumbList></Breadcrumb><span class="ml-auto"/><AppearanceSettings/><DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" class="max-w-48 gap-2"><UserRoundIcon class="size-4"/><span class="truncate">{{st.me.display_name||st.me.username||'本地'}}</span><ChevronDownIcon class="size-3.5"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem disabled>{{st.me.role==='admin'?'管理员':'成员'}}</DropdownMenuItem><DropdownMenuItem v-if="st.me.role==='admin'" @select="st.showUsers=true">成员管理</DropdownMenuItem><DropdownMenuSeparator v-if="st.me.auth_enabled"/><DropdownMenuItem v-if="st.me.auth_enabled" @select="logout"><LogOutIcon class="size-4"/>退出登录</DropdownMenuItem></DropdownMenuContent></DropdownMenu></header>
-  <div data-slot="workspace-tabs" ref="workspaceTabBar" class="flex h-11 shrink-0 items-center gap-1 border-b px-3">
-   <Tabs activation-mode="manual" :model-value="String(st.active)" class="h-10 min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" @update:model-value="value=>switchWs(Number(value))"><TabsList variant="line" class="h-full! w-max min-w-full shrink-0 justify-start rounded-none bg-transparent p-0 [&_[data-slot=tabs-trigger]]:after:hidden">
-    <ContextMenu><ContextMenuTrigger as-child><TabsTrigger value="0" class="h-10 flex-none shrink-0 gap-2 rounded-none px-3"><ConsoleIcon name="user"/><span>个人工作台</span></TabsTrigger></ContextMenuTrigger><ContextMenuContent><ContextMenuItem :disabled="!hasCloseTargets('right',0)" @select="closeWorkspaceGroup('right',0)">关闭右侧</ContextMenuItem><ContextMenuItem :disabled="!hasCloseTargets('all',0)" @select="closeWorkspaceGroup('all',0)">关闭全部</ContextMenuItem></ContextMenuContent></ContextMenu>
-    <ContextMenu v-for="workspace in st.workspaces" :key="workspace.id"><ContextMenuTrigger as-child><div data-workspace-tab class="group flex h-10 max-w-64 shrink-0 items-center border-b-2" :class="workspace.id===st.active?'border-foreground bg-muted/60':'border-transparent'"><TabsTrigger :value="String(workspace.id)" class="h-full min-w-0 flex-1 gap-2 rounded-none border-0 bg-transparent px-3 shadow-none" :title="workspaceTitle(workspace)" @dblclick.stop="renameWs(workspace)"><ConsoleIcon :name="workspaceNavigation(workspace).icon"/><span class="truncate">{{workspaceTitle(workspace)}}</span></TabsTrigger><Button variant="ghost" size="icon-xs" class="mr-1 shrink-0" :disabled="closingWorkspace" :aria-label="'关闭 '+workspaceTitle(workspace)" @click.stop="closeWs(workspace.id)"><XIcon class="size-3"/></Button></div></ContextMenuTrigger><ContextMenuContent><ContextMenuItem @select="duplicateWorkspace(workspace)">新开相同页面</ContextMenuItem><ContextMenuItem @select="renameWs(workspace)">重命名页签</ContextMenuItem><ContextMenuSeparator/><ContextMenuItem :disabled="closingWorkspace" @select="closeWs(workspace.id)">关闭页签</ContextMenuItem><ContextMenuItem :disabled="!hasCloseTargets('left',workspace.id)" @select="closeWorkspaceGroup('left',workspace.id)">关闭左侧</ContextMenuItem><ContextMenuItem :disabled="!hasCloseTargets('right',workspace.id)" @select="closeWorkspaceGroup('right',workspace.id)">关闭右侧</ContextMenuItem><ContextMenuItem :disabled="!hasCloseTargets('all',workspace.id)" @select="closeWorkspaceGroup('all',workspace.id)">关闭全部</ContextMenuItem></ContextMenuContent></ContextMenu>
-   </TabsList></Tabs>
-   <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon-sm" aria-label="标签页操作"><ChevronDownIcon class="size-4"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem :disabled="!hasCloseTargets('left')" @select="closeWorkspaceGroup('left')">关闭左侧</DropdownMenuItem><DropdownMenuItem :disabled="!hasCloseTargets('right')" @select="closeWorkspaceGroup('right')">关闭右侧</DropdownMenuItem><DropdownMenuItem :disabled="!hasCloseTargets('all')" @select="closeWorkspaceGroup('all')">关闭全部</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
-  </div>
-  <div v-if="showContext" class="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-2"><div v-if="contextFields.service" class="flex min-w-0 items-center gap-2"><span class="shrink-0 text-xs text-muted-foreground">应用</span><div class="w-48"><OptionPicker v-model="st.gSvc" :retain-missing="false" :placeholder="st.gSvc?'历史应用：'+st.gSvc:'请选择'" :options="st.services.map(s=>({value:s.name,label:applicationOption(s).label+(s.managed?'':' · 未接入部署')}))" all-label="全部应用" aria-label="当前工作区应用" @change="ctxSync()"/></div></div><div v-if="contextFields.environment" class="flex min-w-0 items-center gap-2"><span class="text-xs text-muted-foreground">环境</span><div class="w-36"><OptionPicker v-model="st.gEnv" :options="st.environments.map(e=>({value:e.name,label:(e.protected?'🔒 ':'')+e.display_name}))" all-label="全部环境" aria-label="当前工作区环境" @change="environmentChanged"/></div></div><div v-if="showTimeContext" class="ml-auto flex min-w-0 flex-wrap items-center gap-2"><TimeRangeControl v-model="st.range" @change="timeRangeChanged"/><Button variant="ghost" size="sm" :aria-pressed="st.rangeMinutes===15" @click="useRecentRange">最近15分钟</Button><Badge v-if="st.rangeMinutes>0" variant="secondary">动态</Badge></div></div>
+  <HeaderWithTabs
+    :breadcrumbs="workspaceBreadcrumb(st.active===0?null:activeWorkspace)"
+    :tabs="headerTabs"
+    :active-tab="String(st.active)"
+    :app-menu-groups="appMenuGroups"
+    :env-menu-groups="envMenuGroups"
+    :current-app="st.gSvc"
+    :current-env="st.gEnv"
+    @tab-change="handleHeaderTabChange"
+    @app-select="item => { st.gSvc = item.value; ctxSync() }"
+    @env-select="item => { st.gEnv = item.value; environmentChanged() }"
+    @search-open="globalSearchOpen = true"
+  >
+    <template #actions>
+      <SidebarTrigger aria-label="切换主导航" class="mr-2" />
+      <Separator orientation="vertical" class="mx-1 h-4" />
+      <AppearanceSettings />
+      <DropdownMenu>
+        <DropdownMenuTrigger as-child>
+          <Button variant="ghost" class="max-w-48 gap-2">
+            <UserRoundIcon class="size-4" />
+            <span class="truncate">{{ st.me.display_name || st.me.username || '本地' }}</span>
+            <ChevronDownIcon class="size-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem disabled>{{ st.me.role === 'admin' ? '管理员' : '成员' }}</DropdownMenuItem>
+          <DropdownMenuItem v-if="st.me.role === 'admin'" @select="st.showUsers = true">成员管理</DropdownMenuItem>
+          <DropdownMenuSeparator v-if="st.me.auth_enabled" />
+          <DropdownMenuItem v-if="st.me.auth_enabled" @select="logout"><LogOutIcon class="size-4" />退出登录</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </template>
+  </HeaderWithTabs>
+
+  <GlobalSearchCommand
+    v-model="globalSearchOpen"
+    :applications="st.services"
+    :environments="st.environments"
+    :current-app="st.gSvc"
+    :current-env="st.gEnv"
+    @select="handleGlobalSearch"
+  />
+
   <div id="wsarea" class="relative min-h-0 min-w-0 flex-1 overflow-hidden"><PersonalHome v-if="windowsReady" v-show="st.active===0" :active="st.active===0&&!st.showLogin" :me="st.me" :plugins="st.plugins" :workspaces="homeWorkspaces" @open="homeOpen" @resume="switchWs" @platform="openPlatformWorkspace"/></div>
  </SidebarInset>
 </SidebarProvider>
