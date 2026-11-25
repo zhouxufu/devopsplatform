@@ -2,11 +2,11 @@
 export function workspaceCloseTargets(workspaces,anchorID,action){
  if(action==='all')return workspaces.map(w=>w.id)
  const index=workspaces.findIndex(w=>w.id===anchorID)
- if(anchorID===0)return action==='right'?workspaces.map(w=>w.id):[]
+ if(anchorID===0)return ['right','other'].includes(action)?workspaces.map(w=>w.id):[]
  if(index<0)return []
  if(action==='left')return workspaces.slice(0,index).map(w=>w.id)
  if(action==='right')return workspaces.slice(index+1).map(w=>w.id)
- if(action==='other')return workspaces.filter((w,i)=>i!==index).map(w=>w.id)
+ if(action==='other')return workspaces.filter(workspace=>workspace.id!==anchorID).map(workspace=>workspace.id)
  return action==='current'?[anchorID]:[]
 }
 export function nextWorkspaceAfterClose(workspaces,active,ids){
