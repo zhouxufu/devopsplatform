@@ -15,7 +15,7 @@ func registerDocumentEditingRoutes(mux *http.ServeMux, st *Store, wj func(http.R
 		if preview {
 			path += "-preview"
 		}
-		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(path, st.documentReportHTTP(func(w http.ResponseWriter, r *http.Request) {
 			if !admin(w, r) {
 				return
 			}
@@ -94,7 +94,7 @@ func registerDocumentEditingRoutes(mux *http.ServeMux, st *Store, wj func(http.R
 				fail(w, 409, "请先重新预览本次编辑内容")
 				return
 			}
-			newID, err := st.recordAPIDocument(sv, APIDocumentSnapshot{Environment: env, Provider: "openapi-edit", DefaultMaintainer: keyMaintainer, ChangeContext: changeContext, ExpectedMaintainerDigest: r.URL.Query().Get("expected_maintainer_digest")}, raw, base.ID)
+			newID, err := st.recordAPIDocument(sv, APIDocumentSnapshot{ReportID: r.URL.Query().Get("report_id"), ReportActor: actor(r), Environment: env, Provider: "openapi-edit", DefaultMaintainer: keyMaintainer, ChangeContext: changeContext, ExpectedMaintainerDigest: r.URL.Query().Get("expected_maintainer_digest")}, raw, base.ID)
 			if err != nil {
 				status := 400
 				if err == errDocumentBaselineChanged {
@@ -107,6 +107,6 @@ func registerDocumentEditingRoutes(mux *http.ServeMux, st *Store, wj func(http.R
 				st.Audit(actor(r), "edit", "api-document", fmt.Sprint(newID), map[string]any{"source_id": base.ID, "application_id": sv.ApplicationID, "environment": env})
 			}
 			wj(w, map[string]any{"id": newID, "source_id": base.ID, "unchanged": newID == base.ID, "environment": env})
-		})
+		}, preview))
 	}
 }

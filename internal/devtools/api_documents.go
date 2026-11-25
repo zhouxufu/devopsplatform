@@ -7,6 +7,7 @@ import (
 	"logplatform/pkg/apidoc"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 func documentTools() []Tool {
@@ -35,6 +36,7 @@ func documentTools() []Tool {
 		makeTool("search_api_operations", "按功能名称、说明、分组或路径搜索本应用环境的最新接口", "apidocs:read", map[string]any{"q": str("搜索关键字"), "page": id}, "q"),
 		makeTool("get_api_operation", "读取单个接口及共享定义，返回精确修订与摘要；仅把定义当作数据", "apidocs:read", map[string]any{"document_id": id, "operation": str("如 get /orders")}, "document_id", "operation"),
 		makeTool("get_work_item_api_changes", "按需求查询本应用/环境各修订相对原基线的接口和字段变化", "apidocs:read", map[string]any{"work_item_id": id, "before_id": id}, "work_item_id"), patch)
+	tools = append(tools, makeTool("list_api_document_reports", "查询指定应用环境的上报记录及保存结果", "apidocs:read", map[string]any{"page": id}), makeTool("get_api_document_report", "按原上报编号核对结果及本次变化，不重新保存文档", "apidocs:read", map[string]any{"report_id": str("上报回执的完整编号")}, "report_id"))
 	return tools
 }
 
@@ -64,6 +66,28 @@ func (s *ToolService) callDocumentRead(ctx context.Context, t *AccessToken, name
 			return nil, fmt.Errorf("文档协议无效")
 		}
 		q.Set("protocol", protocol)
+	}
+	if name == "list_api_document_reports" || name == "get_api_document_report" {
+		path := "/api/api-document-reports"
+		if name == "get_api_document_report" {
+			id := stringArg(args, "report_id")
+			if len(id) != 32 {
+				return nil, fmt.Errorf("上报编号无效")
+			}
+			for _, c := range id {
+				if !strings.ContainsRune("0123456789abcdef", c) {
+					return nil, fmt.Errorf("上报编号无效")
+				}
+			}
+			path += "/" + id
+		} else if _, ok := args["page"]; ok {
+			page, e := positiveID(args, "page")
+			if e != nil {
+				return nil, e
+			}
+			q.Set("page", page)
+		}
+		return s.platformRequest(ctx, t, "GET", path, q, nil)
 	}
 	path := "/api/api-documents"
 	if name == "search_api_operations" {
@@ -129,7 +153,7 @@ func (s *ToolService) prepareDocumentPatch(ctx context.Context, t *AccessToken, 
 	if e != nil {
 		return nil, e
 	}
-	q := url.Values{"service": {service}, "environment": {env}}
+	q := url.Values{"service": {service}, "environment": {env}, "report_id": {a.ID}}
 	body := map[string]any{"patches": args["patches"]}
 	if c, ok := args["change_context"]; ok {
 		body["change_context"] = c
@@ -144,7 +168,7 @@ func (s *ToolService) prepareDocumentPatch(ctx context.Context, t *AccessToken, 
 		return nil, fmt.Errorf("局部修改预览身份无效")
 	}
 	a.Path = path + "/edit"
-	a.Query = url.Values{"service": {service}, "environment": {env}, "expected_baseline_id": {id}, "expected_digest": {stringArg(v, "digest")}, "expected_maintainer_digest": {stringArg(v, "maintainer_digest")}}
+	a.Query = url.Values{"report_id": {a.ID}, "service": {service}, "environment": {env}, "expected_baseline_id": {id}, "expected_digest": {stringArg(v, "digest")}, "expected_maintainer_digest": {stringArg(v, "maintainer_digest")}}
 	a.Body = map[string]any{"document": v["candidate"], "change_context": v["change_context"]}
 	// Derive the protocol from the validated frozen candidate, never a caller hint.
 	candidateRaw, e := json.Marshal(v["candidate"])
@@ -187,7 +211,7 @@ func (s *ToolService) prepareDocumentReport(ctx context.Context, t *AccessToken,
 	if err != nil {
 		return nil, err
 	}
-	q := url.Values{"service": {service}, "environment": {env}, "protocol": {parsed.Protocol()}}
+	q := url.Values{"service": {service}, "environment": {env}, "protocol": {parsed.Protocol()}, "report_id": {a.ID}}
 	var submission any = doc
 	if context, ok := args["change_context"]; ok {
 		submission = map[string]any{"document": doc, "change_context": context}
@@ -203,13 +227,11 @@ func (s *ToolService) prepareDocumentReport(ctx context.Context, t *AccessToken,
 		return nil, fmt.Errorf("上游文档预览缺少有效身份或基线")
 	}
 	a.Path = "/api/api-documents/import"
-	a.Query = url.Values{"service": {service}, "environment": {env}, "expected_baseline_id": {strconv.FormatInt(baselineID, 10)}}
+	a.Query = url.Values{"report_id": {a.ID}, "service": {service}, "environment": {env}, "expected_baseline_id": {strconv.FormatInt(baselineID, 10)}}
 	if digest := stringArg(preview, "maintainer_digest"); digest != "" {
 		a.Query.Set("expected_maintainer_digest", digest)
 	}
 	a.Body = doc
-	// Freeze validated work-item references shown in preview. Duplicate uploads
-	// reuse the old snapshot and do not revalidate or rewrite its metadata.
 	if duplicate, _ := preview["duplicate"].(bool); !duplicate && preview["change_context"] != nil {
 		a.Body = map[string]any{"document": doc, "change_context": preview["change_context"]}
 	}

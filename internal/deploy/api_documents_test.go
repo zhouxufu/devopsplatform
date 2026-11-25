@@ -90,7 +90,13 @@ func TestAPIDocumentRoutesImmutableScopedAndRevisioned(t *testing.T) {
 	}
 	one := request("POST", "/api/api-documents/import?service=orders", apiDocumentFixture, "admin")
 	two := request("POST", "/api/api-documents/import?service=orders", apiDocumentFixture, "admin")
-	if one.Code != 200 || one.Body.String() != two.Body.String() {
+	var firstResult, secondResult struct {
+		ID       int64  `json:"id"`
+		ReportID string `json:"report_id"`
+	}
+	_ = json.Unmarshal(one.Body.Bytes(), &firstResult)
+	_ = json.Unmarshal(two.Body.Bytes(), &secondResult)
+	if one.Code != 200 || two.Code != 200 || firstResult.ID != secondResult.ID || firstResult.ReportID == "" || firstResult.ReportID == secondResult.ReportID {
 		t.Fatalf("import idempotency: %s %s", one.Body.String(), two.Body.String())
 	}
 	var imported struct {

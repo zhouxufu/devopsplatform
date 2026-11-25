@@ -35,6 +35,47 @@ func (s *Store) apiDocumentSnapshot(app string, id int64) (APIDocumentSnapshot, 
 	return scanDocument(s.db.QueryRow(`SELECT `+documentColumns+` FROM api_document_versions WHERE application_id=? AND id=?`, app, id))
 }
 func (s *Store) recordAPIDocument(sv *Service, snap APIDocumentSnapshot, raw []byte, expectedBaseline ...int64) (int64, error) {
+	if snap.ReportID == "" {
+		protocol := "http"
+		if d, _, _, e := apidoc.Parse(raw); e == nil {
+			protocol = d.Protocol()
+		}
+		source := snap.ReportSource
+		if source == "" {
+			source = "build"
+			if snap.Provider == "openapi-edit" {
+				source = "edit"
+			}
+			if snap.Provider == "openapi-import" {
+				source = "file"
+			}
+		}
+		snap.ReportID = newDocumentReportID()
+		now := time.Now().Unix()
+		actor := snap.ReportActor
+		if actor == "" && snap.RunID > 0 {
+			if run := s.GetRun(snap.RunID); run != nil {
+				actor = run.Actor
+			}
+		}
+		if e := s.insertDocumentReport(DocumentReport{ID: snap.ReportID, ApplicationID: sv.ApplicationID, Service: sv.Name, Environment: snap.Environment, Protocol: protocol, Actor: actor, Source: source, State: "processing", CreatedAt: now, UpdatedAt: now, RunID: snap.RunID, Commit: snap.Commit}); e != nil {
+			return 0, e
+		}
+	}
+	id, e := s.recordAPIDocumentContent(sv, snap, raw, expectedBaseline...)
+	if e != nil {
+		state, message := "failed", "文档校验或保存未通过"
+		if e == errDocumentCommitUnknown {
+			state, message = "uncertain", "保存结果待核对，请查询原记录"
+		}
+		_, _ = s.db.Exec(`UPDATE api_document_reports SET state=?,error=?,updated_at=? WHERE id=? AND state='processing'`, state, message, time.Now().Unix(), snap.ReportID)
+	}
+	return id, e
+}
+
+var errDocumentCommitUnknown = fmt.Errorf("文档提交结果待核对，请查询原上报记录")
+
+func (s *Store) recordAPIDocumentContent(sv *Service, snap APIDocumentSnapshot, raw []byte, expectedBaseline ...int64) (int64, error) {
 	s.apiDocumentMu.Lock()
 	defer s.apiDocumentMu.Unlock()
 	parsed, newOperations, digest, e := apidoc.Parse(raw)
@@ -50,6 +91,11 @@ func (s *Store) recordAPIDocument(sv *Service, snap APIDocumentSnapshot, raw []b
 		return 0, e
 	}
 	defer tx.Rollback()
+	if snap.ReportID != "" {
+		if _, e = tx.Exec(`UPDATE api_document_reports SET protocol=? WHERE id=? AND state='processing'`, protocol, snap.ReportID); e != nil {
+			return 0, e
+		}
+	}
 	if len(expectedBaseline) > 0 {
 		var latest int64
 		err := tx.QueryRow(`SELECT id FROM api_document_versions WHERE application_id=? AND environment=? AND `+documentProtocolSQL+`=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, snap.Environment, protocol).Scan(&latest)
@@ -62,16 +108,28 @@ func (s *Store) recordAPIDocument(sv *Service, snap APIDocumentSnapshot, raw []b
 		var existing int64
 		err = tx.QueryRow(`SELECT id FROM api_document_versions WHERE application_id=? AND environment=? AND digest=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, snap.Environment, digest).Scan(&existing)
 		if err == nil && (snap.Provider != "openapi-edit" || existing == latest) {
-			return existing, nil
+			return finishDuplicateDocumentReport(tx, sv, snap, raw, protocol, existing)
 		}
 		if err != nil && err != sql.ErrNoRows {
+			return 0, err
+		}
+	}
+	// File import has no build identity. Reuse matching immutable content even
+	// when it originally came from a build; never promote a historical match.
+	if len(expectedBaseline) == 0 && snap.Provider == "openapi-import" {
+		var existing int64
+		err := tx.QueryRow(`SELECT id FROM api_document_versions WHERE application_id=? AND environment=? AND digest=? ORDER BY id DESC LIMIT 1`, sv.ApplicationID, snap.Environment, digest).Scan(&existing)
+		if err == nil {
+			return finishDuplicateDocumentReport(tx, sv, snap, raw, protocol, existing)
+		}
+		if err != sql.ErrNoRows {
 			return 0, err
 		}
 	}
 	var id int64
 	e = tx.QueryRow(`SELECT id FROM api_document_versions WHERE application_id=? AND environment=? AND run_id=? AND artifact_id=? AND digest=?`, sv.ApplicationID, snap.Environment, snap.RunID, snap.ArtifactID, digest).Scan(&id)
 	if e == nil && snap.Provider != "openapi-edit" {
-		return id, nil
+		return finishDuplicateDocumentReport(tx, sv, snap, raw, protocol, id)
 	}
 	if e != nil && e != sql.ErrNoRows {
 		return 0, e
@@ -144,14 +202,22 @@ func (s *Store) recordAPIDocument(sv *Service, snap APIDocumentSnapshot, raw []b
 	if e = recordDocumentLineage(tx, id, baseline, []byte(previous), raw, snap.ChangeContext); e != nil {
 		return 0, e
 	}
-	if e = tx.Commit(); e != nil {
+	if e = recordOperationUpdates(tx, id, baseline, newOperations, diff); e != nil {
 		return 0, e
+	}
+	if e = finishDocumentReport(tx, snap.ReportID, id, baseline, "saved", diff.Summary); e != nil {
+		return 0, e
+	}
+	if e = tx.Commit(); e != nil {
+		return 0, errDocumentCommitUnknown
 	}
 	return id, nil
 }
 func registerEnvironmentDocumentRoutes(mux *http.ServeMux, st *Store, wj func(http.ResponseWriter, any), fail func(http.ResponseWriter, int, any), actor func(*http.Request) string, service func(http.ResponseWriter, *http.Request) *Service, admin func(http.ResponseWriter, *http.Request) bool) {
 	registerDocumentReportingRoutes(mux, st, wj, fail, service, admin)
 	registerDocumentSearchRoute(mux, st, wj, fail)
+	registerDocumentReportRoutes(mux, st, wj, fail)
+	registerDocumentOperationHistory(mux, st, wj, fail)
 	registerDocumentEditingRoutes(mux, st, wj, fail, actor, service, admin)
 	registerDocumentTraceRoutes(mux, st, wj, fail, service)
 	environment := func(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -231,7 +297,7 @@ func registerEnvironmentDocumentRoutes(mux *http.ServeMux, st *Store, wj func(ht
 		v, _ = st.resolveDocumentSource(sv, env)
 		wj(w, v)
 	})
-	mux.HandleFunc("POST /api/api-documents/import", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/api-documents/import", st.documentReportHTTP(func(w http.ResponseWriter, r *http.Request) {
 		if !admin(w, r) {
 			return
 		}
@@ -262,7 +328,7 @@ func registerEnvironmentDocumentRoutes(mux *http.ServeMux, st *Store, wj func(ht
 			}
 			expected = []int64{id}
 		}
-		id, e := st.recordAPIDocument(sv, APIDocumentSnapshot{Environment: env, Provider: "openapi-import", ExpectedMaintainerDigest: r.URL.Query().Get("expected_maintainer_digest"), ChangeContext: context, DefaultMaintainer: documentKeyMaintainer(r)}, raw, expected...)
+		id, e := st.recordAPIDocument(sv, APIDocumentSnapshot{ReportID: r.URL.Query().Get("report_id"), ReportActor: actor(r), Environment: env, Provider: "openapi-import", ExpectedMaintainerDigest: r.URL.Query().Get("expected_maintainer_digest"), ChangeContext: context, DefaultMaintainer: documentKeyMaintainer(r)}, raw, expected...)
 		if e != nil {
 			status := 400
 			if e == errDocumentBaselineChanged {
@@ -277,7 +343,7 @@ func registerEnvironmentDocumentRoutes(mux *http.ServeMux, st *Store, wj func(ht
 		} else {
 			wj(w, map[string]any{"id": id, "protocol": func() string { d, _, _, _ := apidoc.Parse(raw); return d.Protocol() }()})
 		}
-	})
+	}, false))
 	mux.HandleFunc("GET /api/api-documents", func(w http.ResponseWriter, r *http.Request) {
 		sv := service(w, r)
 		if sv == nil {
@@ -390,7 +456,7 @@ func registerEnvironmentDocumentRoutes(mux *http.ServeMux, st *Store, wj func(ht
 		if lineageErr != nil {
 			lineageWarning = lineageErr.Error()
 		}
-		wj(w, map[string]any{"id": v.ID, "info": d.Info, "operations": ops, "document": raw, "digest": v.Digest, "environment": v.Environment, "baseline_id": v.BaselineID, "snapshot": v, "field_additions": added, "change_context": changeContext, "field_additions_error": fieldWarning, "lineage": lineage, "lineage_error": lineageWarning})
+		wj(w, map[string]any{"update_info": st.documentUpdateInfo(v), "id": v.ID, "info": d.Info, "operations": ops, "document": raw, "digest": v.Digest, "environment": v.Environment, "baseline_id": v.BaselineID, "snapshot": v, "field_additions": added, "change_context": changeContext, "field_additions_error": fieldWarning, "lineage": lineage, "lineage_error": lineageWarning})
 	})
 	mux.HandleFunc("GET /api/api-documents/{id}/comparison", func(w http.ResponseWriter, r *http.Request) {
 		v, ok := find(w, r)

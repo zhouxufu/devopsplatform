@@ -87,7 +87,7 @@ func registerDocumentReportingRoutes(mux *http.ServeMux, st *Store, wj func(http
 		}
 		wj(w, baseline)
 	})
-	mux.HandleFunc("POST /api/api-documents/import-preview", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/api-documents/import-preview", st.documentReportHTTP(func(w http.ResponseWriter, r *http.Request) {
 		if !admin(w, r) {
 			return
 		}
@@ -202,5 +202,5 @@ func registerDocumentReportingRoutes(mux *http.ServeMux, st *Store, wj func(http
 			return
 		}
 		wj(w, map[string]any{"field_additions": added, "change_context": changeContext, "field_additions_error": fieldWarning, "default_maintainer": defaultMaintainer, "maintainer_sources": sources, "maintainer_changes": ownerChanges, "maintainer_digest": documentMaintainerDigest(owners), "maintainers": maintainers, "service": sv.Name, "environment": env, "info": doc.Info, "operation_count": len(ops), "digest": digest, "baseline": baseline, "duplicate": duplicateID > 0, "existing_document_id": duplicateID, "summary": diff.Summary, "changes": diff.Changes, "truncated": diff.Truncated})
-	})
+	}, true))
 }

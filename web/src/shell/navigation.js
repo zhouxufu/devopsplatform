@@ -8,7 +8,7 @@ export const navigationGroups=[
   {id:'orchestration',label:'发布记录',plugin:'deploy',hash:'#/orchestration?area=runs'},
   {id:'delivery-settings',label:'交付设置',items:[{id:'orchestration-templates',label:'编排模板',plugin:'deploy',hash:'#/orchestration?area=templates'}]},
  ]},
- {id:'api-center',label:'接口中心',icon:'api-center',items:[{id:'api-documents',label:'接口文档',plugin:'api-center',hash:'#/documents'},{id:'api-test-cases',label:'测试用例',plugin:'api-center',hash:'#/test-cases'},{id:'api-testing',label:'执行测试',plugin:'api-center',hash:'#/test-execution'}]},
+ {id:'api-center',label:'接口中心',icon:'api-center',items:[{id:'api-documents',label:'接口文档',plugin:'api-center',hash:'#/documents'},{id:'api-reports',label:'上报记录',plugin:'api-center',hash:'#/reports'},{id:'api-test-cases',label:'测试用例',plugin:'api-center',hash:'#/test-cases'},{id:'api-testing',label:'执行测试',plugin:'api-center',hash:'#/test-execution'}]},
  {id:'data',label:'数据工具',icon:'dbms',items:[
   {id:'database-group',label:'数据库',items:[{id:'dbms',label:'数据库工作台',plugin:'dbms',hash:'#/query'},{id:'sql-change',label:'SQL 变更提交',plugin:'dbms',hash:'#/operations'},{id:'sql-history',label:'数据库执行记录',plugin:'dbms',hash:'#/history'},{id:'sync',label:'数据迁移',plugin:'dbms',hash:'#/sync'}]},
   {id:'redis-group',label:'Redis',items:[{id:'redis',label:'Redis 工作台',plugin:'redis',hash:'#/query'},{id:'redis-change',label:'Redis 变更提交',plugin:'redis',hash:'#/operations'},{id:'redis-history',label:'Redis 执行记录',plugin:'redis',hash:'#/history'}]},

@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"logplatform/pkg/personnames"
 	"net/http"
@@ -15,21 +16,22 @@ import (
 )
 
 type documentSearchItem struct {
-	Protocol       string   `json:"protocol"`
-	SnapshotID     int64    `json:"snapshot_id"`
-	ApplicationID  string   `json:"application_id"`
-	Service        string   `json:"service"`
-	DisplayName    string   `json:"display_name"`
-	Environment    string   `json:"environment"`
-	CreatedAt      int64    `json:"created_at"`
-	ID             string   `json:"id"`
-	Method         string   `json:"method"`
-	Path           string   `json:"path"`
-	Summary        string   `json:"summary"`
-	Maintainer     string   `json:"maintainer,omitempty"`
-	MaintainerName string   `json:"maintainer_name,omitempty"`
-	Tags           []string `json:"tags"`
-	SSE            bool     `json:"sse"`
+	Update         DocumentOperationUpdate `json:"update"`
+	Protocol       string                  `json:"protocol"`
+	SnapshotID     int64                   `json:"snapshot_id"`
+	ApplicationID  string                  `json:"application_id"`
+	Service        string                  `json:"service"`
+	DisplayName    string                  `json:"display_name"`
+	Environment    string                  `json:"environment"`
+	CreatedAt      int64                   `json:"created_at"`
+	ID             string                  `json:"id"`
+	Method         string                  `json:"method"`
+	Path           string                  `json:"path"`
+	Summary        string                  `json:"summary"`
+	Maintainer     string                  `json:"maintainer,omitempty"`
+	MaintainerName string                  `json:"maintainer_name,omitempty"`
+	Tags           []string                `json:"tags"`
+	SSE            bool                    `json:"sse"`
 }
 type documentSearchResult struct {
 	Items     []documentSearchItem `json:"items"`
@@ -73,10 +75,12 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 				*target = v
 			}
 		}
-		query := `SELECT v.id,v.application_id,v.service,COALESCE(NULLIF(s.display_name,''),s.name),v.environment,v.created_at,v.document,COALESCE(m.maintainer,''),COALESCE(om.document,'')
+		query := `SELECT v.id,v.application_id,v.service,COALESCE(NULLIF(s.display_name,''),s.name),v.environment,v.created_at,v.document,COALESCE(m.maintainer,''),COALESCE(om.document,''),COALESCE(lineage.document,'{}'),COALESCE(updates.document,'')
  FROM api_document_versions v JOIN services s ON s.application_id=v.application_id AND s.name=v.service
  LEFT JOIN api_document_maintainers m ON m.snapshot_id=v.id
  LEFT JOIN api_document_maintainer_maps om ON om.snapshot_id=v.id
+ LEFT JOIN api_document_lineage lineage ON lineage.snapshot_id=v.id
+ LEFT JOIN api_document_operation_updates updates ON updates.snapshot_id=v.id
  WHERE v.id IN (SELECT MAX(api_document_versions.id) FROM api_document_versions LEFT JOIN api_document_protocols dp ON dp.snapshot_id=api_document_versions.id WHERE COALESCE(dp.protocol,'http')=? GROUP BY application_id,environment)`
 		args := []any{protocol}
 		if name := q.Get("service"); name != "" {
@@ -108,10 +112,14 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 		terms := strings.Fields(strings.ToLower(keyword))
 		tags := map[string]bool{}
 		offset := (result.Page - 1) * result.PageSize
+		if q.Get("sort") == "updated" && offset > 10000 {
+			fail(w, 400, "最近变更排序最多浏览一万项，请缩小应用或环境范围")
+			return
+		}
 		for rows.Next() {
 			var base documentSearchItem
-			var raw, fallback, ownerRaw string
-			if e = rows.Scan(&base.SnapshotID, &base.ApplicationID, &base.Service, &base.DisplayName, &base.Environment, &base.CreatedAt, &raw, &fallback, &ownerRaw); e != nil {
+			var raw, fallback, ownerRaw, lineageRaw, updateRaw string
+			if e = rows.Scan(&base.SnapshotID, &base.ApplicationID, &base.Service, &base.DisplayName, &base.Environment, &base.CreatedAt, &raw, &fallback, &ownerRaw, &lineageRaw, &updateRaw); e != nil {
 				fail(w, 500, "文档检索失败，请重试")
 				return
 			}
@@ -128,6 +136,13 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 			if err = applyFrozenDocumentMaintainers(ops, owners, fallback); err != nil {
 				fail(w, 500, err)
 				return
+			}
+			updates := decodeOperationUpdates(lineageRaw, base.SnapshotID)
+			if updateRaw != "" {
+				if e = json.Unmarshal([]byte(updateRaw), &updates); e != nil {
+					fail(w, 500, "接口更新记录无法读取")
+					return
+				}
 			}
 			result.Snapshots++
 			sort.Slice(ops, func(i, j int) bool { return ops[i].ID < ops[j].ID })
@@ -166,9 +181,10 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 						continue
 					}
 				}
-				if result.Total >= offset && len(result.Items) < result.PageSize {
+				if q.Get("sort") == "updated" || result.Total >= offset && len(result.Items) < result.PageSize {
 					item := base
 					item.Protocol = protocol
+					item.Update = updates[op.ID]
 					item.ID = op.ID
 					item.Method = op.Method
 					item.Path = op.Path
@@ -178,6 +194,10 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 					item.Tags = op.Tags
 					item.SSE = op.SSE
 					result.Items = append(result.Items, item)
+					if q.Get("sort") == "updated" && len(result.Items) > offset+result.PageSize+1000 {
+						sort.SliceStable(result.Items, func(i, j int) bool { return result.Items[i].Update.SnapshotID > result.Items[j].Update.SnapshotID })
+						result.Items = result.Items[:offset+result.PageSize]
+					}
 				}
 				result.Total++
 			}
@@ -185,6 +205,29 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 		if rows.Err() != nil {
 			fail(w, 500, "文档检索失败，请重试")
 			return
+		}
+		rows.Close()
+		if q.Get("sort") == "updated" {
+			sort.SliceStable(result.Items, func(i, j int) bool { return result.Items[i].Update.SnapshotID > result.Items[j].Update.SnapshotID })
+			end := offset + result.PageSize
+			if end > len(result.Items) {
+				end = len(result.Items)
+			}
+			if offset > end {
+				offset = end
+			}
+			result.Items = result.Items[offset:end]
+		}
+		cache := map[int64]DocumentOperationUpdate{}
+		for i := range result.Items {
+			item := &result.Items[i]
+			u, ok := cache[item.Update.SnapshotID]
+			if !ok {
+				u = st.completeOperationUpdate(item.ApplicationID, item.Environment, protocol, item.Update)
+				cache[item.Update.SnapshotID] = u
+			}
+			u.Kind = item.Update.Kind
+			item.Update = u
 		}
 		for tag := range tags {
 			result.Groups = append(result.Groups, tag)
