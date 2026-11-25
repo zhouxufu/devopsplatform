@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	agentcfg "logplatform/internal/agent"
+	agentcfg "logplatform/internal/agentconfig"
 	"logplatform/pkg/deploytask"
 	"net/http"
 	"os"

@@ -1,5 +1,14 @@
 # 八项 UI 与交互改动验收
 
+## 2026-11-19 Windows 本地开发运行环境
+
+- 用户明确本机只需开发运行，集成验证使用已有测试服务器。已安装 Windows Go 1.22.5，复用 Node.js 24.15.0、Python、Git；官方 Windows VictoriaLogs v1.53.0 下载后校验官方 SHA-256。误装的独立 DevOpsUbuntu 已撤回，原有 docker-desktop 发行版保留。
+- 实测编译阻断：交付服务只为生成 Agent 配置却依赖整个 Unix 日志采集运行时。抽出共享配置 DTO，原 Agent 保留类型别名；cleanEnv 移到通用文件，保留受限环境变量集合及非支持平台的执行拒绝。Linux Agent 交叉编译通过；未据此声称 Windows Agent 采集/部署可用。
+- 实测 Windows 前端预检把反斜杠路径下的官方 Table 误报为业务原生表，统一路径分隔符后，449 个 Vue 文件检查、表格检查和生产 UI 构建均通过。
+- Windows 原生平台、日志、监控、交付和 MCP 已编译运行；登录及六个管理健康/身份接口 HTTP 200，VictoriaLogs 健康正常。监听均为 127.0.0.1；数据使用独立本机 SQLite 和目录，没有接入测试/生产业务资源。启停脚本及本机密码保存在已忽略的 runtime/windows/。
+- 定向配置规范化、平台识别及安装命令令牌隔离测试通过；本次未运行完整后台 race、全部前端测试或浏览器交互回归，也未执行真实 SSH/Agent/SQL/Nacos/发布集成。本记录只证明本地启动与上述检查，不是开发轮次部署就绪结论。
+- Docker Desktop 原有 Unix socket 重解析点访问失败，两处运行时目录已保留备份，启动仍失败；Windows 本地平台当前不依赖 Docker。
+
 ## 2026-11-16 其余应用资源实际接入与待优化项
 
 - 已按仓库、构建产物路径、Spring运行名、Maven开发／测试profile和当前Nacos实际内容，为其余26个应用保存628条绑定（MySQL206、Nacos422；开发307、测试321）。新增住房宝开发／测试两条Nacos命名空间连接，复用同集群已有凭据；原bus／business、3个共享组、已有连接修订均保持不变。未创建库、修改源码或Nacos正文，未开放Redis、改生产或扩大Key权限。

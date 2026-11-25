@@ -79,10 +79,6 @@ func alive(r workerReceipt, dir string) bool {
 	b, e := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", r.PID))
 	return e == nil && strings.Contains(string(b), "-deployment-worker\x00"+dir+"\x00")
 }
-func cleanEnv(dir string) []string {
-	return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "LANG=C", "LC_ALL=C", "DEPLOY_TASK_DIR=" + dir, "DEPLOY_ARTIFACT=" + filepath.Join(dir, "artifact")}
-}
-
 func startWorker(dir string, c Config) error {
 	exe, e := os.Executable()
 	if e != nil {

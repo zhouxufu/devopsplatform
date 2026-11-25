@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-	agentcfg "logplatform/internal/agent"
+	agentcfg "logplatform/internal/agentconfig"
 )
 
 const agentInstallPath = "/usr/local/bin/logagent"

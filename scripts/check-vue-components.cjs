@@ -27,7 +27,7 @@ function check(file){
    if(['details','summary'].includes(n.tag))errors.push(file+': use official Accordion, DropdownMenu or Popover instead of '+n.tag)
    if(n.tag==='FieldLabel'&&n.children.some(c=>c.tag==='Checkbox'&&c.props.some(p=>p.name==='for')))errors.push(file+': put the checkbox loop on FieldLabel so its label stays in scope')
    if(n.tag==='TabsTrigger'&&n.children.some(c=>c.props?.some(p=>p.name==='slot'&&p.arg?.content==='radio')))errors.push(file+': TabsTrigger uses its default slot, not an old Radio slot')
-   if(n.tag==='table'&&!file.includes('/components/ui/'))errors.push(file+': use official Table')
+   if(n.tag==='table'&&!file.replaceAll('\\','/').includes('/components/ui/'))errors.push(file+': use official Table')
    if(/^[A-Z]/.test(n.tag)&&!bindings[n.tag]&&!builtins.has(n.tag))errors.push(file+': unknown component '+n.tag)
    if(['Tabs','Accordion','Collapsible'].includes(n.tag)){
     const model=n.props.find(p=>p.name==='bind'&&p.arg?.content==='model-value')?.exp?.content, update=n.props.find(p=>p.name==='on'&&p.arg?.content==='update:model-value')?.exp?.content
