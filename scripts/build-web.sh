@@ -9,7 +9,7 @@ cd ..
 for target in internal/deploy/assets/app internal/monitor/assets/app internal/server/assets/app internal/devtools/assets/app; do
   rm -rf "$target"
   mkdir -p "$target"
-  cp -r web/dist/* "$target/"
+  cp -R web/dist/. "$target/"
 done
 rm -rf internal/platform/assets/assets
 mkdir -p internal/platform/assets/assets

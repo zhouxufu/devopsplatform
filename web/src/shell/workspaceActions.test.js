@@ -4,6 +4,13 @@ import {workspaceCloseTargets,nextWorkspaceAfterClose} from './workspaceActions.
 import {platformPage,platformWorkspacePlugin} from './platformPages.js'
 import {workspaceSnapshot,restoreWorkspaceSnapshot} from './workspaceSession.js'
 const windows=[{id:4},{id:9},{id:2}]
+test('close other tabs uses the clicked workspace and respects the pinned home',()=>{
+ assert.deepEqual(workspaceCloseTargets(windows,9,'other'),[4,2])
+ assert.deepEqual(workspaceCloseTargets(windows,0,'other'),[4,9,2])
+ assert.deepEqual(workspaceCloseTargets(windows,0,'current'),[])
+ assert.deepEqual(workspaceCloseTargets(windows,99,'other'),[])
+ assert.deepEqual(workspaceCloseTargets([{id:4}],4,'other'),[])
+})
 test('bulk close follows displayed order and never closes the fixed home',()=>{
  assert.deepEqual(workspaceCloseTargets(windows,9,'left'),[4]);assert.deepEqual(workspaceCloseTargets(windows,9,'right'),[2]);assert.deepEqual(workspaceCloseTargets(windows,0,'left'),[]);assert.deepEqual(workspaceCloseTargets(windows,0,'right'),[4,9,2]);assert.deepEqual(workspaceCloseTargets(windows,99,'left'),[]);assert.deepEqual(workspaceCloseTargets(windows,9,'all'),[4,9,2])
 })

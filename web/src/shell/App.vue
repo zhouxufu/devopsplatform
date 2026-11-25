@@ -158,7 +158,7 @@ const envMenuGroups = computed(() => {
 })
 
 const headerTabs = computed(() => {
-  const result = [{ value: '0', label: '个人工作台' }]
+  const result = [{ value: 0, label: '个人工作台' }]
   for (const w of st.workspaces) {
     result.push({
       value: w.id,
@@ -234,7 +234,6 @@ async function closeWorkspaceIDs(ids){
   switchWs(active)
  }finally{closingWorkspace.value=false}
 }
-function closeWs(id){return closeWorkspaceIDs([id])}
 function closeWorkspaceGroup(action,anchor=st.active){return closeWorkspaceIDs(workspaceCloseTargets(st.workspaces,anchor,action))}
 function hasCloseTargets(action,anchor=st.active){return !closingWorkspace.value&&workspaceCloseTargets(st.workspaces,anchor,action).length>0}
 
@@ -487,15 +486,17 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
   <HeaderWithTabs
     :breadcrumbs="workspaceBreadcrumb(st.active===0?null:activeWorkspace)"
     :tabs="headerTabs"
+    :can-close="hasCloseTargets"
     :active-tab="String(st.active)"
     :app-menu-groups="appMenuGroups"
     :env-menu-groups="envMenuGroups"
     :current-app="st.gSvc"
     :current-env="st.gEnv"
-    @tab-change="handleHeaderTabChange" @tab-duplicate="duplicateWorkspace" @tab-close="closeWs"
+    @tab-change="handleHeaderTabChange" @tab-duplicate="duplicateWorkspace"
     @app-select="item => { st.gSvc = item.value; ctxSync() }"
     @env-select="item => { st.gEnv = item.value; environmentChanged() }"
     @search-open="globalSearchOpen = true"
+    @tab-close="closeWorkspaceGroup"
   >
     <template #actions>
       <SidebarTrigger aria-label="切换主导航" class="mr-2" />

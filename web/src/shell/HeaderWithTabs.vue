@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { Tabs, TabsList, TabsTrigger, Button, Separator, ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from '@/shared/shadcn-ui.js'
+import { Tabs, TabsList, TabsTrigger, Button, ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from '@/shared/shadcn-ui.js'
 import { Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb'
 import { ChevronDownIcon, SearchIcon } from '@lucide/vue'
 import ContextMenuButton from '../shared/components/ContextMenuButton.vue'
@@ -13,6 +13,10 @@ const props = defineProps({
   tabs: {
     type: Array,
     default: () => []
+  },
+  canClose: {
+    type: Function,
+    required: true
   },
   activeTab: {
     type: [String, Number],
@@ -36,10 +40,17 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['tab-change', 'tab-duplicate', 'tab-close', 'app-select', 'env-select', 'search-open'])
+defineEmits(['tab-change', 'tab-duplicate', 'app-select', 'env-select', 'search-open', 'tab-close'])
 
 const appLabel = computed(() => props.currentApp || '应用')
 const envLabel = computed(() => props.currentEnv || '环境')
+
+const closeActions = [
+  { value: 'current', label: '关闭当前标签页' },
+  { value: 'other', label: '关闭其他标签页' },
+  { value: 'left', label: '关闭左侧标签页' },
+  { value: 'right', label: '关闭右侧标签页' }
+]
 </script>
 
 <template>
@@ -68,10 +79,24 @@ const envLabel = computed(() => props.currentEnv || '环境')
       @update:model-value="value => $emit('tab-change', value)"
     >
       <TabsList variant="line" class="h-full! w-max min-w-full shrink-0 justify-start rounded-none bg-transparent p-0">
-        <ContextMenu v-for="tab in tabs" :key="tab.value"><ContextMenuTrigger as-child>
-        <TabsTrigger :value="String(tab.value)" class="h-10 flex-none shrink-0 gap-2 rounded-none px-3" :title="tab.label">
-          <span class="truncate">{{ tab.label }}</span>
-        </TabsTrigger></ContextMenuTrigger><ContextMenuContent v-if="String(tab.value)!=='0'"><ContextMenuItem @select="$emit('tab-duplicate',tab.value)">在新标签打开</ContextMenuItem><ContextMenuItem @select="$emit('tab-close',Number(tab.value))">关闭标签</ContextMenuItem></ContextMenuContent></ContextMenu>
+        <ContextMenu v-for="tab in tabs" :key="tab.value">
+          <ContextMenuTrigger class="inline-flex shrink-0">
+            <TabsTrigger :value="String(tab.value)" :title="tab.label" class="h-10 flex-none gap-2 rounded-none px-3">
+              <span class="truncate">{{ tab.label }}</span>
+            </TabsTrigger>
+          </ContextMenuTrigger>
+          <ContextMenuContent :aria-label="`${tab.label}的标签页操作`">
+            <ContextMenuItem v-if="String(tab.value)!=='0'" @select="$emit('tab-duplicate',tab.value)">在新标签打开</ContextMenuItem>
+            <ContextMenuItem
+              v-for="action in closeActions"
+              :key="action.value"
+              :disabled="!canClose(action.value, tab.value)"
+              @select="$emit('tab-close', action.value, tab.value)"
+            >
+              {{ action.label }}
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
       </TabsList>
     </Tabs>
 
