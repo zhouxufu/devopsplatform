@@ -80,13 +80,8 @@ func (s *Store) freezeDeploymentAgents(v *ServiceEnvironment) error {
 			allowed := []string{}
 			for _, candidate := range candidates {
 				a := s.deploymentAgent(candidate)
-				if a != nil {
-					for _, service := range a.Services {
-						if service == v.Service {
-							allowed = append(allowed, candidate)
-							break
-						}
-					}
+				if s.deploymentAgentAllowsService(a, v.Service) {
+					allowed = append(allowed, candidate)
 				}
 			}
 			if len(allowed) != 1 {

@@ -24,14 +24,15 @@ import {themeDark, themeSyncPayload, toggleTheme} from '../shared/composables/th
 
 import MembersDialog from './MembersDialog.vue'
 import ConsoleIcon from './ConsoleIcon.vue'
+import {hasInlineLogContext, updateWorkspaceContext} from './workspaceContext.js'
 import {applicationOption} from '../shared/applicationName.js'
 import {currentApplications} from './applicationCatalog.js'
 import {DEFAULT_RECENT_MINUTES, inferRecentMinutes, recentRange, restoreTimeRange} from '../shared/timeRange.js'
-
 import HeaderWithTabs from './HeaderWithTabs.vue'
 import GlobalSearchCommand from '../shared/components/GlobalSearchCommand.vue'
 import { useGlobalShortcuts } from '../shared/composables/useGlobalShortcuts.js'
 import '../shell/layout-optimization.css'
+
 const dark = themeDark
 function switchTheme() {
   dark.value = toggleTheme()
@@ -126,7 +127,7 @@ function duplicateWorkspace(w){openPlugin(w.plugin,currentWorkspaceHash(w),{cont
 function workspaceTitle(w){return formatWorkspaceTitle(w,st.workspaces)}
 function renameWs(w){renameWorkspace.value=w;workspaceName.value=workspaceTitle(w)}
 function saveWorkspaceName(){const value=workspaceName.value.trim();if(!value||value.length>60)return;renameWorkspace.value.title=value;renameWorkspace.value=null}
-const showContext = computed(() => ['logs', 'monitor'].includes(activeWorkspace.value?.plugin?.name))
+const showContext = computed(() => ['logs', 'monitor'].includes(activeWorkspace.value?.plugin?.name) && !hasInlineLogContext(activeWorkspace.value))
 const showTimeContext=computed(()=>{
  const workspace=activeWorkspace.value
  if(!showContext.value)return false
@@ -134,7 +135,6 @@ const showTimeContext=computed(()=>{
  return workspace.plugin.name==='logs'?['/','/search'].includes(path):!['/alerts','/rules'].includes(path)
 })
 const contextFields=computed(()=>activeWorkspace.value?.contextFields||{service:showContext.value,environment:showContext.value})
-function openDefault() { openHome() }
 
 const globalSearchOpen = ref(false)
 const { register: registerShortcut } = useGlobalShortcuts()
@@ -188,6 +188,7 @@ function handleGlobalSearch(item) {
   }
 }
 
+function openDefault() { openHome() }
 
 function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
   if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
@@ -246,7 +247,7 @@ function ctxSync(list) {
   if (st.rangeMinutes > 0) st.range = recentRange(st.rangeMinutes)
   if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
   localStorage.setItem(CTX_KEY, JSON.stringify({ service: st.gSvc, environment: st.gEnv, range: st.range, rangeMinutes: st.rangeMinutes }))
-  ;(list || (activeWorkspace.value?[activeWorkspace.value]:[])).forEach(w => {const c=w.context||controlsContext();if(c.rangeMinutes>0)c.range=recentRange(c.rangeMinutes);const msg={type:'context.sync',service:c.service,environment:c.environment,rangeStart:c.range?.[0]||0,rangeEnd:c.range?.[1]||0,rangeMinutes:c.rangeMinutes};try { w.el.contentWindow.postMessage(msg, location.origin) } catch {} })
+  ;(list || (activeWorkspace.value?[activeWorkspace.value]:[])).forEach(w => {const c=w.context||controlsContext();if(c.rangeMinutes>0)c.range=recentRange(c.rangeMinutes);const msg={type:'context.sync',service:c.service,environment:c.environment,rangeStart:c.range?.[0]||0,rangeEnd:c.range?.[1]||0,rangeMinutes:c.rangeMinutes,...(w.plugin.name==='logs'?{applications:st.services.map(s=>({value:s.name,label:applicationOption(s).label+(s.managed?'':' · 未接入部署')})),environments:st.environments.map(e=>({value:e.name,label:e.display_name||e.name}))}:{})};try { w.el.contentWindow.postMessage(msg, location.origin) } catch {} })
   rememberWindows()
 }
 
@@ -272,6 +273,10 @@ async function loadServices() {
   // workspace's selected query scope. Keep the last successful presentation.
   if (Array.isArray(sources[0])) st.services = currentApplications(sources[0], st.deployServices)
 }
+watch(() => [st.services, st.environments], () => {
+  const logs = st.workspaces.filter(w => w.plugin.name === 'logs')
+  if (logs.length) ctxSync(logs)
+})
 async function environmentChanged() { await loadServices(); ctxSync() }
 async function closePlatformPanel() {
   const previous = st.platformPanel
@@ -421,27 +426,18 @@ window.addEventListener('message', e => {
   if(ws&&e.data?.type==='platform.home')openHome()
   // 回写消息来源窗口；从该窗口打开日志/监控时继承条件，不影响其他窗口。
   if (ws && e.data?.type === 'context.update') {
-    let changed = false
-    if (Object.prototype.hasOwnProperty.call(e.data, 'service') && typeof e.data.service === 'string' && e.data.service !== ws.context.service) {
-      ws.context.service = e.data.service
-      changed = true
-    }
-    if (Object.prototype.hasOwnProperty.call(e.data, 'environment') && typeof e.data.environment === 'string' && e.data.environment !== ws.context.environment) {
-      ws.context.environment = e.data.environment
-      changed = true
-    }
+    const changed = updateWorkspaceContext(ws.context, e.data)
     if (changed) {
-      if(ws.id===st.active){st.gSvc=ws.context.service;st.gEnv=ws.context.environment}
+      if(ws.id===st.active){st.gSvc=ws.context.service;st.gEnv=ws.context.environment;st.range=[...ws.context.range];st.rangeMinutes=ws.context.rangeMinutes}
       ctxSync([ws])
-      loadServices()
     }
-  registerShortcut('ctrl+k', () => {
-    globalSearchOpen.value = true
-  })
   }
 })
 
 onMounted(async () => {
+  registerShortcut('ctrl+k', () => {
+    globalSearchOpen.value = true
+  })
   const r = await fetch('/api/plugins')
   if (r.status === 401) { requireLogin(); return }
   const returnTo=loginReturnTarget();if(r.ok&&(location.pathname==='/login'||returnTo!=='/')){location.replace(returnTo);return}

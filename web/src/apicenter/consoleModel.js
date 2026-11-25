@@ -3,7 +3,7 @@ export function historyTab(source){return source==='case'?'caseHistory':'manualH
 export function isHistoryTab(tab){return ['manualHistory','caseHistory'].includes(tab)}
 export function initialConsoleTab(query,recordsOnly=false){return recordsOnly?'caseHistory':query.view==='history'?historyTab(query.source):'request'}
 export function reportReturnTab(tab,run,recordsOnly=false){return isHistoryTab(tab)?tab:recordsOnly?'caseHistory':historyTab(run?.source||(run?.case_id||run?.suite_id?'case':'manual'))}
-export function requestName(request){return `${request.method||'GET'} ${(request.path||'/').split(/[?#]/,1)[0]||'/'}`.slice(0,180)}
+export function requestName(request){if(request.mode==='dubbo'&&request.rpc)return `DUBBO ${request.rpc.interface}#${request.rpc.method}(${(request.rpc.parameter_types||[]).join(',')})`.slice(0,180);return `${request.method||'GET'} ${(request.path||'/').split(/[?#]/,1)[0]||'/'}`.slice(0,180)}
 export function contextBlocker({service,loading,error,context,environment,target,admin}){
  if(!service)return {message:'请选择应用',action:''}
  if(loading)return {message:'正在加载环境和测试目标…',action:''}

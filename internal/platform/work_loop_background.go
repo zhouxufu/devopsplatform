@@ -51,7 +51,7 @@ func (g *Gateway) workLoopTick(ctx context.Context, registry *Registry) {
 		if !user.Enabled || user.Username == "local" {
 			continue
 		}
-		for _, taskRoute := range []struct{ base, advance string }{{"/api/work-loops", "/internal/work-loop-advance"}, {"/api/service-deployments", "/internal/service-deployment-advance"}} {
+		for _, taskRoute := range []struct{ base, advance string }{{"/api/work-loops", "/internal/work-loop-advance"}, {"/api/service-deployments", "/internal/service-deployment-advance"}, {"/api/delivery/publications", "/internal/delivery-publication-advance"}} {
 			req, e := http.NewRequestWithContext(ctx, "GET", deploy+taskRoute.base, nil)
 			if e != nil {
 				return

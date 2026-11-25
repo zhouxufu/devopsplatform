@@ -37,6 +37,7 @@ type enrollmentRemote struct {
 type enrollmentPlan struct {
 	Scope           deploytask.EnrollmentScope `json:"scope"`
 	Services        []string                   `json:"services"`
+	ActiveRoots     []string                   `json:"active_roots,omitempty"`
 	URL             string                     `json:"url"`
 	RunUser         string                     `json:"run_user"`
 	RunGroup        string                     `json:"run_group"`
@@ -139,14 +140,30 @@ func (s *Store) validateEnrollment(h Host, input enrollmentInput) ([]string, []s
 	}
 	services := append([]string{}, input.Services...)
 	sort.Strings(services)
+	for _, name := range services {
+		if name == "*" && len(services) != 1 {
+			return nil, nil, fmt.Errorf("全部应用（*）不能与指定应用混选")
+		}
+	}
+	options := s.enrollmentOptions(h)
+	selected := services
+	if len(services) == 1 && services[0] == "*" {
+		selected = nil
+		for _, option := range options {
+			selected = append(selected, option["service"])
+		}
+		if len(selected) == 0 {
+			return nil, nil, fmt.Errorf("此主机尚未绑定可接入的托管 Java 应用")
+		}
+	}
 	roots := []string{}
 	seen := map[string]bool{}
-	for i, name := range services {
-		if i > 0 && services[i-1] == name {
+	for i, name := range selected {
+		if i > 0 && selected[i-1] == name {
 			return nil, nil, fmt.Errorf("应用重复")
 		}
 		found := false
-		for _, option := range s.enrollmentOptions(h) {
+		for _, option := range options {
 			if option["service"] == name {
 				root := option["root"]
 				if root == "/" || root == "." || !path.IsAbs(root) {
@@ -228,8 +245,24 @@ func inspectEnrollment(h Host, t enrollmentTransport) (enrollmentRemote, error) 
 	return v, nil
 }
 func (s *Store) prepareEnrollment(h Host, input enrollmentInput, actor string, t enrollmentTransport) (*enrollmentState, error) {
-	if old := s.enrollment(h.Name); old != nil && enrollmentBusy(old.Phase) {
-		return nil, fmt.Errorf("此主机存在尚未核对的接入操作，请先刷新接入状态")
+	if old := s.enrollment(h.Name); old != nil {
+		if enrollmentBusy(old.Phase) {
+			return nil, fmt.Errorf("此主机存在尚未核对的接入操作，请先刷新接入状态")
+		}
+		// Omitted fields reuse the saved setup; explicitly clearing the
+		// application list still fails validation.
+		if input.Services == nil {
+			input.Services = append([]string{}, old.Plan.Services...)
+		}
+		if input.URL == "" {
+			input.URL = old.Plan.URL
+		}
+		if input.RunUser == "" {
+			input.RunUser = old.Plan.RunUser
+		}
+		if input.RunGroup == "" {
+			input.RunGroup = old.Plan.RunGroup
+		}
 	}
 	services, roots, e := s.validateEnrollment(h, input)
 	if e != nil {
@@ -275,6 +308,15 @@ func (s *Store) prepareEnrollment(h Host, input enrollmentInput, actor string, t
 	}
 	oldRegistration := s.enrollmentRegistrationHash(agent)
 	plan := enrollmentPlan{Scope: deploytask.EnrollmentScope{OperationID: id, AgentID: agent, Host: h.Name, Environment: h.Environment, Roots: roots, StateDir: "/var/lib/logagent/deployment-tasks", Launcher: "/usr/local/libexec/logagent-deployment-worker"}, Services: services, URL: strings.TrimRight(input.URL, "/"), RunUser: user, RunGroup: group, Remote: remote, HostDigest: s.enrollmentHostHash(h), BinarySHA: fmt.Sprintf("%x", sha256.Sum256(binary)), OldRegistration: oldRegistration, Actor: actor, Expires: time.Now().Add(10 * time.Minute).Unix()}
+	if previous := s.enrollment(h.Name); previous != nil && previous.Plan.Scope.AgentID == agent {
+		// Preparing another preview must not grant its new roots to the still
+		// active credential, or forget that credential's existing directory scope.
+		if previous.Phase == "ready" {
+			plan.ActiveRoots = append([]string{}, previous.Plan.Scope.Roots...)
+		} else {
+			plan.ActiveRoots = append([]string{}, previous.Plan.ActiveRoots...)
+		}
+	}
 	if old := s.deploymentAgent(agent); old != nil && (old.Host != h.Name || old.Environment != h.Environment) {
 		return nil, fmt.Errorf("安装身份属于其他主机，拒绝接管")
 	}

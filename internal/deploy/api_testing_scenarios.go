@@ -48,7 +48,7 @@ type apiScenarioRuntime struct {
 func scenarioServices(c *apiTestCase) []string {
 	seen := map[string]bool{}
 	for _, step := range c.Steps {
-		if testNodeKind(step) == "http" {
+		if isTestRequest(step) {
 			seen[step.Service] = true
 		}
 	}
@@ -72,7 +72,7 @@ func (s *Store) validateScenario(c *apiTestCase) error {
 	}
 	for i := range c.Steps {
 		step := &c.Steps[i]
-		if testNodeKind(*step) != "http" {
+		if !isTestRequest(*step) {
 			if step.Service != "" || step.ApplicationID != "" {
 				return fmt.Errorf("控制节点不绑定应用")
 			}
@@ -109,8 +109,12 @@ func scenarioTargetAuth(p apiTestProfile, key string) apitest.Auth {
 }
 func scenarioVariablePreflight(c *apiTestCase, service string, auth apitest.Auth, variables map[string]string) error {
 	for _, step := range c.Steps {
-		if testNodeKind(step) == "http" && step.Service == service {
-			if err := apitest.ValidateVariableBindings(step.Request, auth, variables); err != nil {
+		if isTestRequest(step) && step.Service == service {
+			stepAuth := auth
+			if step.Request.Mode == "dubbo" {
+				stepAuth = apitest.Auth{Mode: "none"}
+			}
+			if err := apitest.ValidateVariableBindings(step.Request, stepAuth, variables); err != nil {
 				return fmt.Errorf("应用 %s：%w", service, err)
 			}
 		}
@@ -267,6 +271,20 @@ func (m *apiTestManager) startScenario(owner string, admin bool, in apiScenarioI
 		identity := apiScenarioRunTarget{Service: name, ApplicationID: sv.ApplicationID, Environment: in.Environment, Target: *target}
 		public = append(public, identity)
 		runtimes[name] = apiScenarioRuntime{apiScenarioRunTarget: identity, Auth: p.Auth, Variables: variables}
+		relevant := []apiTestStep{}
+		for _, step := range c.Steps {
+			if step.Service == name {
+				relevant = append(relevant, step)
+			}
+		}
+		nodeTargets, e := m.st.prepareProtocolTargets(name, in.Environment, p, *target, relevant, variables)
+		if e != nil {
+			return nil, e
+		}
+		for key, value := range nodeTargets {
+			runtimes[key] = value
+		}
+
 	}
 	for name, runtime := range runtimes {
 		runtime.Redactions = redactions
@@ -296,7 +314,7 @@ func (m *apiTestManager) startScenario(owner string, admin bool, in apiScenarioI
 		for i, step := range c.Steps {
 			snapshot.Steps[i].Request = apitest.SanitizeRequest(step.Request, redactions)
 			r := apiTestStepResult{ID: step.ID, Kind: step.Kind, Service: step.Service, ApplicationID: step.ApplicationID, Environment: in.Environment, DocumentID: step.DocumentID, Name: step.Name, Action: step.Action, Expected: step.Expected, Request: snapshot.Steps[i].Request, Status: "pending"}
-			if runtime, ok := runtimes[step.Service]; ok {
+			if runtime, ok := scenarioRuntimeFor(runtimes, step); ok {
 				target := runtime.Target
 				r.Target = &target
 				r.DocumentDigest, _ = m.st.apiTestDocument(runtime.ApplicationID, step.DocumentID)

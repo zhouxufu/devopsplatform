@@ -1,8 +1,8 @@
 // These links open existing workspaces; none starts a build, test or deployment.
 export const dailyWorkGroups=[
  {id:'develop',label:'开发协作',items:[
-  {plugin:'research',label:'工作项',hash:'#/work'},
-  {plugin:'deploy',label:'变更列表',hash:'#/changes?tab=changes'},
+  {plugin:'research',label:'需求与 Bug',hash:'#/work'},
+  {plugin:'deploy',label:'变更记录',hash:'#/changes?tab=changes'},
   {plugin:'deploy',label:'应用与构建',hash:'#/'},
   {plugin:'research',label:'发布版本',hash:'#/versions'},
  ]},
@@ -13,7 +13,7 @@ export const dailyWorkGroups=[
   {plugin:'api-center',label:'接口调试',hash:'#/test-execution'},
  ]},
  {id:'operate',label:'发布与排障',items:[
-  {plugin:'deploy',label:'执行与审核',hash:'#/orchestration?area=runs'},
+  {plugin:'deploy',label:'发布记录',hash:'#/orchestration?area=runs'},
   {plugin:'logs',label:'查询日志',hash:'#/search'},
   {plugin:'monitor',label:'监控概览',hash:'#/'},
   {plugin:'dbms',label:'数据库查询',hash:'#/query'},

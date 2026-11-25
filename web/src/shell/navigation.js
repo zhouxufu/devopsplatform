@@ -1,10 +1,12 @@
 import {platformPageFromHash} from './platformPages.js'
 // Menu ownership follows business scope, not the backend process serving it.
 export const navigationGroups=[
- {id:'research',label:'研发协作',icon:'research',items:[{id:'work',label:'工作项',plugin:'research',hash:'#/work'},{id:'versions',label:'发布版本',plugin:'research',hash:'#/versions'},{id:'research-settings',label:'协作设置',plugin:'research',hash:'#/settings'}]},
+ {id:'research',label:'研发协作',icon:'research',items:[{id:'work',label:'需求与 Bug',plugin:'research',hash:'#/work'},{id:'versions',label:'发布版本',plugin:'research',hash:'#/versions'},{id:'research-settings',label:'协作设置',plugin:'research',hash:'#/settings'}]},
  {id:'delivery',label:'应用交付',icon:'deploy',items:[
-  {id:'changes-group',label:'构建与变更',items:[{id:'build',label:'应用与构建',plugin:'deploy',hash:'#/'},{id:'delivery-work',label:'交付工作项',plugin:'deploy',hash:'#/changes?tab=work'},{id:'changes',label:'变更列表',plugin:'deploy',hash:'#/changes?tab=changes'}]},
-  {id:'orchestration-group',label:'发布编排',items:[{id:'orchestration',label:'执行与审核',plugin:'deploy',hash:'#/orchestration?area=runs'},{id:'orchestration-templates',label:'编排模板',plugin:'deploy',hash:'#/orchestration?area=templates'}]},
+  {id:'build',label:'应用与构建',plugin:'deploy',hash:'#/'},
+  {id:'changes',label:'变更记录',plugin:'deploy',hash:'#/changes?tab=changes'},
+  {id:'orchestration',label:'发布记录',plugin:'deploy',hash:'#/orchestration?area=runs'},
+  {id:'delivery-settings',label:'交付设置',items:[{id:'orchestration-templates',label:'编排模板',plugin:'deploy',hash:'#/orchestration?area=templates'}]},
  ]},
  {id:'api-center',label:'接口中心',icon:'api-center',items:[{id:'api-documents',label:'接口文档',plugin:'api-center',hash:'#/documents'},{id:'api-test-cases',label:'测试用例',plugin:'api-center',hash:'#/test-cases'},{id:'api-testing',label:'执行测试',plugin:'api-center',hash:'#/test-execution'}]},
  {id:'data',label:'数据工具',icon:'dbms',items:[
@@ -25,7 +27,12 @@ export function navigationLeaves(nodes=navigationGroups){return nodes.flatMap(no
 export function navigationPath(key,nodes=navigationGroups){for(const node of nodes){if(node.id===key)return [key];const child=node.items&&navigationPath(key,node.items);if(child?.length)return [node.id,...child]}return []}
 // Section titles are MenuItemGroup labels, not expandable third-level menus.
 export function navigationOpenKeys(key,groups=navigationGroups){if(['apps','resources','mcp','plugins'].includes(key))return ['management'];const root=navigationPath(key,groups)[0];return root&&groups.some(g=>g.id===root&&g.items)?[root]:[]}
-export function availableGroups(plugins){const names=new Set(plugins.map(p=>p.name));const filter=nodes=>nodes.flatMap(node=>{if(!node.items)return names.has(node.plugin)?[node]:[];const items=filter(node.items);return items.length?[{...node,items}]:[]});return filter(navigationGroups)}
+export function availableGroups(plugins){const names=new Set(plugins.map(p=>p.name));const filter=nodes=>nodes.flatMap(node=>{if(!node.items)return names.has(node.plugin)?[node]:[];const items=filter(node.items);return items.length?[{...node,items}]:[]});const groups=filter(navigationGroups)
+ if(names.has('deploy')&&!names.has('research')){
+  const delivery=groups.find(group=>group.id==='delivery')
+  delivery.items.unshift({id:'work',label:'需求与 Bug',plugin:'deploy',hash:'#/changes?tab=work'})
+ }
+ return groups}
 // Plugins already represented by business menus must not reappear as generic extensions.
 export function extensionPlugins(plugins){
  const owned=new Set(['devtools','delivery-core','platform',...navigationLeaves().map(item=>item.plugin)])
@@ -34,6 +41,7 @@ export function extensionPlugins(plugins){
 export function selectedNavigation(plugin,hash){
  if(plugin==='platform')return platformPageFromHash(hash)?.id||'management'
  const url=new URL((hash||'#/').slice(1),'http://navigation'),path=url.pathname
+ if(plugin==='deploy'&&path==='/changes'&&url.searchParams.get('tab')==='work')return 'work'
  for(const item of navigationLeaves()){if(item.plugin!==plugin)continue;const target=new URL(item.hash.slice(1),'http://navigation');if(target.pathname===path&&[...target.searchParams].every(([key,value])=>url.searchParams.get(key)===value))return item.id}
  if(plugin==='api-center'&&path==='/testing')return 'api-testing'
  if(plugin==='deploy'&&path==='/orchestration')return 'orchestration'
@@ -72,5 +80,6 @@ export function workspaceBreadcrumb(workspace){
  const item=workspaceNavigation(workspace)
  if(workspace.plugin.name==='platform')return ['平台管理',item.label]
  const group=navigationGroups.find(g=>navigationPath(item.id,[g]).length)
+ if(item.id==='orchestration-templates')return [group.label,'交付设置',item.label]
  return group?[group.label,item.label]:[item.label]
 }

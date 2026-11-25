@@ -17,6 +17,7 @@ export function mergeActivityRecords(activities=[],remote={},people={}){
 }
 
 export function localActivityContent(activity){
+ if(activity.kind==='release-mark'){let value;try{value=JSON.parse(activity.content)}catch{return '人工上线记录'};return (value?.marked===true?'人工确认已上线':value?.marked===false?'撤销了已上线标记':'人工上线记录')+(typeof value?.comment==='string'&&value.comment?'：'+value.comment:'')}
  if(['work-item-updated','work-item-status','work-item-assigned'].includes(activity.kind)){
   let changes;try{changes=JSON.parse(activity.content)}catch{return '工作项信息已更新'}
   if(!changes||typeof changes!=='object'||Array.isArray(changes))return '工作项信息已更新'

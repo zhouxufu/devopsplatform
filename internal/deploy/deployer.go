@@ -121,6 +121,14 @@ func validateRelease(sv *Service, host Host, artifact, digest string) (string, e
 }
 
 func (d *Deployer) validateRelease(sv *Service, host Host, artifact Artifact) error {
+	if jpomJava(sv) {
+		env := d.st.GetEnvironment(sv.RuntimeEnvironment)
+		target := d.st.GetServiceEnvironment(sv.Name, sv.RuntimeEnvironment)
+		if env == nil || target == nil || env.Protected || target.Protected || (env.Purpose != "development" && env.Purpose != "test") {
+			return fmt.Errorf("Jpom 兼容覆盖发布仅支持非受保护的开发和测试环境")
+		}
+	}
+
 	if deploymentAgentTarget(sv.DeployConfig) {
 		if err := d.st.validateDeploymentAgent(sv, host); err != nil {
 			return err
@@ -465,15 +473,38 @@ func (d *Deployer) deployStatic(id int64, sv *Service, host Host, artifact, vers
 
 // deployJar ssh-jar 状态机；返回最终状态（失败已回滚则 rolled-back）
 func (d *Deployer) deployJar(id int64, sv *Service, host Host, artifact, version string) string {
-	remoteJar := strings.TrimSuffix(sv.RemoteDir, "/") + "/app.jar"
+	return d.deployJarRemote(id, sv, host, artifact, version, javaRemote{SSHExec, SSHUpload, SSHUploadContent})
+}
+func (d *Deployer) deployJarRemote(id int64, sv *Service, host Host, artifact, version string, remote javaRemote) string {
+	jarName := "app.jar"
+	compat := jpomJava(sv)
+	if compat {
+		if err := validateJpomJava(sv); err != nil {
+			d.emit(id, err.Error()+"\n")
+			return "failed"
+		}
+		jarName = sv.DeployConfig["jpom_jar_name"]
+		copy := *sv
+		sv = &copy
+		sv.StartCmd, sv.StopCmd = jpomJavaCommands(sv)
+	}
+	remoteJar := strings.TrimSuffix(sv.RemoteDir, "/") + "/" + jarName
+	temporary := remoteJar + ".new"
+	if compat {
+		temporary = fmt.Sprintf("%s.new-%d", remoteJar, id)
+	}
 	backup := remoteJar + ".bak-" + version
 	startCmd := sv.StartCmd
 	if sv.RuntimeEnvFile != "" {
 		startCmd = "set -a; . " + shellQuote(sv.RuntimeEnvFile) + "; set +a; " + startCmd
 	}
 	step := func(name, cmd string) bool {
-		d.emit(id, "\n$ "+cmd+"\n")
-		out, err := SSHExec(host, cmd, 10*time.Minute)
+		if compat {
+			d.emit(id, "▶ "+name+"\n")
+		} else {
+			d.emit(id, "\n$ "+cmd+"\n")
+		}
+		out, err := remote.exec(host, cmd, 10*time.Minute)
 		if out != "" {
 			d.emit(id, out)
 		}
@@ -484,8 +515,12 @@ func (d *Deployer) deployJar(id int64, sv *Service, host Host, artifact, version
 		return true
 	}
 	fail := func(at string) string {
+		if compat {
+			d.emit(id, "本次覆盖发布未完成（"+at+"），保留现场供人工检查；不自动回滚或重发\n")
+			return "failed"
+		}
 		d.emit(id, "\n↩ 开始回滚…\n")
-		SSHExec(host, fmt.Sprintf("mv %s %s 2>/dev/null; %s", shellQuote(backup), shellQuote(remoteJar), startCmd), 2*time.Minute)
+		remote.exec(host, fmt.Sprintf("mv %s %s 2>/dev/null; %s", shellQuote(backup), shellQuote(remoteJar), startCmd), 2*time.Minute)
 		return "rolled-back"
 	}
 	// 0. 目标目录
@@ -494,12 +529,12 @@ func (d *Deployer) deployJar(id int64, sv *Service, host Host, artifact, version
 	}
 	// 1. 上传
 	d.emit(id, "⇪ 上传制品 "+artifact+"\n")
-	if err := SSHUpload(host, artifact, remoteJar+".new"); err != nil {
+	if err := remote.upload(host, artifact, temporary); err != nil {
 		d.emit(id, "✗ 上传失败: "+err.Error()+"\n")
 		return "failed"
 	}
 	// 2. 备份旧版
-	if !step("备份旧版", fmt.Sprintf("cp %s %s 2>/dev/null || echo 'no previous'", shellQuote(remoteJar), shellQuote(backup))) {
+	if !compat && !step("备份旧版", fmt.Sprintf("cp %s %s 2>/dev/null || echo 'no previous'", shellQuote(remoteJar), shellQuote(backup))) {
 		return fail("backup")
 	}
 	// 3. 停服务（stop 为空时用 pkill 兜底）
@@ -513,7 +548,7 @@ func (d *Deployer) deployJar(id int64, sv *Service, host Host, artifact, version
 		return fail("stop")
 	}
 	// 4. 替换
-	if !step("替换制品", fmt.Sprintf("mv %s %s", shellQuote(remoteJar+".new"), shellQuote(remoteJar))) {
+	if !step("替换制品", fmt.Sprintf("mv %s %s", shellQuote(temporary), shellQuote(remoteJar))) {
 		return fail("swap")
 	}
 	// 5. 启动
@@ -528,7 +563,9 @@ func (d *Deployer) deployJar(id int64, sv *Service, host Host, artifact, version
 		}
 		d.emit(id, "✓ 健康检查通过\n")
 	}
-	SSHExec(host, "rm -f "+shellQuote(backup), time.Minute) // 清理旧备份（保留最近一次回滚能力由历史提供）
+	if !compat {
+		remote.exec(host, "rm -f "+shellQuote(backup), time.Minute)
+	} // 清理旧备份（保留最近一次回滚能力由历史提供）
 	return "success"
 }
 

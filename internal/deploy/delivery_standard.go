@@ -28,6 +28,7 @@ type DeliveryPolicySnapshot struct {
 	Stages      []DeliveryNode `json:"stages"`
 }
 type DeliveryDraftPlan struct {
+	StepsDigest     string                 `json:"steps_digest"`
 	Defaults        DeliveryDefaults       `json:"defaults"`
 	StrategyKind    string                 `json:"strategy_kind"`
 	StrategyVersion int                    `json:"strategy_version"`
@@ -313,6 +314,12 @@ func (s *Store) DraftDelivery(req DeliveryRequest) (*DeliveryDraftPlan, error) {
 	} else if tpl.Workbench == "" {
 		nodes = includeManualRecords(nodes, scope)
 	}
+	if tpl.Workbench == "" {
+		nodes, err = orderChangeNodes(nodes, scope, true)
+		if err != nil {
+			return nil, err
+		}
+	}
 	policy, err := s.deliveryPolicy(env.Name)
 	if err != nil {
 		return nil, err
@@ -348,7 +355,7 @@ func (s *Store) DraftDelivery(req DeliveryRequest) (*DeliveryDraftPlan, error) {
 		stages = []DeliveryNode{}
 	}
 	snapshot := DeliveryPolicySnapshot{Version: 1, Revision: policy.Revision, Environment: *env, Stages: stages}
-	out := &DeliveryDraftPlan{StrategyKind: "custom", Template: *tpl, Scope: scope, Nodes: nodes, PolicySnapshot: snapshot, PolicyDigest: digestJSON(snapshot), Blockers: []string{}, Warnings: []string{}}
+	out := &DeliveryDraftPlan{StepsDigest: digestJSON(nodes), StrategyKind: "custom", Template: *tpl, Scope: scope, Nodes: nodes, PolicySnapshot: snapshot, PolicyDigest: digestJSON(snapshot), Blockers: []string{}, Warnings: []string{}}
 	out.Defaults = policy.Defaults
 	if req.StrategyKind == "standard" {
 		out.StrategyKind = "standard"

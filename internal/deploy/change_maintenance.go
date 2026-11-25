@@ -36,14 +36,16 @@ func loadMaintenanceChange(tx *deployTx, id int64) (*Change, error) {
 	}
 	if doc != "" {
 		var p struct {
-			SQL   *SQLChange   `json:"sql"`
-			Nacos *NacosChange `json:"nacos"`
-			Redis *RedisChange `json:"redis"`
+			Prerequisites []ChangePrerequisite `json:"prerequisites,omitempty"`
+			SQL           *SQLChange           `json:"sql"`
+			Nacos         *NacosChange         `json:"nacos"`
+			Redis         *RedisChange         `json:"redis"`
 		}
 		if json.Unmarshal([]byte(doc), &p) != nil {
 			return nil, fmt.Errorf("变更载荷损坏")
 		}
 		c.SQL, c.Nacos, c.Redis = p.SQL, p.Nacos, p.Redis
+		c.Prerequisites = p.Prerequisites
 	}
 	rows, err := tx.Query(workItemSelect+` WHERE id IN (SELECT work_item_id FROM work_item_changes WHERE change_id=?) ORDER BY id`, id)
 	if err != nil {
@@ -166,6 +168,7 @@ func (s *Store) maintainChange(id int64, req changeMaintenanceRequest, actor str
 			var merged map[string]json.RawMessage
 			json.Unmarshal(raw, &merged)
 			allowed := map[string]bool{"title": true, "reference": true, "summary": true, "risk_level": true, "rollback_plan": true, "sql": true, "nacos": true, "redis": true, "delivery_ownership": true}
+			allowed["prerequisites"] = true
 			if len(req.Patch) == 0 {
 				return nil, fmt.Errorf("修改字段不能为空")
 			}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -236,6 +237,10 @@ type DeliveryRunPage struct {
 }
 
 func (s *Store) DeliveryRunPage(q, status, environment, version, owner string, start, end int64, page, size int) (DeliveryRunPage, error) {
+	return s.deliveryRunPage(q, status, environment, version, owner, start, end, page, size, "")
+}
+
+func (s *Store) deliveryRunPage(q, status, environment, version, owner string, start, end int64, page, size int, actor string) (DeliveryRunPage, error) {
 	out := DeliveryRunPage{Items: []DeliveryRunSummary{}, Page: page, PageSize: size}
 	if page < 1 || page > 1000000 || (size != 20 && size != 50 && size != 100) || len(q) > 256 || len(owner) > 191 || start < 0 || end < 0 || (end > 0 && start > end) {
 		return out, fmt.Errorf("筛选或分页参数无效")
@@ -275,13 +280,18 @@ func (s *Store) DeliveryRunPage(q, status, environment, version, owner string, s
 			args = append(args, "%"+q+"%")
 		}
 	}
-	if status != "" {
+	switch status {
+	case "my_reviews":
+		where = append(where, "status='pending_approval'")
+	case "in_progress":
+		where = append(where, "status IN ('pending_approval','waiting_confirmation','approved','running','blocked','paused','waiting_manual','waiting_next_batch')")
+	case "":
+	default:
 		where = append(where, "(status=? OR status IN ('running','blocked'))")
 		args = append(args, status)
 	}
 	clause := strings.Join(where, " AND ")
-	project := func(r *DeliveryRun) DeliveryRunSummary {
-		t := s.researchSummary(r)
+	project := func(r *DeliveryRun, t ResearchTask) DeliveryRunSummary {
 		v := DeliveryRunSummary{ID: r.ID, TemplateID: r.Plan.Template.ID, Name: r.Plan.Template.Name, Environment: r.Plan.Environment.Name, EnvironmentName: r.Plan.Environment.DisplayName, Owner: r.Owner, Approver: r.Approver, Status: r.Status, CreatedAt: r.CreatedAt, Applications: len(r.Plan.Services), TotalSteps: len(r.Steps), Preparation: r.Plan.PreparationRequest != nil, NextAction: t.NextAction, BlockedReason: t.BlockedReason, UpdatedAt: t.UpdatedAt}
 		if r.Plan.Scope != nil {
 			v.SourceType = r.Plan.Scope.Type
@@ -342,7 +352,7 @@ func (s *Store) DeliveryRunPage(q, status, environment, version, owner string, s
 			return out, err
 		}
 		for _, r := range rows {
-			out.Items = append(out.Items, project(r))
+			out.Items = append(out.Items, project(r, s.researchSummary(r)))
 		}
 		return out, nil
 	}
@@ -361,9 +371,23 @@ func (s *Store) DeliveryRunPage(q, status, environment, version, owner string, s
 			return out, err
 		}
 		for _, r := range rows {
-			v := project(r)
-			if v.Status != status {
-				continue
+			task := s.researchSummary(r)
+			v := project(r, task)
+			switch status {
+			case "my_reviews":
+				if actor == "" || actor == v.Owner || v.Status != "pending_approval" || task.Kind != "approval" || !slices.Contains(task.Assignees, actor) {
+					continue
+				}
+			case "in_progress":
+				switch v.Status {
+				case "pending_approval", "waiting_confirmation", "approved", "running", "blocked", "paused", "waiting_manual", "waiting_next_batch":
+				default:
+					continue
+				}
+			default:
+				if v.Status != status {
+					continue
+				}
 			}
 			out.Total++
 			if out.Total > (page-1)*size && len(out.Items) < size {
@@ -447,7 +471,7 @@ func registerDeliveryExperienceRoutes(mux *http.ServeMux, s *Store, m *ReleaseMa
 				}
 			}
 		}
-		v, e := s.DeliveryRunPage(q.Get("q"), q.Get("status"), q.Get("environment"), q.Get("version_id"), q.Get("owner"), start, end, page, size)
+		v, e := s.deliveryRunPage(q.Get("q"), q.Get("status"), q.Get("environment"), q.Get("version_id"), q.Get("owner"), start, end, page, size, deliveryActor(r))
 		if e != nil {
 			deliveryWriteError(w, 400, e)
 			return

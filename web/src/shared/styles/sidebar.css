@@ -1,0 +1,253 @@
+/* 侧栏响应式设计系统 */
+
+:root {
+  --sidebar-width-expanded: 200px;
+  --sidebar-width-compact: 120px;
+  --sidebar-width-collapsed: 48px;
+  --sidebar-transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar {
+  /* 默认展开状态 */
+  width: var(--sidebar-width-expanded);
+  border-right: 1px solid var(--border);
+  padding: 12px 8px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: var(--sidebar-transition);
+  position: relative;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 侧栏折叠状态 */
+.sidebar.collapsed {
+  width: var(--sidebar-width-collapsed);
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  margin-bottom: 12px;
+  height: 36px;
+}
+
+.collapse-toggle {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 200ms ease;
+  font-size: 10px;
+}
+
+.collapse-toggle:hover {
+  background: var(--panel2);
+  color: var(--text);
+  border-color: var(--brand);
+}
+
+.collapse-toggle .icon {
+  transition: transform 200ms ease;
+  display: inline-block;
+}
+
+/* 侧栏展开时显示文本 */
+.sidebar-title {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  flex: 1;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  transition: opacity 200ms ease;
+}
+
+.sidebar.collapsed .sidebar-title {
+  display: none;
+}
+
+/* 侧栏内容区 */
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  opacity: 1;
+  transition: opacity 200ms ease 100ms;
+  pointer-events: auto;
+}
+
+.sidebar.collapsed .sidebar-content {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 折叠时的图标视图 */
+.sidebar-icons {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.sidebar.collapsed .sidebar-icons {
+  display: flex;
+  opacity: 1;
+  transition-delay: 100ms;
+}
+
+.service-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 200ms ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.service-icon:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* 服务列表项 */
+.svc-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: all 200ms ease;
+  user-select: none;
+}
+
+.svc-item:hover {
+  background: var(--panel2);
+  color: var(--text);
+}
+
+.svc-item.active {
+  background: #1f2937;
+  color: var(--text);
+}
+
+.svc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.svc-name {
+  flex: 1;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.svc-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: var(--mono);
+  flex-shrink: 0;
+}
+
+/* ===== 响应式设计断点 ===== */
+
+/* 大屏：1200px+ */
+@media (min-width: 1200px) {
+  .sidebar {
+    width: var(--sidebar-width-expanded);
+  }
+}
+
+/* 中等屏：1024px - 1199px */
+@media (min-width: 1024px) and (max-width: 1199px) {
+  :root {
+    --sidebar-width-expanded: 160px;
+  }
+  
+  .sidebar {
+    width: var(--sidebar-width-expanded);
+  }
+}
+
+/* 小屏：768px - 1023px （自动折叠）*/
+@media (max-width: 1023px) {
+  .sidebar {
+    width: var(--sidebar-width-collapsed);
+  }
+  
+  .sidebar.collapsed {
+    width: var(--sidebar-width-collapsed);
+  }
+  
+  .sidebar-content {
+    display: none !important;
+  }
+  
+  .sidebar-icons {
+    display: flex !important;
+    opacity: 1 !important;
+  }
+}
+
+/* 极小屏：< 768px （移动端专用导航） */
+@media (max-width: 767px) {
+  .sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 300ms ease, var(--sidebar-transition);
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+  }
+  
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+  
+  .collapse-toggle {
+    display: none;
+  }
+}
+
+/* 滚动条美化 */
+.sidebar-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}

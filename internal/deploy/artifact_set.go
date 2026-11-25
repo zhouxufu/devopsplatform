@@ -45,19 +45,18 @@ func (s *Store) artifactMatchesEnvironment(a *Artifact, sv *Service, environment
 		return false
 	}
 	target := s.GetServiceEnvironment(sv.Name, environment)
-	if target == nil || !target.ManualTarget() {
-		return artifactMatchesService(a.Kind, sv.ArtifactType)
-	}
-	expected := target.DeployConfig["manual_artifact_kind"]
-	if expected == "" {
-		expected = artifactKindForService(sv.ArtifactType)
-	}
-	if a.Kind != expected {
+	expected := environmentArtifactType(sv, target)
+	if target != nil && target.ManualTarget() && target.DeployConfig["manual_artifact_kind"] != "" {
+		if a.Kind != target.DeployConfig["manual_artifact_kind"] {
+			return false
+		}
+	} else if !artifactMatchesService(a.Kind, expected) {
 		return false
 	}
 	if artifactMatchesService(a.Kind, sv.ArtifactType) {
 		return true
 	}
+
 	// A Java image exposes only a server-verified output of this successful
 	// build. Metadata describes whether it is the image input or a separate
 	// exported output; that display text never authorizes an arbitrary upload.
@@ -65,11 +64,11 @@ func (s *Store) artifactMatchesEnvironment(a *Artifact, sv *Service, environment
 		return false
 	}
 	run := s.GetRun(a.SourceID)
-	if run == nil || (run.Status != "success" && run.Status != "waiting_deploy") {
+	if run == nil || s.artifactBuildComplete(a) != nil {
 		return false
 	}
 	image := s.GetArtifact(run.ArtifactID)
-	return image != nil && (image.Kind == ArtifactOCI || image.Kind == ArtifactDockerArchive) && image.Service == a.Service && image.SourceID == a.SourceID && s.pairedCompilation(a, run.ArtifactID)
+	return image != nil && (image.Kind == ArtifactOCI || image.Kind == ArtifactDockerArchive) && image.Service == a.Service && image.Source == "pipeline-run" && image.SourceID == a.SourceID && s.pairedCompilation(a, run.ArtifactID)
 }
 
 func (s *Store) pairedCompilation(a *Artifact, parent int64) bool {

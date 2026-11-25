@@ -156,7 +156,7 @@ func (g *Gateway) Routes(registry *Registry, bus *Bus) http.Handler {
 				}
 			}
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/work-loops") || strings.HasPrefix(r.URL.Path, "/api/delivery/") || strings.Contains(r.URL.Path, "/delivery-policy") || strings.HasPrefix(r.URL.Path, "/api/research/") || strings.HasPrefix(r.URL.Path, "/api/work-items") || strings.HasPrefix(r.URL.Path, "/api/release-versions") {
+		if strings.HasPrefix(r.URL.Path, "/api/service-deployments") || strings.HasPrefix(r.URL.Path, "/api/work-loops") || strings.HasPrefix(r.URL.Path, "/api/delivery/") || strings.Contains(r.URL.Path, "/delivery-policy") || strings.HasPrefix(r.URL.Path, "/api/research/") || strings.HasPrefix(r.URL.Path, "/api/work-items") || strings.HasPrefix(r.URL.Path, "/api/release-versions") {
 			users, err := registry.Users()
 			enabled := []string{}
 			for _, u := range users {

@@ -19,6 +19,7 @@ import (
 )
 
 type APIDocumentSnapshot struct {
+	Protocol                 string                 `json:"protocol"`
 	ExpectedMaintainerDigest string                 `json:"-"`
 	ChangeContext            *DocumentChangeContext `json:"-"`
 	DefaultMaintainer        string                 `json:"default_maintainer,omitempty"`

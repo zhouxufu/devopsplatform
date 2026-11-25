@@ -13,8 +13,8 @@ export function documentStep(step,row,text,{scenario=false,service=''}={}){
  const operation=data.operations?.find(o=>o.id===row.id)
  if(!operation)throw Error('此接口不在所选文档快照中，请重新选择')
  const contract=parse(text).document
- if(!contract?.paths)throw Error('接口文档定义不完整')
- const definition=contract.paths[operation.path]?.[operation.method.toLowerCase()]||operation.definition
+ if(!contract?.paths&&!contract?.dubbo)throw Error('接口文档定义不完整')
+ const definition=contract.paths?.[operation.path]?.[operation.method.toLowerCase()]||operation.definition
  const selected={...operation,definition},seed=operationDraft(selected,contract)
  for(const p of operationParameters(selected,contract))if(p.in==='header')seed.request.headers[p.name]=String(p.example??p.schema?.example??p.schema?.default??'')
  const mime=seed.request.headers['Content-Type']||''
@@ -25,5 +25,5 @@ export function documentStep(step,row,text,{scenario=false,service=''}={}){
   seed.request.form=Object.entries(sample).map(([name,value])=>({name,value:value&&typeof value==='object'&&!value.isLosslessNumber?stringify(value):String(value??'')}))
   if(seed.request.body_type==='multipart')delete seed.request.headers['Content-Type']
  }
- return {...step,...requestDraft(seed.request,{pathValues:seed.pathValues,queryRows:seed.query}),name:operation.summary||operation.path,document_id:data.id,operation_id:operation.id,service:scenario?row.service:'',application_id:scenario?snapshot.application_id:'',extractions:[],bodyDrafts:{},uploading:false}
+ return {...step,kind:operation.protocol==='dubbo'?'dubbo':'http',...requestDraft(seed.request,{pathValues:seed.pathValues,queryRows:seed.query}),name:operation.summary||operation.path,document_id:data.id,operation_id:operation.id,service:scenario?row.service:'',application_id:scenario?snapshot.application_id:'',extractions:[],bodyDrafts:{},uploading:false}
 }

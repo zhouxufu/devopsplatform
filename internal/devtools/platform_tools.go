@@ -132,11 +132,13 @@ func (s *ToolService) platformRequest(ctx context.Context, t *AccessToken, metho
 	r.Header.Set("Content-Type", "application/json")
 	if t.verified {
 		r.Header.Set("X-User", t.Owner)
-		if strings.HasPrefix(path, "/api/work-loops") || strings.HasPrefix(path, "/api/service-deployments") {
+		if (strings.HasPrefix(path, "/api/delivery/publications") || strings.HasPrefix(path, "/api/service-deployments")) && t.ID == "" {
+			r.Header.Set("X-Work-Loop-Authority", "page")
+		} else if strings.HasPrefix(path, "/api/delivery/publications") || strings.HasPrefix(path, "/api/work-loops") || strings.HasPrefix(path, "/api/service-deployments") {
 			r.Header.Set("X-Work-Loop-Authority", "mcp")
 			r.Header.Set("X-Work-Loop-Key-ID", t.ID)
 		}
-		if strings.HasPrefix(path, "/api/delivery/") || strings.Contains(path, "/delivery-policy") || strings.HasPrefix(path, "/api/work-loops") {
+		if strings.HasPrefix(path, "/api/service-deployments") || strings.HasPrefix(path, "/api/delivery/") || strings.Contains(path, "/delivery-policy") || strings.HasPrefix(path, "/api/work-loops") {
 			directory := t.reviewers
 			if directory == "" {
 				directory = "[]"
@@ -222,6 +224,15 @@ func (s *ToolService) callPlatform(ctx context.Context, t *AccessToken, name str
 	}
 	if isWorkLoopTool(name) {
 		return s.callWorkLoop(ctx, t, name, args)
+	}
+	if name == "deploy_service" && intArg(args, "change_id", 0) > 0 {
+		existing, err := s.findChangeDeployment(ctx, t, args)
+		if err != nil {
+			return nil, err
+		}
+		if existing["state"] == "running" {
+			return existing, nil
+		}
 	}
 	if isWriteScope(tool.Scope) {
 		return s.prepareAction(ctx, t, name, args)
@@ -490,6 +501,7 @@ func changeDraftSchema() map[string]any {
 	return objectSchema(map[string]any{
 		"kind": map[string]any{"type": "string", "enum": []string{"code", "artifact", "mysql", "nacos", "redis", "manual"}}, "title": str, "service": str, "reference": map[string]any{"type": "string", "description": "代码分支（code）、制品引用或自定义文本记录；代码改动说明放 summary，不伪造已构建的 Commit 证据"}, "summary": str,
 		"risk_level": map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}}, "rollback_plan": str,
+		"prerequisites":      map[string]any{"type": "array", "minItems": 0, "maxItems": 32, "description": "根据本次代码、SQL、配置及兼容性分析，列出必须先完成的已有变更编号和原因。不要猜测或扩大范围。空数组清除依赖。", "items": objectSchema(map[string]any{"change_id": map[string]any{"type": "integer", "minimum": 1}, "reason": str}, "change_id", "reason")},
 		"sql":                objectSchema(map[string]any{"resource_alias": str, "content": str, "max_affected_rows": map[string]any{"type": "integer", "minimum": 1}}, "resource_alias", "content", "max_affected_rows"),
 		"nacos":              objectSchema(map[string]any{"resource_alias": str, "data_id": str, "group": str, "format": map[string]any{"type": "string", "enum": []string{"yaml", "properties", "json"}}, "entries": map[string]any{"type": "array", "items": objectSchema(map[string]any{"key": str, "value": str, "action": map[string]any{"type": "string", "enum": []string{"set", "delete"}}}, "key", "action")}}, "resource_alias", "group", "format", "entries"),
 		"redis":              objectSchema(map[string]any{"resource_alias": str, "commands": str}, "resource_alias", "commands"),

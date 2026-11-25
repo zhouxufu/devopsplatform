@@ -45,6 +45,10 @@ func registerDocumentEditingRoutes(mux *http.ServeMux, st *Store, wj func(http.R
 				fail(w, 400, err)
 				return
 			}
+			if doc.Protocol() != base.Protocol {
+				fail(w, 400, "不能通过编辑改变文档协议，请另行导入")
+				return
+			}
 			changeContext, err = st.resolveDocumentChanges(changeContext, raw)
 			if err != nil {
 				fail(w, 400, err)
@@ -63,7 +67,7 @@ func registerDocumentEditingRoutes(mux *http.ServeMux, st *Store, wj func(http.R
 			if preview {
 				st.apiDocumentMu.Lock()
 				defer st.apiDocumentMu.Unlock()
-				_, latest, err := st.documentBaseline(sv, env)
+				_, latest, err := st.documentBaseline(sv, env, base.Protocol)
 				if err != nil {
 					fail(w, 500, err)
 					return

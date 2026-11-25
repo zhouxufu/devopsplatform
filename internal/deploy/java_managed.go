@@ -151,10 +151,16 @@ func managedJavaScript(sv *Service, release string) string {
 	}
 	return "#!/usr/bin/env bash\nset -euo pipefail\n" +
 		"readonly jar=" + shellQuote(jarPath) + "\nreadonly java=" + shellQuote(java) + "\nreadonly pidfile=" + shellQuote(path.Join(sv.RemoteDir, ".devopsplatform.pid")) + "\n" +
+		"readonly startReceipt=" + shellQuote(release+"/.start-state") + "\n" +
 		"readonly workdir=" + shellQuote(workdir) + "\n" +
 		"readonly envfile=" + shellQuote(release+"/runtime.env") + "\nreadonly logfile=" + shellQuote(path.Join(sv.RemoteDir, "logs/application.log")) + "\n" +
 		"readonly port=" + shellQuote(c["java_port"]) + "\nreadonly health=" + shellQuote(healthURL) + "\nreadonly expected=" + shellQuote(c["java_version"]) + "\n" +
 		"readonly -a jvm=(" + quoteArgs(c["java_jvm_options"]) + ")\nreadonly -a args=(" + quoteArgs(c["java_args"]) + ")\n" + `
+record_start_state() {
+  umask 077
+  printf '%s\n' "$1" > "$startReceipt.tmp"
+  mv -f -- "$startReceipt.tmp" "$startReceipt"
+}
 owned_pid() {
   [[ -f "$pidfile" ]] || return 1
   read -r pid < "$pidfile"
@@ -192,9 +198,13 @@ case "${1:-}" in
     [[ -z "$health" ]] || command -v curl >/dev/null || { echo "Health check needs curl"; exit 2; }
     echo "Runtime Java $major ready"
     ;;
+  prestart)
+    if [[ -n "$port" ]] && listening; then echo "Port $port is in use; new version was not started"; exit 21; fi
+    ;;
   start)
     if owned_pid; then echo "Already running"; exit 0; fi
-    if [[ -n "$port" ]] && listening; then echo "Port $port is in use; will not stop an unmanaged process"; exit 2; fi
+    if [[ -n "$port" ]] && listening; then record_start_state rejected-port; echo "Port $port is in use; new version was not started; will not stop an unmanaged process"; exit 21; fi
+    record_start_state launching
     umask 077
     # Bash before 4.4 treats empty arrays as unset under nounset. Expand only
     # populated arrays, preserving each argument literally and adding no empty arg.
@@ -219,11 +229,15 @@ case "${1:-}" in
   stop)
     if ! owned_pid; then rm -f -- "$pidfile"; exit 0; fi
     kill -TERM "$pid"
-    for ((i=0;i<30;i++)); do
-      if ! kill -0 "$pid" 2>/dev/null || [[ $(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true) == Z ]]; then rm -f -- "$pidfile"; exit 0; fi
+    # JDK shutdown hooks may drain multiple pools before the JVM exits.
+    deadline=$((SECONDS + 60))
+    while kill -0 "$pid" 2>/dev/null && [[ $(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true) != Z ]]; do
+      if (( SECONDS >= deadline )); then
+        echo "Graceful shutdown timed out after 60 seconds; refusing forced kill"; exit 2
+      fi
       sleep 1
     done
-    echo "Graceful shutdown timed out; refusing forced kill"; exit 2
+    rm -f -- "$pidfile"
     ;;
   ready)
     health_detail="not checked"
@@ -238,6 +252,11 @@ case "${1:-}" in
     exit 75
     ;;
   agent-probe)
+    if [[ -f "$startReceipt" ]] && [[ $(cat "$startReceipt") == rejected-port ]]; then
+      [[ ! -e "$pidfile" ]] || { echo "Rejected-start receipt conflicts with PID receipt; review required"; exit 31; }
+      echo "Original start was rejected because its port was occupied; no new process was launched"
+      exit 21
+    fi
     [[ -f "$pidfile" ]] || { echo "PID receipt is missing; ownership needs review"; exit 30; }
     owned_pid || { echo "Managed application process exited"; exit 20; }
     health_detail="not checked"
@@ -396,7 +415,15 @@ func (d *Deployer) deployManagedJavaPreparedRemote(id int64, sv *Service, host H
 		}
 		return "rolled-back"
 	}
+	if !step("检查目标监听端口", command(release, "prestart")) {
+		d.emit(id, "新版本尚未启动，发布失败；排除端口或连接问题后可重新发布\n")
+		return "failed"
+	}
 	if !step("切换并启动新版本", switchTo(release)+" && "+command(release, "start")) {
+		if javaStartRefused(stepError) {
+			d.emit(id, "目标端口已被占用，新版本未启动；本次发布失败，不停止占用端口的进程\n")
+			return "failed"
+		}
 		if !knownJavaExit(stepError) {
 			retainLock = true
 			d.emit(id, "启动结果待核对，保留进程和部署锁，不自动停止或回滚\n")
@@ -426,6 +453,12 @@ func (d *Deployer) deployManagedJavaPreparedRemote(id int64, sv *Service, host H
 	}
 	d.emit(id, "✓ 标准 Java 发布完成，日志："+base+"/logs/application.log\n")
 	return "success"
+}
+
+// Exit 21 is reserved for an explicitly rejected start, before spawning Java.
+func javaStartRefused(err error) bool {
+	var result interface{ ExitStatus() int }
+	return errors.As(err, &result) && result.ExitStatus() == 21
 }
 
 func knownJavaExit(err error) bool {

@@ -16,7 +16,7 @@ export function casePayload(draft){
  const steps=draft.steps.map((step,i)=>{
   if(!step.name.trim())throw Object.assign(Error('请填写步骤 '+(i+1)+' 的名称'),{stepIndex:i,field:'name'})
   try{
-   if(step.kind&&step.kind!=='http')return {id:step.id,kind:step.kind,name:step.name,action:step.action,expected:step.expected,request:{},extractions:[],...(step.kind==='condition'?{condition:step.condition}: {})}
+   if(step.kind&&!['http','dubbo'].includes(step.kind))return {id:step.id,target_key:step.target_key||'',kind:step.kind,name:step.name,action:step.action,expected:step.expected,request:{},extractions:[],...(step.kind==='condition'?{condition:step.condition}: {})}
    if(draft.scope==='scenario'&&!step.service)throw Object.assign(Error('请选择调用应用'),{field:'service'})
    const request=composeEditorRequest(step),extractions=(step.extractions||[]).map(e=>({name:e.name.trim(),source:e.source,path:e.path,...(e.source==='sse'?{event:e.event||'',select:e.select||'last'}:{})}))
    const fields=[['path',request.path],['body',request.body],...(request.form||[]).map(f=>['body',f.value]),...Object.values(request.headers).map(v=>['headers',v]),...request.assertions.flatMap(a=>[['checks',a.path],['checks',a.expected]])]
@@ -29,7 +29,7 @@ export function casePayload(draft){
     if((e.source==='sse'&&request.mode!=='sse')||(e.source==='json'&&request.mode==='sse'))throw Error('提取来源与请求类型不一致')
     available.add(e.name)
    }
-   return {...(draft.scope==='scenario'?{service:step.service,application_id:step.application_id||''}:{}),id:step.id,document_id:Number(step.document_id)||0,operation_id:step.operation_id||'',name:step.name,action:step.action,expected:step.expected,request,extractions}
+   return {...(draft.scope==='scenario'?{service:step.service,application_id:step.application_id||''}:{}),id:step.id,kind:request.mode==='dubbo'?'dubbo':'http',document_id:Number(step.document_id)||0,operation_id:step.operation_id||'',name:step.name,action:step.action,expected:step.expected,target_key:step.target_key||'',request,extractions}
   }
   catch(e){throw Object.assign(Error('步骤 '+(i+1)+'：'+e.message),{stepIndex:i,field:e.field|| (e.message.includes('请求头')?'headers':e.message.includes('变量')||e.message.includes('提取')?'extractions':'path')})}
  })

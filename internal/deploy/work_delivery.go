@@ -3,6 +3,7 @@ package deploy
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -78,10 +79,12 @@ func normalizeNacosChange(c *Change) error {
 }
 
 type WorkDelivery struct {
-	Digest  string   `json:"digest"`
-	Changes []Change `json:"changes"`
+	ChangeDigests map[int64]string `json:"change_digests,omitempty"`
+	Digest        string           `json:"digest"`
+	Changes       []Change         `json:"changes"`
 }
 type WorkDeliverySave struct {
+	tracking            *WorkLoop
 	loopReceiptKey      string // server-only; committed with the same transaction
 	loopCommitAttempted bool   // distinguish validation rollback from uncertain commit
 	loopReceiptValue    string
@@ -116,21 +119,8 @@ func loadWorkDelivery(tx *deployTx, id int64) (*WorkDelivery, error) {
 	}
 	for i := range out.Changes {
 		c := &out.Changes[i]
-		if err = loadChangeOwnership(tx, c); err != nil {
-			return nil, err
-		}
-		var doc string
-		if e := tx.QueryRow(`SELECT document FROM change_payloads WHERE change_id=?`, c.ID).Scan(&doc); e == nil {
-			var p struct {
-				SQL   *SQLChange   `json:"sql"`
-				Nacos *NacosChange `json:"nacos"`
-				Redis *RedisChange `json:"redis"`
-			}
-			if e = json.Unmarshal([]byte(doc), &p); e != nil {
-				return nil, e
-			}
-			c.SQL, c.Nacos = p.SQL, p.Nacos
-			c.Redis = p.Redis
+		if err = loadChangePayload(tx, c); err != nil {
+			return nil, fmt.Errorf("读取变更 #%d 的交付内容：%w", c.ID, err)
 		}
 		rs, e := tx.Query(workItemSelect+` WHERE id IN (SELECT work_item_id FROM work_item_changes WHERE change_id=?) ORDER BY id`, c.ID)
 		if e != nil {
@@ -309,6 +299,11 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 				return fmt.Errorf("第 %d 项：变更不属于当前需求或重复提交", i+1)
 			}
 			submitted[c.ID] = true
+			if req.tracking != nil {
+				if err := checkTrackedDraftEdit(tx, old, c, id); err != nil {
+					return err
+				}
+			}
 			if old.Status != ChangeDraft {
 				return fmt.Errorf("第 %d 项：已就绪内容不可编辑，请新增补充内容", i+1)
 			}
@@ -380,6 +375,15 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 				return err
 			}
 		}
+		if req.tracking != nil {
+			req.tracking.DraftReceipt.Items = append(req.tracking.DraftReceipt.Items, DraftTrackingItem{ID: c.ID, Title: c.Title, Kind: c.Kind, Created: created})
+			for _, dep := range c.Prerequisites {
+				parent, ok := existing[dep.ChangeID]
+				if !ok || !slices.Contains(req.tracking.Grant.Spec.Applications, parent.Service) {
+					return fmt.Errorf("前置变更 #%d 超出当前工作项或授权应用", dep.ChangeID)
+				}
+			}
+		}
 		if err = saveSQLPayload(tx, c); err != nil {
 			return err
 		}
@@ -400,6 +404,11 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 			if _, err = tx.Exec(`INSERT INTO research_activity(work_item_id,actor,kind,content,created_at) VALUES(?,?,?,?,?)`, wid, actor, kind, string(raw), now); err != nil {
 				return err
 			}
+		}
+	}
+	if req.tracking != nil {
+		if err := commitDraftTracking(tx, req.tracking, req.Changes); err != nil {
+			return err
 		}
 	}
 	if req.loopReceiptKey != "" {

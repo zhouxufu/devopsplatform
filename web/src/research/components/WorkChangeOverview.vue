@@ -25,7 +25,7 @@ function clear(){application.value='';kind.value='';query.value=''}
  <section class="min-w-0 space-y-6" aria-label="工作项变更总览" :aria-busy="loading">
   <div class="flex flex-wrap items-center justify-between gap-3">
    <div><h3 class="text-lg font-semibold">变更总览</h3><p class="text-sm text-muted-foreground">共 {{changes.length}} 项 · {{changes.filter(c=>c.status==='ready').length}} 项就绪</p></div>
-   <div class="flex gap-2"><Button variant="outline" :disabled="loading" @click="emit('retry')"><Spinner v-if="loading"/>刷新</Button><Button variant="outline" @click="emit('edit')">维护交付内容</Button></div>
+   <div class="flex gap-2"><Button variant="outline" :disabled="loading" @click="emit('retry')"><Spinner v-if="loading"/>刷新</Button><Button variant="outline" @click="emit('edit')">新增或修改变更</Button></div>
   </div>
   <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(150px,220px)_minmax(130px,170px)]">
    <Input v-model="query" aria-label="搜索变更内容" placeholder="搜索标题、分支、SQL 或配置项"/>

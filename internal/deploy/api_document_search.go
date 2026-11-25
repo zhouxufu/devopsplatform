@@ -15,6 +15,7 @@ import (
 )
 
 type documentSearchItem struct {
+	Protocol       string   `json:"protocol"`
 	SnapshotID     int64    `json:"snapshot_id"`
 	ApplicationID  string   `json:"application_id"`
 	Service        string   `json:"service"`
@@ -45,6 +46,14 @@ type documentSearchResult struct {
 func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.ResponseWriter, any), fail func(http.ResponseWriter, int, any)) {
 	mux.HandleFunc("GET /api/api-documents/search", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		protocol := q.Get("protocol")
+		if protocol == "" {
+			protocol = "http"
+		}
+		if protocol != "http" && protocol != "dubbo" {
+			fail(w, 400, "文档协议无效")
+			return
+		}
 		keyword := strings.TrimSpace(q.Get("q"))
 		group := q.Get("group")
 		maintainer := strings.ToLower(strings.TrimSpace(q.Get("maintainer")))
@@ -68,8 +77,8 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
  FROM api_document_versions v JOIN services s ON s.application_id=v.application_id AND s.name=v.service
  LEFT JOIN api_document_maintainers m ON m.snapshot_id=v.id
  LEFT JOIN api_document_maintainer_maps om ON om.snapshot_id=v.id
- WHERE v.id IN (SELECT MAX(id) FROM api_document_versions GROUP BY application_id,environment)`
-		args := []any{}
+ WHERE v.id IN (SELECT MAX(api_document_versions.id) FROM api_document_versions LEFT JOIN api_document_protocols dp ON dp.snapshot_id=api_document_versions.id WHERE COALESCE(dp.protocol,'http')=? GROUP BY application_id,environment)`
+		args := []any{protocol}
 		if name := q.Get("service"); name != "" {
 			if st.GetService(name) == nil {
 				fail(w, 400, "应用不存在")
@@ -159,6 +168,7 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 				}
 				if result.Total >= offset && len(result.Items) < result.PageSize {
 					item := base
+					item.Protocol = protocol
 					item.ID = op.ID
 					item.Method = op.Method
 					item.Path = op.Path

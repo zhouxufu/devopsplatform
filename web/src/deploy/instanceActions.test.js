@@ -17,3 +17,14 @@ test('Docker query failure is distinct from an unreachable SSH host',()=>{
  assert.equal(instanceStateText('inspection-failed'),'读取失败')
  assert.equal(instanceStateText('unreachable'),'无法连接')
 })
+
+test('Jpom compatibility keeps instance management while custom/manual targets remain unsupported',async()=>{
+ const {supportsInstanceManagement,supportsInstanceReadiness,instanceVersionText}=await import('./instanceActions.js')
+ assert.equal(supportsInstanceManagement({target_type:'ssh-jar',deploy_config:{java_mode:'jpom'}}),true)
+ assert.equal(supportsInstanceManagement({target_type:'ssh-java-bundle',deploy_config:{java_mode:'managed'}}),true)
+ for(const t of [{target_type:'ssh-jar',deploy_config:{java_mode:'custom'}},{target_type:'manual'},{target_type:'script'},{target_type:'ssh-java-bundle',deploy_config:{java_mode:'jpom'}}])assert.equal(supportsInstanceManagement(t),false)
+ assert.equal(supportsInstanceReadiness({kind:'ssh-jar',java_mode:'jpom'}),false)
+ assert.equal(supportsInstanceReadiness({kind:'ssh-jar'}),true)
+ assert.equal(instanceVersionText({java_mode:'jpom'}),'未核验（Jpom 共享 JAR）')
+ assert.equal(instanceVersionText({version:'verified-version'}),'verified-version')
+})

@@ -140,7 +140,31 @@ func DocumentFields(raw []byte) ([]DocumentField, error) {
 		return nil
 	}
 	paths := object(root["paths"])
-	for _, op := range ops {
+	for opIndex, op := range ops {
+		if op.Protocol == "dubbo" {
+			methods, _ := root["methods"].([]any)
+			if opIndex >= len(methods) {
+				return nil, fmt.Errorf("Dubbo 方法索引不一致")
+			}
+			method := object(methods[opIndex])
+			parameters, _ := method["parameters"].([]any)
+			for i, value := range parameters {
+				param := object(value)
+				name, _ := param["name"].(string)
+				f := DocumentField{Operation: op.ID, In: "argument", Name: name, FieldPath: fmt.Sprintf("/%d", i), Pointer: fmt.Sprintf("#/methods/%d/parameters/%d", opIndex, i)}
+				if err := add(f); err != nil {
+					return nil, err
+				}
+				if err := walk(param["schema"], f.Pointer+"/schema", name+".", f, map[string]bool{}, 0); err != nil {
+					return nil, err
+				}
+			}
+			f := DocumentField{Operation: op.ID, In: "return", Name: "result", Pointer: fmt.Sprintf("#/methods/%d/returns", opIndex)}
+			if err := walk(object(method["returns"])["schema"], f.Pointer+"/schema", "", f, map[string]bool{}, 0); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		item := object(paths[op.Path])
 		def := object(item[strings.ToLower(op.Method)])
 		base := DocumentField{Operation: op.ID}

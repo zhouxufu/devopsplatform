@@ -1,15 +1,32 @@
 ---
 name: devops-change-report
-description: 整理开发过程中的代码分支、数据库 SQL 与 Nacos 配置变更，通过研发效能平台 MCP 预览并登记独立草稿或关联需求、Bug。适用于用户要求登记、同步或检查开发变更；普通编码、代码审查不自动上报。
+description: 整理开发过程中的代码分支、数据库 SQL 与 Nacos 配置变更，通过研发效能平台 MCP 预览并登记独立草稿或关联需求、Bug。用于单次上报，或在已获授权的需求和 Bug 开发过程中，随实际改动持续维护本人草稿。
 metadata:
-  version: "1.1.0"
+  version: "1.4.0"
 ---
 
 # 研发变更登记
 
 使用用户已连接的研发效能平台 MCP；文中的工具名为逻辑名称，调用客户端实际暴露的对应工具，不假定固定命名空间或平台地址。核心工具为 `list_applications`、`list_changes`、`get_change`、`get_change_maintenance`、`maintain_change`、`report_changes`、`confirm_platform_action`、`get_platform_action`。缺少工具或权限时说明缺项，引导在平台「MCP 与集成」授权并重新连接，不用直接 HTTP、管理端口或伪造身份替代。
 
+## 开发过程中持续登记
+
+用户要求边开发边登记，或当前开发任务已关联本人授权的工作项时，用 `list_work_loops(work_item_id)` 查找 `grant.spec.draft_only=true` 的授权，核对本人、应用、期限和状态。未授权时用 `create_change_tracking(work_item_id, applications, expires_at)` 展示实际范围并通过 `confirm_platform_action` 确认一次。只有编码请求且没有关联授权时继续本地开发。
+
+每完成一段可以单独说明的改动，在切换子任务或交接前，将此任务的实际 diff 与 `get_work_item_changes` 的清单对照。按下文规则识别代码、SQL、配置及有依据的发布依赖。对已经匹配的本人草稿沿用 ID，保留未修改的可编辑字段；无实质变化就跳过。未能确认归属或依赖时先向开发者核对。新增项有编号后可补依赖。
+
+使用 `save_work_loop_changes(task_id, revision, content)`，传入当前清单 `digest` 与仅本次新增或修改的 `changes`，省略 `mark_ready` 和 `delivery_ownership`。保存后按 `draft_receipt.change_ids` 的提交顺序核对编号，回读清单；下一批用新修订。首次读取清单时保留此次比较用的条目编号、归属、标题、应用、类型、前置关系和 `change_digests`。只有服务端明确返回“交付内容已被其他操作修改”时，自动重读当前授权和工作项清单，执行以下比较：
+
+- 同一授权、同一任务修订仍有效；所有拟修订编号及其原有和拟新增前置项的逐项摘要均未变化；其他人新增、修改或移除的条目与本批无依赖或业务重叠。核对新增项的应用、分支、表或配置键以免重复。满足时保留原批次意图和任务修订，带最新清单 digest 自动重试一次，无需开发者确认。
+- 同一条目或其前置项已变化、出现疑似重复或无法核对旧摘要时，列出冲突编号和标题、平台已变字段、本次拟改字段及需要决定的具体值；敏感值保持脱敏。只询问受影响项，保留本地候选，不替换修订强行保存。连续竞争时停止此次重试。
+- 保存成功用回执 items 的 created、kind、title 区分新增和更新，报告原编号。旧回执只有编号时，重读条目后报告标题，不猜新增或更新。
+
+超时先用 `get_work_loop` 核对原修订回执及清单，无法判断时暂停，不换修订重报。暂停、恢复和撤销使用 `control_change_tracking`；到期后重新预览授权。已经就绪、共享、冻结或属于他人的草稿单独核对。此次授权只覆盖登记，交付前仍走原就绪及发布入口。
+
 ## 确定本次范围
+
+- 对照本次实际 diff、迁移文件、配置引用和上线说明，逐项核对是否漏记数据库、配置、回填或人工动作。列出有文件或代码证据的候选；未核实的只提示，不伪造变更。仅凭静态扫描不能证明清单完整。
+- 按本次需求分析顺序：检查新旧版本并存时的读写兼容性、开关何时生效、回填的完成条件。只记录有依据的前置关系，用 `prerequisites: [{"change_id": 12, "reason": "新服务启动需要读取新增列"}]` 附在后执行的变更上。先读取已有清单复用编号；同批新建尚无编号时，先保存草稿取得回执，再按原编号补充依赖，不重复上报。独立步骤不猜先后；同一数据库在发布前后各有动作时分为两项变更。
 
 - 从用户指定的仓库、工作区和本次任务中整理相关改动；可读取 Git 状态和相关 diff、迁移脚本、配置文件。工作区存在他人或其他任务改动时不要全部上报；关联不明的内容先向用户核对。
 - 用 `list_applications` 确认稳定应用标识，不凭展示名或仓库名猜应用。一个 `report_changes` 只能包含同一应用；多应用分批预览，并明确每批范围。
@@ -20,14 +37,14 @@ metadata:
 
 按 [references/change-payloads.md](references/change-payloads.md) 组织确实涉及的变更。代码保留分支和改动说明，源代码仍在 Git；SQL 只登记明确脚本；Nacos 登记配置项意图，不把整份配置文件无差别复制过去。
 
-先用 `list_changes` 检索本次应用已有草稿，必要时用 `get_change` 核对完整内容。相同标题不代表同一变更；比较类型、分支/脚本/配置项及工作项关联。`report_changes` 的不同上报没有内容级去重，不要因网络重试或措辞变化重复登记；已存在的相同变更展示编号并复用。维护已有记录时保留原编号：先用 `get_change_maintenance(service, change_id)` 读取原内容、`digest`、修订规则和 `blocking_runs`，再用 `maintain_change(action="edit", patch=明确修改字段, digest=原摘要, reason=修改原因)` 生成预览。已有独立草稿可以通过同一工具的 `work_item_ids` 调整关联；已有原始来源的记录通过 `delivery_ownership` 调整 self/follow/draft，不改写原始来源。
+单次上报时先用 `list_changes` 检索本次应用已有草稿，必要时用 `get_change` 核对完整内容。相同标题不代表同一变更；比较类型、分支/脚本/配置项及工作项关联。`report_changes` 的不同上报没有内容级去重，不要因网络重试或措辞变化重复登记；已存在的相同变更展示编号并复用。维护已有记录时保留原编号：先用 `get_change_maintenance(service, change_id)` 读取原内容、`digest`、修订规则和 `blocking_runs`，再用 `maintain_change(action="edit", patch=明确修改字段, digest=原摘要, reason=修改原因)` 生成预览。已有独立草稿可以通过同一工具的 `work_item_ids` 调整关联；已有原始来源的记录通过 `delivery_ownership` 调整 self/follow/draft，不改写原始来源。
 
 - 本人 `ready` 代码记录只改 `title`／`summary` 时保持 ready；不附带分支、风险、回退说明或归属等未修改字段。预览 `effect=ready_description_revised`，历史执行单快照保持原内容。
 - 修改代码分支、SQL、配置、风险或其他执行内容时，预览 `effect=returned_to_draft`，须明确展示退回草稿的结果；完成后走就绪校验，不能把保存当作可执行。
 - 仅草稿可归档；已归档、他人记录、活动执行单及执行台账／版本保护不能绕过。409 不统一归因于 MCP 缓存：按返回原因处理，活动冻结时展示具体执行单与入口；个人忽略／归档不解除执行冻结。不要要求用户直改数据库或通过重复新增替代修订。
 - 不凭截图或推测编造新说明；修改内容必须来自用户要求和已核对代码。
 
-## 预览、确认和回执
+## 单次上报的预览、确认和回执
 
 1. 新增用 `report_changes`，维护原记录用 `maintain_change` 生成预览。独立登记只需应用和变更；关联时增加平台 `work_item_id`，其跨应用查询仍需令牌显式授权应用 `*`，不为解决报错自动扩大授权。
 2. 展示应用、工作项或独立草稿、各变更内容、风险与恢复方案及确认有效期。敏感值不在聊天中复述；平台返回的脱敏内容不得反向覆盖原始请求。

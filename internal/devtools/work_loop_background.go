@@ -12,11 +12,12 @@ import (
 // No bearer material is retained. Each tick supplies a fresh platform directory
 // and reads the original Key's CURRENT scopes/revocation from TokenStore.
 func (s *ToolService) registerWorkLoopBackground(mux *http.ServeMux) {
-	for _, serviceTask := range []bool{false, true} {
-		endpoint, base := "/internal/work-loop-advance", "/api/work-loops"
-		if serviceTask {
-			endpoint, base = "/internal/service-deployment-advance", "/api/service-deployments"
-		}
+	for _, route := range []struct{ endpoint, base string }{
+		{"/internal/work-loop-advance", "/api/work-loops"},
+		{"/internal/service-deployment-advance", "/api/service-deployments"},
+		{"/internal/delivery-publication-advance", "/api/delivery/publications"},
+	} {
+		endpoint, base := route.endpoint, route.base
 		mux.HandleFunc("POST "+endpoint, func(w http.ResponseWriter, r *http.Request) {
 			fail := func(e error) { w.WriteHeader(403); _ = json.NewEncoder(w).Encode(map[string]any{"error": e.Error()}) }
 			var req struct {
@@ -64,6 +65,9 @@ func (s *ToolService) registerWorkLoopBackground(mux *http.ServeMux) {
 				return
 			}
 			state := stringArg(task, "state")
+			if task["state"] == "pausing" && base == "/api/delivery/publications" {
+				state = "running"
+			}
 			if task["paused"] == true || task["revoked"] == true || (state != "running" && state != "awaiting_acceptance") {
 				w.WriteHeader(204)
 				return
@@ -78,6 +82,9 @@ func (s *ToolService) registerWorkLoopBackground(mux *http.ServeMux) {
 				token.Scopes = append([]string{}, workLoopScopes...)
 				token.Applications = []string{"*"}
 				token.Environments = []string{stringArg(spec, "environment")}
+				if base == "/api/delivery/publications" {
+					token.Environments = []string{stringArg(task, "environment")}
+				}
 			case "mcp":
 				found := false
 				for _, saved := range s.actions.List() {
@@ -97,9 +104,12 @@ func (s *ToolService) registerWorkLoopBackground(mux *http.ServeMux) {
 				deny(fmt.Errorf("旧任务尚未授权后台推进，请核对并续授权"))
 				return
 			}
-			if serviceTask {
+			switch base {
+			case "/api/delivery/publications":
+				e = publicationAccess(token, stringArg(task, "environment"))
+			case "/api/service-deployments":
 				e = serviceDeploymentAccess(token, spec, true)
-			} else {
+			default:
 				e = workLoopAccess(token, spec, true)
 			}
 			if e != nil {

@@ -622,9 +622,15 @@ func (pr *PipelineRunner) ContinueDeployEnvironment(runID int64, target *Service
 	if sv == nil {
 		return fmt.Errorf("服务不存在")
 	}
-	artifact := pr.artifactForRun(r)
+	artifact := pr.st.artifactForEnvironmentRun(r, target.Environment)
 	if artifact == nil {
-		return fmt.Errorf("流水线制品记录不可用")
+		return fmt.Errorf("本次构建没有与目标环境发布方式匹配的制品")
+	}
+	if err := pr.st.artifactBuildComplete(artifact); err != nil {
+		return err
+	}
+	if err := pr.st.validateArtifactBuildVariant(artifact, target.Environment); err != nil {
+		return err
 	}
 	runtimeEnv, err := pr.st.decryptRuntimeEnvironment(target.runtimeEnvEncrypted)
 	if err != nil {

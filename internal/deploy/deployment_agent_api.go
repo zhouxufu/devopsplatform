@@ -60,13 +60,8 @@ func registerDeploymentAgentRoutes(mux *http.ServeMux, m *ReleaseManager) {
 		out := []deploymentAgentRegistration{}
 		for _, id := range ids {
 			a := s.deploymentAgent(id)
-			if a != nil {
-				for _, name := range a.Services {
-					if name == service {
-						out = append(out, *a)
-						break
-					}
-				}
+			if s.deploymentAgentAllowsService(a, service) {
+				out = append(out, *a)
 			}
 		}
 		deliveryJSON(w, out)

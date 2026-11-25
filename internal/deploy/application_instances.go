@@ -24,6 +24,10 @@ type applicationInstance struct {
 	Fingerprint    string `json:"fingerprint,omitempty"`
 	Owned          bool   `json:"owned"`
 	Controllable   bool   `json:"controllable"`
+	JavaMode       string `json:"java_mode,omitempty"`
+	ProjectID      string `json:"project_id,omitempty"`
+	JavaVersion    string `json:"java_version,omitempty"`
+	jpom           *jpomInstanceIdentity
 	Restarts       int    `json:"restarts,omitempty"`
 	StartedAt      string `json:"started_at,omitempty"`
 }
@@ -64,8 +68,17 @@ func (m *instanceManager) target(service, environment string) (*ServiceEnvironme
 		return nil, nil, nil, fmt.Errorf("应用环境不存在")
 	}
 	sv = t.Apply(sv)
-	if t.ManualTarget() || !(managedJava(sv) || sv.TargetType == "docker-host") {
+	if t.ManualTarget() || !(managedJava(sv) || jpomJava(sv) || sv.TargetType == "docker-host") {
 		return nil, nil, nil, fmt.Errorf("此环境未由平台托管进程或 Docker 容器，不能直接管理实例")
+	}
+	if jpomJava(sv) {
+		env := m.st.GetEnvironment(environment)
+		if env == nil || env.Protected || t.Protected || (env.Purpose != "development" && env.Purpose != "test") {
+			return nil, nil, nil, fmt.Errorf("Jpom 兼容实例仅支持非受保护开发／测试环境")
+		}
+		if err := validateJpomJava(sv); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	if sv.TargetType == "docker-host" && !instanceContainerNameRE.MatchString(instanceContainerName(sv)) {
 		return nil, nil, nil, fmt.Errorf("配置的容器名无效")
@@ -73,8 +86,8 @@ func (m *instanceManager) target(service, environment string) (*ServiceEnvironme
 	hosts := []Host{}
 	for _, n := range t.Hosts {
 		h := m.st.GetHost(n)
-		if h == nil {
-			return nil, nil, nil, fmt.Errorf("环境主机不存在")
+		if h == nil || (jpomJava(sv) && h.Environment != t.Environment) {
+			return nil, nil, nil, fmt.Errorf("环境主机不存在或归属已变化")
 		}
 		hosts = append(hosts, *h)
 	}
@@ -94,7 +107,14 @@ func dockerInstanceStatusCommand(name string) string {
 
 func (m *instanceManager) inspect(t *ServiceEnvironment, sv *Service, h Host) applicationInstance {
 	r := applicationInstance{ManagedJavaInstance: ManagedJavaInstance{Host: h.Name, Address: h.Addr, State: "unknown", CheckedAt: time.Now().Unix()}, Kind: sv.TargetType}
-	if managedJava(sv) {
+	if jpomJava(sv) {
+		r = inspectJpomInstance(sv, h, m.exec)
+		if r.Owned && m.jpomBindingOverlaps(t, sv, h) {
+			r.Owned = false
+			r.Controllable = false
+			r.Message = "同一 Jpom 实例被多个应用或环境引用，请先纠正绑定"
+		}
+	} else if managedJava(sv) {
 		r.ManagedJavaInstance = inspectManagedJavaInstance(sv, h, m.exec)
 		if dp := m.st.GetDeploy(r.DeployID); dp != nil && dp.Service == sv.Name && dp.Environment == t.Environment && dp.Host == h.Name {
 			r.Version = dp.Version
@@ -198,7 +218,7 @@ func (m *instanceManager) inspect(t *ServiceEnvironment, sv *Service, h Host) ap
 		}
 	}
 	if r.Owned {
-		r.Fingerprint = digestJSON([]any{t, t.runtimeEnvEncrypted, h.Name, h.Addr, h.User, h.HostKey, h.KeyPath, r.ContainerID, r.Image, r.Release, r.PID, r.State, r.Restarts, r.StartedAt, r.DeployID})
+		r.Fingerprint = digestJSON([]any{t, t.runtimeEnvEncrypted, h.Name, h.Addr, h.User, h.HostKey, h.KeyPath, r.ContainerID, r.Image, r.Release, r.PID, r.State, r.Restarts, r.StartedAt, r.DeployID, r.jpom})
 	}
 	return r
 }
@@ -306,7 +326,13 @@ func (m *instanceManager) control(service, environment string, h Host, action, a
 	if action == "ready" && sv.TargetType == "docker-host" {
 		return r, fmt.Errorf("Docker 健康状态请刷新查看，不执行 Java 就绪检查")
 	}
-	if managedJava(sv) {
+	if jpomJava(sv) {
+		env, e := m.st.decryptRuntimeEnvironment(t.runtimeEnvEncrypted)
+		if e != nil {
+			return r, fmt.Errorf("运行变量不可用，请先核对环境配置")
+		}
+		command, err = jpomInstanceControlCommand(sv, r, action, env, "/proc")
+	} else if managedJava(sv) {
 		command, err = managedJavaControlCommand(sv.RemoteDir, action)
 	} else {
 		command, err = dockerInstanceControlCommand(r, action)
@@ -315,9 +341,10 @@ func (m *instanceManager) control(service, environment string, h Host, action, a
 		return r, err
 	}
 	state = "uncertain"
-	_, err = m.exec(h, command, 3*time.Minute)
+	output, execErr := m.exec(h, command, 3*time.Minute)
+	err = execErr
 	next := m.inspect(t, sv, h)
-	if !next.Owned || (sv.TargetType == "docker-host" && next.ContainerID != r.ContainerID) || (managedJava(sv) && next.DeployID != r.DeployID) {
+	if !next.Owned || (jpomJava(sv) && (next.jpom == nil || jpomInstanceAck(output) != next.jpom.signature())) || (sv.TargetType == "docker-host" && next.ContainerID != r.ContainerID) || (managedJava(sv) && next.DeployID != r.DeployID) {
 		return next, fmt.Errorf("操作期间实例已替换，结果待核对，未自动重试")
 	}
 	if err != nil {

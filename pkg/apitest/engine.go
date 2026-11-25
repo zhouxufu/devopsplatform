@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"logplatform/pkg/dubborpc"
 	"mime"
 	"net"
 	"net/http"
@@ -42,6 +43,7 @@ type Check struct {
 	DetailAvailable bool   `json:"detail_available,omitempty"`
 }
 type Request struct {
+	RPC                *dubborpc.Method  `json:"rpc,omitempty"`
 	AuthenticationOnly bool              `json:"-"`
 	BodyType           string            `json:"body_type,omitempty"`
 	Form               []FormField       `json:"form,omitempty"`
@@ -88,20 +90,24 @@ type AuthenticationResult struct {
 	Refresh          string `json:"refresh_mode"`
 }
 type Result struct {
-	Authentication *AuthenticationResult `json:"authentication,omitempty"`
-	Phase          string                `json:"phase"`
-	Status         int                   `json:"status"`
-	Headers        map[string]string     `json:"headers"`
-	Body           string                `json:"body,omitempty"`
-	Events         []Event               `json:"events"`
-	Checks         []Check               `json:"checks"`
-	DurationMS     int64                 `json:"duration_ms"`
-	TraceID        string                `json:"trace_id"`
-	URL            string                `json:"url"`
-	StopReason     string                `json:"stop_reason,omitempty"`
-	Truncated      bool                  `json:"truncated"`
-	Error          string                `json:"error,omitempty"`
-	OutcomeUnknown bool                  `json:"outcome_unknown"`
+	Protocol         string                `json:"protocol,omitempty"`
+	RPCSuccess       bool                  `json:"rpc_success,omitempty"`
+	ExceptionType    string                `json:"exception_type,omitempty"`
+	ExceptionMessage string                `json:"exception_message,omitempty"`
+	Authentication   *AuthenticationResult `json:"authentication,omitempty"`
+	Phase            string                `json:"phase"`
+	Status           int                   `json:"status"`
+	Headers          map[string]string     `json:"headers"`
+	Body             string                `json:"body,omitempty"`
+	Events           []Event               `json:"events"`
+	Checks           []Check               `json:"checks"`
+	DurationMS       int64                 `json:"duration_ms"`
+	TraceID          string                `json:"trace_id"`
+	URL              string                `json:"url"`
+	StopReason       string                `json:"stop_reason,omitempty"`
+	Truncated        bool                  `json:"truncated"`
+	Error            string                `json:"error,omitempty"`
+	OutcomeUnknown   bool                  `json:"outcome_unknown"`
 }
 
 var variable = regexp.MustCompile(`\{\{var\.([A-Za-z_][A-Za-z0-9_]*)\}\}`)
@@ -109,6 +115,12 @@ var sensitive = regexp.MustCompile(`(?i)(authorization|cookie|password|passwd|se
 
 func SecretKey(k string) bool { return sensitive.MatchString(k) }
 func Validate(r *Request) error {
+	if r.Mode == "dubbo" {
+		return validateDubboRequest(r)
+	}
+	if r.RPC != nil {
+		return fmt.Errorf("RPC 参数只能用于 Dubbo 请求")
+	}
 	r.Method = strings.ToUpper(strings.TrimSpace(r.Method))
 	if r.Method == "" {
 		r.Method = "GET"
@@ -390,7 +402,12 @@ func PerformScoped(ctx context.Context, client *http.Client, base string, r Requ
 		outcome, secrets = extractResponse(extractions, raw)
 		return secrets
 	}
-	result := perform(ctx, client, base, r, a, vars, scope, extractions, capture, emit, observe...)
+	var result Result
+	if r.Mode == "dubbo" {
+		result = performDubbo(ctx, base, r, a, vars, scope, extractions, capture)
+	} else {
+		result = perform(ctx, client, base, r, a, vars, scope, extractions, capture, emit, observe...)
+	}
 	for _, check := range outcome.Checks {
 		if check.Status == "failed" {
 			result.Error = "响应变量提取失败：" + check.Name
@@ -787,6 +804,12 @@ func Evaluate(assertions []Assertion, r Result) []Check {
 		switch a.Type {
 		case "regex", "json_regex", "json_range", "duration", "schema", "sse_json", "sse_contains":
 			pass, actual = evaluateExtended(a, r)
+		case "rpc_success":
+			actual = strconv.FormatBool(r.RPCSuccess)
+			pass = r.Protocol == "dubbo" && actual == a.Expected
+		case "exception":
+			actual = r.ExceptionType
+			pass = r.Protocol == "dubbo" && actual == a.Expected
 		case "status":
 			actual = strconv.Itoa(r.Status)
 			pass = strconv.Itoa(r.Status) == a.Expected
@@ -994,6 +1017,9 @@ func SanitizeRequest(r Request, variables map[string]string) Request {
 		}
 	}
 	out.Path = redactURL(r.Path, secrets)
+	if r.Mode == "dubbo" && r.RPC != nil {
+		out.Path = r.RPC.Interface + "#" + r.RPC.Method + "(" + strings.Join(r.RPC.ParameterTypes, ",") + ")"
+	}
 	for _, template := range requestVariable.FindAllString(r.Path, -1) {
 		out.Path = strings.ReplaceAll(out.Path, url.PathEscape(template), template)
 	}

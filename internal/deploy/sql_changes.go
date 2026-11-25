@@ -101,32 +101,53 @@ var addColumnRE = regexp.MustCompile("(?is)^alter\\s+table\\s+(`?[A-Za-z_][A-Za-
 var createIndexRE = regexp.MustCompile("(?is)^create\\s+(unique\\s+)?index\\s+(`?[A-Za-z_][A-Za-z0-9_]*`?)\\s+on\\s+(`?[A-Za-z_][A-Za-z0-9_]*`?)\\s*\\(([^()]*)\\)\\s*$")
 
 func saveSQLPayload(tx *deployTx, v *Change) error {
+	for _, dep := range v.Prerequisites {
+		var exists int
+		if dep.ChangeID == v.ID {
+			return fmt.Errorf("变更不能依赖自身")
+		}
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM changes WHERE id=? AND status<>'archived'`, dep.ChangeID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists != 1 {
+			return fmt.Errorf("前置变更 #%d 不存在或已归档", dep.ChangeID)
+		}
+	}
 	if err := validateSQLOverrideEnvironments(tx, v.SQL); err != nil {
 		return err
 	}
 	doc, _ := json.Marshal(struct {
-		SQL   *SQLChange   `json:"sql,omitempty"`
-		Nacos *NacosChange `json:"nacos,omitempty"`
-		Redis *RedisChange `json:"redis,omitempty"`
-	}{v.SQL, v.Nacos, v.Redis})
+		Prerequisites []ChangePrerequisite `json:"prerequisites,omitempty"`
+		SQL           *SQLChange           `json:"sql,omitempty"`
+		Nacos         *NacosChange         `json:"nacos,omitempty"`
+		Redis         *RedisChange         `json:"redis,omitempty"`
+	}{v.Prerequisites, v.SQL, v.Nacos, v.Redis})
 	_, err := tx.Exec(`INSERT INTO change_payloads(change_id,document) VALUES(?,?) ON CONFLICT(change_id) DO UPDATE SET document=excluded.document`, v.ID, string(doc))
 	return err
 }
-func (s *Store) loadSQLPayload(v *Change) {
-	_ = loadChangeOwnership(s.db, v)
-	var doc string
-	if s.db.QueryRow(`SELECT document FROM change_payloads WHERE change_id=?`, v.ID).Scan(&doc) == nil {
-		var payload struct {
-			SQL   *SQLChange   `json:"sql"`
-			Nacos *NacosChange `json:"nacos"`
-			Redis *RedisChange `json:"redis"`
-		}
-		if json.Unmarshal([]byte(doc), &payload) == nil {
-			v.SQL = payload.SQL
-			v.Nacos = payload.Nacos
-			v.Redis = payload.Redis
-		}
+func loadChangePayload(q interface{ QueryRow(string, ...any) *sql.Row }, v *Change) error {
+	if err := loadChangeOwnership(q, v); err != nil {
+		return err
 	}
+	var doc string
+	err := q.QueryRow(`SELECT document FROM change_payloads WHERE change_id=?`, v.ID).Scan(&doc)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var payload struct {
+		Prerequisites []ChangePrerequisite `json:"prerequisites,omitempty"`
+		SQL           *SQLChange           `json:"sql"`
+		Nacos         *NacosChange         `json:"nacos"`
+		Redis         *RedisChange         `json:"redis"`
+	}
+	if err := json.Unmarshal([]byte(doc), &payload); err != nil {
+		return err
+	}
+	v.Prerequisites, v.SQL, v.Nacos, v.Redis = payload.Prerequisites, payload.SQL, payload.Nacos, payload.Redis
+	return validateChangePrerequisites(v)
 }
 func digestJSON(v any) string {
 	data, _ := json.Marshal(v)

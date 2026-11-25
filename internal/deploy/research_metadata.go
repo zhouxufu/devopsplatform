@@ -10,6 +10,7 @@ import (
 
 func researchSchema(identity, doc string) []string {
 	queries := []string{
+		`CREATE TABLE IF NOT EXISTS research_release_marks (work_item_id BIGINT PRIMARY KEY, marked INTEGER NOT NULL, revision BIGINT NOT NULL, actor VARCHAR(191) NOT NULL, updated_at BIGINT NOT NULL, comment TEXT NOT NULL)`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS research_attention_states (actor VARCHAR(191) NOT NULL, item_key VARCHAR(191) NOT NULL, event_digest VARCHAR(80) NOT NULL, state VARCHAR(32) NOT NULL, revision BIGINT NOT NULL, document %s NOT NULL, reason TEXT NOT NULL, request_id VARCHAR(80) NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY(actor,item_key,event_digest))`, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS research_release_rules (connection_name VARCHAR(191) PRIMARY KEY, document %s NOT NULL, revision BIGINT NOT NULL, actor VARCHAR(191) NOT NULL, updated_at BIGINT NOT NULL)`, doc),
 		`CREATE TABLE IF NOT EXISTS research_work_relations (work_item_id BIGINT NOT NULL, actor VARCHAR(191) NOT NULL, kind VARCHAR(32) NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(work_item_id,actor,kind))`,

@@ -111,19 +111,19 @@ func (s *Store) apiTestDocumentImpacts(app string, c *apiTestCase, targetID int6
 		selected := targetID
 		if selected == 0 {
 			var ok bool
-			selected, ok = cache.latest[base.Environment]
+			selected, ok = cache.latest[base.Environment+":"+base.Protocol]
 			if !ok {
-				if e = s.db.QueryRow(`SELECT id FROM api_document_versions WHERE application_id=? AND environment=? ORDER BY id DESC LIMIT 1`, app, base.Environment).Scan(&selected); e != nil {
+				if e = s.db.QueryRow(`SELECT id FROM api_document_versions WHERE application_id=? AND environment=? AND `+documentProtocolSQL+`=? ORDER BY id DESC LIMIT 1`, app, base.Environment, base.Protocol).Scan(&selected); e != nil {
 					return nil, e
 				}
-				cache.latest[base.Environment] = selected
+				cache.latest[base.Environment+":"+base.Protocol] = selected
 			}
 		}
 		target, e := s.impactDocument(app, selected, cache)
 		if e != nil {
 			return nil, fmt.Errorf("比较文档不可读取")
 		}
-		if target.Environment != base.Environment {
+		if target.Environment != base.Environment || target.Protocol != base.Protocol {
 			continue
 		}
 		row.SnapshotID = selected

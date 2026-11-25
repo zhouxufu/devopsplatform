@@ -441,6 +441,16 @@ func (s *Store) upsertServiceEnvironment(v ServiceEnvironment, defaults *applica
 		v.StartCmd = "bash " + shellQuote(path.Join(v.RemoteDir, "current/service.sh")) + " start"
 		v.StopCmd = "bash " + shellQuote(path.Join(v.RemoteDir, "current/service.sh")) + " stop"
 	}
+	if v.TargetType == "ssh-jar" && v.DeployConfig["java_mode"] == "jpom" {
+		if environment.Protected || v.Protected || (environment.Purpose != "development" && environment.Purpose != "test") {
+			return fmt.Errorf("Jpom 兼容覆盖发布仅支持非受保护的开发和测试环境")
+		}
+		sv := &Service{TargetType: v.TargetType, RemoteDir: v.RemoteDir, DeployConfig: v.DeployConfig}
+		if err := validateJpomJava(sv); err != nil {
+			return err
+		}
+		v.StartCmd, v.StopCmd = jpomJavaCommands(sv)
+	}
 	if v.TargetType == "ssh-jar" && strings.TrimSpace(v.StartCmd) == "" {
 		return fmt.Errorf("JAR 部署必须配置启动命令")
 	}

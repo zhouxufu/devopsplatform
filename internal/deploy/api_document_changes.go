@@ -37,7 +37,7 @@ func readDocumentSubmission(w http.ResponseWriter, r *http.Request, baseline ...
 	if json.Unmarshal(raw, &root) != nil {
 		return nil, nil, fmt.Errorf("文档 JSON 格式无效")
 	}
-	if root["openapi"] != nil {
+	if root["openapi"] != nil || root["dubbo"] != nil {
 		return raw, nil, nil
 	}
 	if root["patches"] != nil {
@@ -55,7 +55,7 @@ func readDocumentSubmission(w http.ResponseWriter, r *http.Request, baseline ...
 		root["document"] = candidate
 	}
 	if len(root["document"]) == 0 {
-		return nil, nil, fmt.Errorf("需要完整 OpenAPI 文档")
+		return nil, nil, fmt.Errorf("需要完整 OpenAPI 或 Dubbo 文档")
 	}
 	var context DocumentChangeContext
 	if data := root["change_context"]; len(data) > 0 && string(data) != "null" {

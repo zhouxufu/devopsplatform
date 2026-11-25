@@ -8,6 +8,6 @@ export function editorRequestAllowed(path,method='GET'){
  const rules={GET:[/^api\/work-items\/\d+\/delivery-content$/,/^api\/services\/[^/]+\/resources$/,/^api\/environments$/,/^api\/research\/work-items\/(sources|page)$/,/^api\/research\/development\/\d+$/],POST:[/^api\/changes\/batch$/,/^api\/changes\/\d+\/reopen$/,/^api\/git\/branches$/,/^api\/research\/work-items\/attach$/,/^api\/research\/development\/preview$/,/^api\/research\/development\/\d+\/(create|reconcile)$/],PUT:[/^api\/work-items\/\d+\/delivery-content$/]}
  return rules[method].some(rule=>rule.test(name))
 }
-export const editorProps=props=>JSON.parse(JSON.stringify(Object.fromEntries(['inline','embeddedSubmit','hideNextSteps','show','batch','item','services','workItems','actor','workspace'].map(key=>[key,props[key]]))))
+export const editorProps=props=>JSON.parse(JSON.stringify(Object.fromEntries(['inline','embeddedSubmit','hideNextSteps','focusChangeId','focusPrerequisites','show','batch','item','services','workItems','actor','workspace'].map(key=>[key,props[key]]))))
 export const editorMessage=value=>JSON.parse(JSON.stringify(value))
 export function bridgeError(error){return {message:error?.message||'请求失败',...(Number.isInteger(error?.status)?{status:error.status}:{}),...(typeof error?.code==='string'?{code:error.code}:{})}}

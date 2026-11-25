@@ -393,6 +393,9 @@ func (s *Store) ResearchLivePage(ctx context.Context, actor string, f researchLi
 	defer func() {
 		if resultErr == nil {
 			resultErr = s.decorateResearchRelations(out.Items, actor)
+			if resultErr == nil {
+				resultErr = s.decorateResearchReleaseMarks(out.Items)
+			}
 		}
 	}()
 	if err := f.Validate(); err != nil {
@@ -430,7 +433,7 @@ func (s *Store) ResearchLivePage(ctx context.Context, actor string, f researchLi
 			if productionOnly || f.MainCandidate {
 				delivery = "not_recorded"
 			}
-			candidate, err := s.WorkCandidates(WorkCandidateFilter{WorkItemFilter: f.WorkItemFilter, Source: "manual", Environment: f.Environment, Delivery: delivery, ProductionOnly: productionOnly || f.MainCandidate})
+			candidate, err := s.WorkCandidates(WorkCandidateFilter{WorkItemFilter: f.WorkItemFilter, Source: "manual", Environment: f.Environment, Delivery: delivery, ProductionOnly: productionOnly || f.MainCandidate, ExcludeManualRelease: productionOnly})
 			if err != nil {
 				return out, err
 			}
@@ -593,6 +596,9 @@ func (s *Store) ResearchLivePage(ctx context.Context, actor string, f researchLi
 			}
 		}
 		successful := map[int64]bool{}
+		if err = s.decorateResearchReleaseMarks(projected); err != nil {
+			return out, err
+		}
 		if err = s.decorateResearchRelations(projected, actor); err != nil {
 			return out, err
 		}
@@ -628,7 +634,7 @@ func (s *Store) ResearchLivePage(ctx context.Context, actor string, f researchLi
 					continue
 				}
 			}
-			if !liveIntentMatches(f.ReleaseRequired, v.ReleaseRequired) || (f.Delivery != "" && v.SuccessfulDelivery) {
+			if !liveIntentMatches(f.ReleaseRequired, v.ReleaseRequired) || (f.Delivery != "" && v.SuccessfulDelivery) || (productionOnly && manuallyMarkedReleased(v.WorkItem)) {
 				continue
 			}
 			out.Items = append(out.Items, v)

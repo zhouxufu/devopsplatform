@@ -39,6 +39,9 @@ func compatibleTestDefinition(old, input int, graph *apiTestGraph) bool {
 
 func testNodeKind(s apiTestStep) string {
 	if s.Kind == "" {
+		if s.Request.Mode == "dubbo" {
+			return "dubbo"
+		}
 		return "http"
 	}
 	return s.Kind
@@ -157,7 +160,7 @@ func planAPITestGraph(c *apiTestCase) (*apiTestGraphPlan, error) {
 			return nil, fmt.Errorf("多条路径必须通过汇合节点连接")
 		}
 		switch testNodeKind(s) {
-		case "http":
+		case "http", "dubbo":
 			if out > 1 {
 				return nil, fmt.Errorf("接口节点仅允许一个后继，请添加条件或并行节点")
 			}
@@ -254,7 +257,7 @@ func planAPITestGraph(c *apiTestCase) (*apiTestGraphPlan, error) {
 				continue
 			}
 			s := c.Steps[i]
-			if testNodeKind(s) == "http" {
+			if isTestRequest(s) {
 				if err := apitest.ValidateStepReferences(s.Request, available); err != nil {
 					return nil, fmt.Errorf("节点 %s：%w", s.Name, err)
 				}
@@ -389,7 +392,7 @@ func (m *apiTestManager) runGraphUnit(ctx context.Context, v *apiTestRun, c apiT
 				remaining--
 				continue
 			}
-			if testNodeKind(s) != "http" {
+			if !isTestRequest(s) {
 				r.Status = "success"
 				if s.Condition != nil {
 					value, e := compareCondition(*s.Condition, scope)
@@ -415,7 +418,7 @@ func (m *apiTestManager) runGraphUnit(ctx context.Context, v *apiTestRun, c apiT
 			go func(index int, step apiTestStep, input map[string]any) {
 				stepTarget, stepAuth, stepVariables := target, p.Auth, variables
 				if len(scenarios) > 0 {
-					runtime, ok := scenarios[0][step.Service]
+					runtime, ok := scenarioRuntimeFor(scenarios[0], step)
 					if !ok {
 						updates <- apiGraphUpdate{index: index, done: true, result: apitest.Result{Error: "节点的冻结应用目标不存在"}}
 						return

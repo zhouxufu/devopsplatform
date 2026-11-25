@@ -4,51 +4,62 @@ package deploy
 // grants arbitrary writes, approves on somebody's behalf, or replays a dispatch.
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type ServiceDeploymentSpec struct {
-	Service     string `json:"service"`
-	Environment string `json:"environment"`
-	Mode        string `json:"mode"`
-	Branch      string `json:"branch,omitempty"`
-	ArtifactID  int64  `json:"artifact_id,omitempty"`
-	Reason      string `json:"reason"`
+	ChangeID      int64  `json:"change_id,omitempty"`
+	PreparationID int64  `json:"preparation_id,omitempty"`
+	Service       string `json:"service"`
+	Environment   string `json:"environment"`
+	Mode          string `json:"mode"`
+	Branch        string `json:"branch,omitempty"`
+	ArtifactID    int64  `json:"artifact_id,omitempty"`
+	Reason        string `json:"reason"`
 }
 type ServiceDeploymentGrant struct {
-	Spec                ServiceDeploymentSpec `json:"spec"`
-	Commit              string                `json:"commit,omitempty"`
-	ArtifactDigest      string                `json:"artifact_digest,omitempty"`
-	ConfigurationDigest string                `json:"configuration_digest"`
-	TargetDigest        string                `json:"target_digest"`
-	Policy              map[string]any        `json:"policy"`
-	Targets             []string              `json:"targets"`
-	TargetType          string                `json:"target_type"`
-	Strategy            string                `json:"strategy"`
-	PauseBetweenBatches bool                  `json:"pause_between_batches"`
-	Digest              string                `json:"digest"`
+	Change              *changeDeploymentGrant `json:"change,omitempty"`
+	Spec                ServiceDeploymentSpec  `json:"spec"`
+	Commit              string                 `json:"commit,omitempty"`
+	ArtifactDigest      string                 `json:"artifact_digest,omitempty"`
+	ConfigurationDigest string                 `json:"configuration_digest"`
+	TargetDigest        string                 `json:"target_digest"`
+	Policy              map[string]any         `json:"policy"`
+	Targets             []string               `json:"targets"`
+	TargetType          string                 `json:"target_type"`
+	Strategy            string                 `json:"strategy"`
+	PauseBetweenBatches bool                   `json:"pause_between_batches"`
+	Digest              string                 `json:"digest"`
 }
 type ServiceDeployment struct {
-	ID             string                 `json:"id"`
-	Owner          string                 `json:"owner"`
-	Authority      string                 `json:"authority"`
-	AuthorityKeyID string                 `json:"authority_key_id,omitempty"`
-	Revision       int64                  `json:"revision"`
-	Grant          ServiceDeploymentGrant `json:"grant"`
-	State          string                 `json:"state"`
-	Stage          string                 `json:"stage"`
-	Message        string                 `json:"message"`
-	LeaseUntil     int64                  `json:"lease_until,omitempty"`
-	ExpiresAt      int64                  `json:"expires_at"`
-	RunID          int64                  `json:"run_id,omitempty"`
-	ReleaseID      int64                  `json:"release_id,omitempty"`
-	ArtifactID     int64                  `json:"artifact_id,omitempty"`
-	UpdatedAt      int64                  `json:"updated_at"`
-	raw            string
+	BuiltCommit         string                 `json:"built_commit,omitempty"`
+	BuiltArtifactDigest string                 `json:"built_artifact_digest,omitempty"`
+	ChildRevision       int64                  `json:"child_revision,omitempty"`
+	PreparationID       int64                  `json:"preparation_id,omitempty"`
+	DeliveryID          int64                  `json:"delivery_id,omitempty"`
+	CodeID              string                 `json:"code_id,omitempty"`
+	ID                  string                 `json:"id"`
+	Owner               string                 `json:"owner"`
+	Authority           string                 `json:"authority"`
+	AuthorityKeyID      string                 `json:"authority_key_id,omitempty"`
+	Revision            int64                  `json:"revision"`
+	Grant               ServiceDeploymentGrant `json:"grant"`
+	State               string                 `json:"state"`
+	Stage               string                 `json:"stage"`
+	Message             string                 `json:"message"`
+	LeaseUntil          int64                  `json:"lease_until,omitempty"`
+	ExpiresAt           int64                  `json:"expires_at"`
+	RunID               int64                  `json:"run_id,omitempty"`
+	ReleaseID           int64                  `json:"release_id,omitempty"`
+	ArtifactID          int64                  `json:"artifact_id,omitempty"`
+	UpdatedAt           int64                  `json:"updated_at"`
+	raw                 string
 }
 
 func (s *Store) serviceDeployment(id string) (*ServiceDeployment, error) {
@@ -124,6 +135,9 @@ func (s *Store) serviceDeploymentTerms(spec ServiceDeploymentSpec) (string, stri
 func (s *Store) previewServiceDeployment(ctx context.Context, m *ReleaseManager, spec ServiceDeploymentSpec) (*ServiceDeploymentGrant, error) {
 	if strings.TrimSpace(spec.Reason) == "" || len(spec.Reason) > 2000 {
 		return nil, fmt.Errorf("请填写部署原因（最多2000字符）")
+	}
+	if spec.ChangeID != 0 || spec.PreparationID != 0 {
+		return nil, fmt.Errorf("独立变更请使用整次发布入口")
 	}
 	if spec.Mode != "build" && spec.Mode != "artifact" {
 		return nil, fmt.Errorf("请选择 build 或 artifact")
@@ -331,7 +345,7 @@ func registerServiceDeploymentRoutes(mux *http.ServeMux, s *Store, pr *PipelineR
 		if !decode(w, r, &spec) {
 			return
 		}
-		g, e := s.previewServiceDeployment(r.Context(), m, spec)
+		g, e := s.previewServiceDeploymentRequest(r, m, spec)
 		if e != nil {
 			deliveryWriteError(w, 409, e)
 			return
@@ -359,7 +373,7 @@ func registerServiceDeploymentRoutes(mux *http.ServeMux, s *Store, pr *PipelineR
 			deliveryJSON(w, old)
 			return
 		}
-		g, e := s.previewServiceDeployment(r.Context(), m, req.Spec)
+		g, e := s.previewServiceDeploymentRequest(r, m, req.Spec)
 		if e != nil {
 			deliveryWriteError(w, 409, e)
 			return
@@ -373,7 +387,13 @@ func registerServiceDeploymentRoutes(mux *http.ServeMux, s *Store, pr *PipelineR
 			deliveryWriteError(w, 403, "缺少可信授权来源")
 			return
 		}
-		if e = s.saveServiceDeployment(t); e != nil {
+		if t.Grant.Change != nil {
+			t.PreparationID = t.Grant.Spec.PreparationID
+			e = s.createChangeDeployment(t)
+		} else {
+			e = s.saveServiceDeployment(t)
+		}
+		if e != nil {
 			deliveryWriteError(w, 409, e)
 			return
 		}
@@ -396,6 +416,35 @@ func registerServiceDeploymentRoutes(mux *http.ServeMux, s *Store, pr *PipelineR
 			}
 		}
 		deliveryJSON(w, out)
+	})
+	mux.HandleFunc("GET /api/service-deployments/by-change", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		id, e := strconv.ParseInt(q.Get("change_id"), 10, 64)
+		if e != nil || id <= 0 || q.Get("service") == "" || q.Get("environment") == "" {
+			deliveryWriteError(w, 400, "请选择应用、环境与变更编号")
+			return
+		}
+		spec := ServiceDeploymentSpec{ChangeID: id, Service: q.Get("service"), Environment: q.Get("environment")}
+		var taskID string
+		e = s.db.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, changeDeploymentClaim(spec)).Scan(&taskID)
+		if e == sql.ErrNoRows {
+			deliveryJSON(w, map[string]any{})
+			return
+		}
+		if e != nil {
+			deliveryWriteError(w, 500, e)
+			return
+		}
+		t, e := s.serviceDeployment(taskID)
+		if e != nil {
+			deliveryWriteError(w, 500, e)
+			return
+		}
+		if t.Owner != deliveryActor(r) {
+			deliveryJSON(w, map[string]any{})
+			return
+		}
+		deliveryJSON(w, t)
 	})
 	mux.HandleFunc("GET /api/service-deployments/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if t := owned(w, r); t != nil {
@@ -421,7 +470,13 @@ func registerServiceDeploymentRoutes(mux *http.ServeMux, s *Store, pr *PipelineR
 			deliveryWriteError(w, 403, "请使用原授权身份推进")
 			return
 		}
-		if e := s.advanceServiceDeployment(t, pr, m); e != nil {
+		var advanceErr error
+		if t.Grant.Change != nil {
+			advanceErr = s.advanceChangeDeployment(mux, r, t, pr, m)
+		} else {
+			advanceErr = s.advanceServiceDeployment(t, pr, m)
+		}
+		if e := advanceErr; e != nil {
 			deliveryWriteError(w, 409, e)
 			return
 		}

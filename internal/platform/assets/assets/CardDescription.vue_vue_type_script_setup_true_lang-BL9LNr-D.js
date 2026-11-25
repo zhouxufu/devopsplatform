@@ -1,1 +1,0 @@
-import{d as t,o,x as r,J as n,g as c,I as l,f as d}from"./OptionPicker-Dpk7Ixgb.js";const m=t({__name:"CardDescription",props:{class:{}},setup(s){const e=s;return(a,p)=>(o(),r("div",{"data-slot":"card-description",class:n(c(l)("text-muted-foreground text-sm",e.class))},[d(a.$slots,"default")],2))}});export{m as _};

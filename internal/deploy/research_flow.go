@@ -45,7 +45,7 @@ func validateResearchNodes(nodes []DeliveryNode) error {
 			if n.ApprovalMode != "any" && n.ApprovalMode != "all" {
 				return fmt.Errorf("人工确认须选择或签或会签")
 			}
-			if n.AssigneeSource != "work_item_resolvers" && n.AssigneeSource != "specified" && n.AssigneeSource != "work_item_assignees" && n.AssigneeSource != "work_item_participants" && n.AssigneeSource != "change_submitters" {
+			if n.AssigneeSource != "work_item_resolvers" && n.AssigneeSource != "specified" && n.AssigneeSource != "work_item_assignees" && n.AssigneeSource != "work_item_participants" && n.AssigneeSource != "change_submitters" && n.AssigneeSource != "delivery_initiator" {
 				return fmt.Errorf("请选择确认人来源")
 			}
 			if n.AssigneeSource == "specified" {
@@ -225,7 +225,32 @@ func (s *Store) ResearchFlowPlan(req DeliveryRequest, accounts map[string]string
 	for i := range nodes {
 		n := &nodes[i]
 		n.AssignedWorkItems = nil
-		if n.Kind == "manual" && n.AssigneeSource != "specified" {
+		if n.Kind == "manual" && n.AssigneeSource == "delivery_initiator" {
+			// Resolve the trusted caller at preview time, never a client-supplied
+			// approver or the author of a reused team change. The resulting plan
+			// freezes this identity just like the other assignment policies.
+			if env.Protected || (env.Purpose != "development" && env.Purpose != "test") {
+				return nil, fmt.Errorf("本次交付发起人确认仅适用于非受保护的开发／测试环境；请调整流程确认人来源")
+			}
+			if actor == "" || !allow[actor] {
+				return nil, fmt.Errorf("交付发起人不存在或已停用，请核对人员配置")
+			}
+			n.Approvers = []string{actor}
+			n.AssignedWorkItems = map[string][]int64{}
+			for _, w := range scope.WorkItems {
+				matches := n.Service == ""
+				for _, c := range scope.Changes {
+					if c.Service == n.Service {
+						for _, cw := range c.WorkItems {
+							matches = matches || cw.ID == w.ID
+						}
+					}
+				}
+				if matches {
+					n.AssignedWorkItems[actor] = append(n.AssignedWorkItems[actor], w.ID)
+				}
+			}
+		} else if n.Kind == "manual" && n.AssigneeSource != "specified" {
 			seen := map[string]bool{}
 			n.Approvers = []string{}
 			n.AssignedWorkItems = map[string][]int64{}
@@ -302,6 +327,14 @@ func (s *Store) ResearchFlowPlan(req DeliveryRequest, accounts map[string]string
 		}
 	}
 	p := &DeliveryPlan{Template: *t, Scope: scope, Version: v, Environment: *env, Nodes: nodes, Reason: req.Reason, Blockers: []string{}, Warnings: []string{}, RequestDigest: researchScopeDigest(scope), StrategyKind: "research"}
+	if _, err := orderChangeNodes(includeManualRecords(append([]DeliveryNode(nil), original.Nodes...), scope), scope, true); err != nil {
+		p.Blockers = append(p.Blockers, err.Error())
+	}
+	for _, change := range scope.Changes {
+		if change.Status != ChangeReady {
+			p.Blockers = append(p.Blockers, fmt.Sprintf("变更 #%d · %s 尚未就绪，请先在变更清单校验并就绪", change.ID, change.Title))
+		}
+	}
 	if unified {
 		req.PreflightToken, req.CodePreparationID, req.ClientRequestID = "", "", ""
 		req.Nodes, req.Artifacts, req.PreparationRunID = nil, nil, 0
@@ -328,6 +361,9 @@ func (s *Store) CreateResearchFlow(req DeliveryRequest, accounts map[string]stri
 	p, err := s.ResearchFlowPlan(req, accounts, enabled, actor)
 	if err != nil {
 		return nil, err
+	}
+	if len(p.Blockers) != 0 {
+		return nil, fmt.Errorf("%s", strings.Join(p.Blockers, "；"))
 	}
 	v := &DeliveryRun{Plan: *p, Digest: digestJSON(p), Owner: actor, CreatedAt: time.Now().Unix(), Revision: 1, Steps: []DeliveryStep{}, envSecrets: map[string]string{}}
 	for _, n := range p.Nodes {

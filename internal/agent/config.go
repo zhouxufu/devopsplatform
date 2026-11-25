@@ -12,7 +12,7 @@ import (
 
 // Config agent 配置：一机一实例，多服务列表式
 type Config struct {
-	Deployment   deployment.Config `yaml:"deployment"`
+	Deployment   deployment.Config `yaml:"deployment,omitempty"`
 	ServerURL    string            `yaml:"server_url"`
 	Token        string            `yaml:"token"`
 	AgentID      string            `yaml:"agent_id"` // 兼容旧配置中的名称；启动后绑定本地持久身份

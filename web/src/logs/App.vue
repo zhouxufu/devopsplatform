@@ -21,6 +21,8 @@ window.addEventListener('message', e => {
 const embedded = window.parent !== window
 const services = ref([])
 const platformContext = ref(null)
+const contextOptions = ref({applications:[],environments:[]})
+provide('logContextOptions',contextOptions)
 const externalLogSource=ref('')
 provide('externalLogSource',externalLogSource)
 provide('logServices', services)
@@ -30,6 +32,7 @@ function onContext(e) {
   if (e.source !== window.parent || e.origin !== location.origin) return
   const d = e.data
   if (d?.type === 'context.sync' && typeof d.service === 'string') {
+    if(Array.isArray(d.applications)&&Array.isArray(d.environments))contextOptions.value={applications:d.applications,environments:d.environments}
     platformContext.value = {
       service: d.service,
       environment: typeof d.environment === 'string' ? d.environment : '',

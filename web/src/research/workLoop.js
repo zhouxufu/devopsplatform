@@ -9,7 +9,7 @@ export function loopScopeRows(grant){return Object.entries(grant?.policies||{}).
 export function loopRelatedApplications(changes=[]){
  return [...new Set(changes.filter(c=>['code','artifact'].includes(c.kind)&&['draft','ready'].includes(c.status)&&typeof c.service==='string'&&c.service.trim()).map(c=>c.service))]
 }
-export function loopApplicationRows(changes=[],services=[],selected=[]){
- const related=loopRelatedApplications(changes),names=new Map(services.map(s=>[s.name,s.display_name||s.name]))
+export function loopApplicationRows(changes=[],services=[],selected=[],related=loopRelatedApplications(changes)){
+ const names=new Map(services.map(s=>[s.name,s.display_name||s.name]))
  return [...new Set([...related,...selected])].map(name=>({name,label:names.get(name)||name,related:related.includes(name)}))
 }

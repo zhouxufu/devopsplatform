@@ -12,7 +12,8 @@ const services=ref([]),url=ref(''),runUser=ref('logagent'),runGroup=ref('logagen
 const labels={preview:'待确认',applying:'正在接入',awaiting_connection:'等待 Agent 回连',needs_review:'接入结果待核对',ready:'可用于部署',disabled:'已停用',failed:'接入失败'}
 const phase=computed(()=>enrollment.value?.phase||'unconfigured')
 const pending=computed(()=>['applying','awaiting_connection','needs_review'].includes(phase.value))
-const selectedRoots=computed(()=>options.value.filter(o=>services.value.includes(o.service)).map(o=>o.root))
+const serviceOptions=computed(()=>[{value:'*',label:'全部应用（*）'},...options.value.map(o=>({value:o.service,label:o.service}))])
+const selectedRoots=computed(()=>[...new Set(options.value.filter(o=>services.value.includes('*')||services.value.includes(o.service)).map(o=>o.root))])
 const base=computed(()=>'api/hosts/'+encodeURIComponent(props.host?.name||'')+'/deployment')
 let seq=0,pollTimer=null,polls=0
 watch(busy,value=>emit('state',{dirty:false,busy:value}),{immediate:true})
@@ -24,6 +25,7 @@ async function read(initial=false){
 }
 watch(()=>props.host?.name,()=>{seq++;clearTimeout(pollTimer);polls=0;preview.value=null;if(props.host)read(true)},{immediate:true})
 watch([services,url,runUser,runGroup],()=>{preview.value=null},{deep:true})
+function selectServices(next){services.value=next.includes('*')&&!services.value.includes('*')?['*']:next.filter(value=>value!=='*')}
 onBeforeUnmount(()=>{seq++;clearTimeout(pollTimer);emit('state',{dirty:false,busy:false})})
 async function post(suffix,body){return props.request(base.value+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
 async function prepare(){
@@ -53,12 +55,12 @@ function close(){if(!busy.value)emit('close')}
     <div class="flex items-center justify-between gap-2"><Badge variant="secondary">{{labels[phase]||'尚未接入'}}</Badge><Button variant="outline" size="sm" :disabled="busy||loading" @click="read()"><Spinner v-if="loading"/>刷新状态</Button></div>
     <FieldError v-if="error" role="alert">{{error}}</FieldError>
     <template v-if="preview">
-     <dl class="grid gap-4 text-sm"><div><dt class="text-muted-foreground">执行用户</dt><dd>{{preview.plan.run_user}} / {{preview.plan.run_group}}</dd></div><div><dt class="text-muted-foreground">允许发布的应用</dt><dd>{{preview.plan.services.join('、')}}</dd></div><div><dt class="text-muted-foreground">允许的部署目录</dt><dd v-for="root in preview.plan.scope.roots" :key="root" class="break-all font-mono">{{root}}</dd></div><div><dt class="text-muted-foreground">平台回连地址</dt><dd class="break-all">{{preview.plan.url}}</dd></div></dl>
+     <dl class="grid gap-4 text-sm"><div><dt class="text-muted-foreground">执行用户</dt><dd>{{preview.plan.run_user}} / {{preview.plan.run_group}}</dd></div><div><dt class="text-muted-foreground">允许发布的应用</dt><dd class="break-words">{{preview.plan.services.includes('*')?'全部应用（*）':preview.plan.services.join('、')}}</dd></div><div><dt class="text-muted-foreground">允许的部署目录</dt><dd v-for="root in preview.plan.scope.roots" :key="root" class="break-all font-mono">{{root}}</dd></div><div><dt class="text-muted-foreground">平台回连地址</dt><dd class="break-all">{{preview.plan.url}}</dd></div></dl>
      <p class="text-sm text-muted-foreground">确认后安装或升级 Agent，自动下发独立部署令牌及固定 worker 授权，并验证隔离和连接。采集设置与安装身份沿用原值；不会执行应用发布。预览 10 分钟有效。</p>
      <FieldError v-if="preview.plan.run_user==='root'">此主机将以 root 身份执行部署，请确认上述应用与目录范围。</FieldError>
     </template>
     <template v-else-if="!pending">
-     <Field><FieldLabel>允许部署的应用<HelpTip text="仅列出已绑定此主机的托管 Java 应用；目录沿用各应用的环境配置。接入完成后，在应用环境选择 Agent 通道才会用于后续发布。"/></FieldLabel><OptionPicker v-model="services" multiple :options="options.map(o=>({value:o.service,label:o.service}))" :disabled="busy||loading" placeholder="选择应用" aria-label="允许部署的应用"/></Field>
+     <Field><FieldLabel>允许部署的应用<HelpTip text="全部应用（*）允许此主机、此环境已绑定的托管 Java 应用，无需逐个选择。重新接入沿用已保存的应用范围、回连地址及执行用户，目录按当前绑定重新核对；新增目录需重新接入。接入后仍需在应用环境选择 Agent 通道。"/></FieldLabel><OptionPicker :model-value="services" multiple :options="serviceOptions" :disabled="busy||loading" placeholder="选择应用或全部应用（*）" aria-label="允许部署的应用" @update:model-value="selectServices"/></Field>
      <div v-if="selectedRoots.length" class="space-y-1 text-sm text-muted-foreground"><div v-for="root in selectedRoots" :key="root" class="break-all font-mono">{{root}}</div></div>
      <p v-if="!loading&&!options.length" class="text-sm text-muted-foreground">此主机尚未绑定托管 Java 应用，请先配置应用的环境和部署目录。</p>
      <Accordion type="single" collapsible><AccordionItem value="connection"><AccordionTrigger>接入设置</AccordionTrigger><AccordionContent class="space-y-4"><Field><FieldLabel>平台回连地址</FieldLabel><Input v-model="url" :disabled="busy"/></Field><div class="grid gap-4 sm:grid-cols-2"><Field><FieldLabel>新装执行用户<HelpTip text="已有 Agent 保留原执行用户。不会递归更改已有目录属主；目录须允许该用户读写。"/></FieldLabel><Input v-model="runUser" :disabled="busy"/></Field><Field><FieldLabel>新装用户组</FieldLabel><Input v-model="runGroup" :disabled="busy"/></Field></div></AccordionContent></AccordionItem></Accordion>

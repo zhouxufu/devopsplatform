@@ -160,6 +160,15 @@ func migrateMySQLDeploySchema(db *deployDB) error {
 			}
 		}
 	}
+	var triggerWidth int
+	if err := db.QueryRow(`SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='pipeline_runs' AND COLUMN_NAME='run_trigger'`).Scan(&triggerWidth); err != nil {
+		return err
+	}
+	if triggerWidth < 384 {
+		if _, err := db.Exec(`ALTER TABLE pipeline_runs MODIFY COLUMN run_trigger VARCHAR(384) NOT NULL DEFAULT 'manual'`); err != nil {
+			return fmt.Errorf("扩展构建触发标识：%w", err)
+		}
+	}
 	var purposeColumn int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='environments' AND COLUMN_NAME='purpose'`).Scan(&purposeColumn); err != nil {
 		return err
@@ -231,7 +240,7 @@ var mysqlDeploySchema = []string{
 		meta_key VARCHAR(255) PRIMARY KEY, value TEXT
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	`CREATE TABLE IF NOT EXISTS pipeline_runs (
-		id BIGINT PRIMARY KEY AUTO_INCREMENT, service VARCHAR(255), run_trigger VARCHAR(64) NOT NULL DEFAULT 'manual',
+		id BIGINT PRIMARY KEY AUTO_INCREMENT, service VARCHAR(255), run_trigger VARCHAR(384) NOT NULL DEFAULT 'manual',
 		branch VARCHAR(255) NOT NULL DEFAULT '', version VARCHAR(255) NOT NULL DEFAULT '', build_command TEXT, status VARCHAR(32),
 		auto_deploy TINYINT NOT NULL DEFAULT 0, deploy_host VARCHAR(255) NOT NULL DEFAULT '', deploy_environment VARCHAR(128) NOT NULL DEFAULT '',
 		artifact TEXT, artifact_id BIGINT NOT NULL DEFAULT 0, artifact_kind VARCHAR(64) NOT NULL DEFAULT '', artifact_digest VARCHAR(255) NOT NULL DEFAULT '',

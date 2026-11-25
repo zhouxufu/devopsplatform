@@ -17,6 +17,8 @@ func TestJavaRecheckTerminalAndBatchSafety(t *testing.T) {
 	}{
 		{name: "ready", want: "success"},
 		{name: "exited", probe: javaTestExit(20), want: "failed"},
+		{name: "start-rejected", probe: javaTestExit(21), want: "failed"},
+		{name: "generic-exit-not-proof", probe: javaTestExit(2), want: "needs_review"},
 		{name: "still-starting", probe: javaTestExit(10), want: "needs_review"},
 		{name: "identity-mismatch", probe: javaTestExit(1), want: "needs_review"},
 		{name: "unlock-uncertain", unlock: javaTestExit(3), want: "needs_review"},

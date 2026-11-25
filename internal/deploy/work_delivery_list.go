@@ -52,6 +52,9 @@ type deliveryWorkPage struct {
 }
 
 func deliveryWorkProof(c Change) string {
+	if len(c.Prerequisites) > 0 {
+		return digestJSON([]any{c.Kind, c.Title, c.Service, c.Reference, c.Summary, c.RiskLevel, c.RollbackPlan, c.SQL, c.Nacos, c.Redis, c.Prerequisites})
+	}
 	return digestJSON([]any{c.Kind, c.Title, c.Service, c.Reference, c.Summary, c.RiskLevel, c.RollbackPlan, c.SQL, c.Nacos, c.Redis})
 }
 

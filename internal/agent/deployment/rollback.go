@@ -225,6 +225,11 @@ func observe(dir string, j job, rollback bool) error {
 				return e
 			}
 			return releaseRoot(j)
+		case 21:
+			if !rollback {
+				return knownFailure(dir, j, false, "start-rejected", scrub(j, out))
+			}
+			return appendReport(dir, j, "needs_review", "rollback-start-rejected", scrub(j, out))
 		case 20:
 			if !rollback {
 				return knownFailure(dir, j, true, "process-exited", scrub(j, out))

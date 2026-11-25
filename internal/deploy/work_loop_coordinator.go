@@ -131,7 +131,7 @@ func (s *Store) advanceWorkLoop(mux *http.ServeMux, r *http.Request, t *WorkLoop
 			return s.saveWorkLoop(t)
 		}
 		if node.Kind == "manual" {
-			if node.AssigneeSource != "change_submitters" || !slices.Contains(node.Approvers, t.Owner) {
+			if (node.AssigneeSource != "change_submitters" && node.AssigneeSource != "delivery_initiator") || !slices.Contains(node.Approvers, t.Owner) {
 				t.setState("waiting_human", "preparation", fmt.Sprintf("等待指定人员处理：%s", node.Name))
 				return s.saveWorkLoop(t)
 			}

@@ -1,17 +1,17 @@
 <script setup>
 import {inject,ref,watch,onBeforeUnmount,computed,nextTick} from 'vue'
-import {deliveryDrafts} from '../deliveryDrafts.js'
+import {deliveryDrafts,deliveryDraftKey} from '../deliveryDrafts.js'
 import ApplicationResourcesEditor from './ApplicationResourcesEditor.vue'
 import {editorAssetURL,editorProps,editorRequestAllowed,bridgeError} from '../../delivery-editor/bridge.js'
 import {deliveryNextWorkspace} from '../deliveryEntry.js'
 import {openWorkspace} from '../../research/api.js'
-const props=defineProps({inline:Boolean,embeddedSubmit:Boolean,hideNextSteps:Boolean,show:Boolean,batch:Boolean,item:Object,services:Array,workItems:Array,canManage:Function})
+const props=defineProps({focusChangeId:Number,focusPrerequisites:Boolean,inline:Boolean,embeddedSubmit:Boolean,hideNextSteps:Boolean,show:Boolean,batch:Boolean,item:Object,services:Array,workItems:Array,canManage:Function})
 const emit=defineEmits(['close','saved','open-sync','state'])
 const api=inject('api'),frame=ref(null),mounted=ref(false),ready=ref(false),height=ref(520),state=ref({dirty:false,busy:false}),showBindings=ref(false),bindingService=ref(''),failure=ref('')
 const uiActor=ref(''),uiWorkspace=window.name||location.pathname
 const bridgedProps=()=>({...editorProps(props),actor:uiActor.value,workspace:uiWorkspace})
 watch(uiActor,()=>{if(port&&ready.value)port.postMessage({type:'props',props:bridgedProps()})})
-const source=editorAssetURL(document.baseURI),key=computed(()=>props.batch?'independent-batch':props.item?.id)
+const source=editorAssetURL(document.baseURI),key=computed(()=>deliveryDraftKey(props))
 let port,commandID=0,inertElements=[],disposed=false,returnFocus;const commands=new Map()
 const clone=value=>JSON.parse(JSON.stringify(value))
 function restoreFocus(){for(const [element,inert] of inertElements)element.inert=inert;inertElements=[]}
@@ -38,11 +38,12 @@ function open(){
    if(data.name==='draft'){const entry=data.value;if(entry?.draft)deliveryDrafts.set(entry.key,entry.draft);else if(entry)deliveryDrafts.delete(entry.key)}
    if(data.name==='configure'){bindingService.value=data.value;showBindings.value=true;updateInert()}
    if(data.name==='next-step'&&!props.hideNextSteps&&!props.batch&&!props.embeddedSubmit&&!state.value.dirty&&!state.value.busy){const target=deliveryNextWorkspace(data.value,props.item?.id);if(target){emit('close');openWorkspace(target.plugin,target.hash)}}
-   if(['close','saved','open-sync'].includes(data.name))emit(data.name)
+   if(data.name==='saved'&&data.value!=='reopened')deliveryDrafts.delete(key.value)
+   if(['close','saved','open-sync'].includes(data.name))emit(data.name,data.value)
   }
  }
  port.start()
- frame.value.contentWindow.postMessage({type:'delivery-editor.connect',props:bridgedProps(),draft:deliveryDrafts.get(key.value)||null},location.origin,[channel.port2])
+ frame.value.contentWindow.postMessage({type:'delivery-editor.connect',props:bridgedProps(),draft:clone(deliveryDrafts.get(key.value)||null)},location.origin,[channel.port2])
  updateInert()
 }
 function command(name){if(!port||!ready.value)return Promise.resolve(false);return new Promise((resolve,reject)=>{const id=++commandID;const timer=setTimeout(()=>{commands.delete(id);reject(Error('编辑器响应超时，请核对草稿，不自动重试'))},120000);commands.set(id,{resolve,reject,timer});port.postMessage({type:'command',id,name})})}

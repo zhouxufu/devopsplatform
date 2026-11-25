@@ -10,3 +10,8 @@ export function instanceActionPayload(instance,target,pending){
  if(!/^[a-zA-Z0-9-]{16,64}$/.test(pending.requestId||''))throw Error('操作标识无效')
  return {fingerprint:instance.fingerprint,request_id:pending.requestId,reason,confirm_protected:!!target.protected}
 }
+export function supportsInstanceManagement(target){
+ return target?.target_type==='docker-host'||(['ssh-jar','ssh-java-bundle'].includes(target?.target_type)&&target.deploy_config?.java_mode==='managed')||(target?.target_type==='ssh-jar'&&target.deploy_config?.java_mode==='jpom')
+}
+export function supportsInstanceReadiness(instance){return instance?.java_mode!=='jpom'&&['ssh-jar','ssh-java-bundle'].includes(instance?.kind)}
+export function instanceVersionText(instance){return instance?.version||instance?.release||(instance?.java_mode==='jpom'?'未核验（Jpom 共享 JAR）':'—')}
