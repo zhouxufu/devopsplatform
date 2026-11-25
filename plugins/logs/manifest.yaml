@@ -11,6 +11,9 @@ args:
   - 127.0.0.1:19801
   - -data
   - ../../runtime/data
+  # 本地壳联调保留历史日志；启动前已备份 runtime/data。
+  - -retention-days
+  - "365"
   - -bus
   - http://127.0.0.1:9800   # 事件总线（衍生指标发布）
 nav_icon: "▤"

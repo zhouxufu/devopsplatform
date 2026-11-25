@@ -1,6 +1,6 @@
 <script setup>
-import { computed } from 'vue'
-import { Tabs, TabsList, TabsTrigger, Button, Separator } from '@/shared/shadcn-ui.js'
+import { computed, ref } from 'vue'
+import { Tabs, TabsList, TabsTrigger, Button, Separator, ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from '@/shared/shadcn-ui.js'
 import { Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb'
 import { ChevronDownIcon, SearchIcon } from '@lucide/vue'
 import ContextMenuButton from '../shared/components/ContextMenuButton.vue'
@@ -36,10 +36,16 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['tab-change', 'app-select', 'env-select', 'search-open'])
+const emit = defineEmits(['tab-change', 'app-select', 'env-select', 'search-open', 'tab-close', 'tab-close-others', 'tab-close-left', 'tab-close-right'])
 
 const appLabel = computed(() => props.currentApp || '应用')
 const envLabel = computed(() => props.currentEnv || '环境')
+
+const contextMenuTab = ref(null)
+
+function handleTabContextMenu(tabValue) {
+  contextMenuTab.value = tabValue
+}
 </script>
 
 <template>
@@ -73,11 +79,34 @@ const envLabel = computed(() => props.currentEnv || '环境')
           :key="tab.value"
           :value="String(tab.value)"
           class="h-10 flex-none shrink-0 gap-2 rounded-none px-3"
+          @contextmenu.prevent="handleTabContextMenu(tab.value)"
         >
           <span class="truncate">{{ tab.label }}</span>
         </TabsTrigger>
       </TabsList>
     </Tabs>
+
+    <!-- 标签页右键菜单 -->
+    <ContextMenu v-if="tabs.length">
+      <ContextMenuTrigger as-child>
+        <div style="display: none" />
+      </ContextMenuTrigger>
+      <ContextMenuContent v-if="contextMenuTab" class="w-48">
+        <ContextMenuItem @select="() => { $emit('tab-close', contextMenuTab); contextMenuTab = null }">
+          关闭此标签页
+        </ContextMenuItem>
+        <ContextMenuItem @select="() => { $emit('tab-close-others', contextMenuTab); contextMenuTab = null }">
+          关闭其他标签页
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem @select="() => { $emit('tab-close-left', contextMenuTab); contextMenuTab = null }">
+          关闭左侧所有标签页
+        </ContextMenuItem>
+        <ContextMenuItem @select="() => { $emit('tab-close-right', contextMenuTab); contextMenuTab = null }">
+          关闭右侧所有标签页
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
 
     <div class="ml-auto flex items-center gap-1.5">
       <!-- 应用/环境下拉菜单 -->

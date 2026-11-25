@@ -501,6 +501,10 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
     @app-select="item => { st.gSvc = item.value; ctxSync() }"
     @env-select="item => { st.gEnv = item.value; environmentChanged() }"
     @search-open="globalSearchOpen = true"
+    @tab-close="closeWs"
+    @tab-close-others="closeWorkspaceGroup('other', $event)"
+    @tab-close-left="closeWorkspaceGroup('left', $event)"
+    @tab-close-right="closeWorkspaceGroup('right', $event)"
   >
     <template #actions>
       <SidebarTrigger aria-label="切换主导航" class="mr-2" />

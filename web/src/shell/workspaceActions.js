@@ -6,6 +6,7 @@ export function workspaceCloseTargets(workspaces,anchorID,action){
  if(index<0)return []
  if(action==='left')return workspaces.slice(0,index).map(w=>w.id)
  if(action==='right')return workspaces.slice(index+1).map(w=>w.id)
+ if(action==='other')return workspaces.filter((w,i)=>i!==index).map(w=>w.id)
  return action==='current'?[anchorID]:[]
 }
 export function nextWorkspaceAfterClose(workspaces,active,ids){
