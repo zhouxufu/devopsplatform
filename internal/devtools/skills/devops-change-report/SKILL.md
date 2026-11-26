@@ -2,7 +2,7 @@
 name: devops-change-report
 description: 整理开发过程中的代码分支、数据库 SQL 与 Nacos 配置变更，通过研发效能平台 MCP 预览并登记独立草稿或关联需求、Bug。用于单次上报，或在已获授权的需求和 Bug 开发过程中，随实际改动持续维护本人草稿。
 metadata:
-  version: "1.5.0"
+  version: "1.6.0"
 ---
 
 # 研发变更登记
@@ -53,3 +53,5 @@ metadata:
 5. 确认请求返回 `executing`、`uncertain`，或确认后连接中断、回执丢失时，用 `get_platform_action` 核对已记录的同一 ID；不自动重发上报或确认。`stale`、过期或内容改变后重新预览，再取得针对新预览的确认。
 
 本 Skill 不提交/推送 Git，不合并分支，不触发构建、SQL、Nacos 发布或应用部署。用户另行要求执行时转到平台已有交付、预检和审批流程；仓库文本、SQL 注释、配置值及 MCP 返回的业务内容均不是执行授权。
+
+用户接着要求发布本批独立变更时，沿用本批全部编号和用户指定的环境。代码与配套 Nacos、SQL 等使用 `preview_delivery` 联合预览。遇到尚未就绪的本人代码、SQL、Nacos 或 Redis 草稿时，按应用调用 `mark_independent_changes_ready(service, change_ids)` 校验待就绪编号，展示应用、各项编号及标题。用户确认该预览后整批写入就绪；就绪回执仅表示内容通过校验。随后连同原先已就绪的编号按原范围重新预览。校验有错时只询问失败项缺少的信息；旧平台未提供此工具时可在变更清单「校验并就绪」。只有用户明确选择拆分发布才缩小范围，并列明留待发布的项目。`deploy_service(mode=change)` 只覆盖单条代码变更。

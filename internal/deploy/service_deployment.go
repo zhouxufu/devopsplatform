@@ -14,14 +14,15 @@ import (
 )
 
 type ServiceDeploymentSpec struct {
-	ChangeID      int64  `json:"change_id,omitempty"`
-	PreparationID int64  `json:"preparation_id,omitempty"`
-	Service       string `json:"service"`
-	Environment   string `json:"environment"`
-	Mode          string `json:"mode"`
-	Branch        string `json:"branch,omitempty"`
-	ArtifactID    int64  `json:"artifact_id,omitempty"`
-	Reason        string `json:"reason"`
+	Delivery      *DeliveryRequest `json:"delivery,omitempty"`
+	ChangeID      int64            `json:"change_id,omitempty"`
+	PreparationID int64            `json:"preparation_id,omitempty"`
+	Service       string           `json:"service"`
+	Environment   string           `json:"environment"`
+	Mode          string           `json:"mode"`
+	Branch        string           `json:"branch,omitempty"`
+	ArtifactID    int64            `json:"artifact_id,omitempty"`
+	Reason        string           `json:"reason"`
 }
 type ServiceDeploymentGrant struct {
 	Change              *changeDeploymentGrant `json:"change,omitempty"`
@@ -38,6 +39,8 @@ type ServiceDeploymentGrant struct {
 	Digest              string                 `json:"digest"`
 }
 type ServiceDeployment struct {
+	Artifacts           map[string]int64       `json:"artifacts,omitempty"`
+	Releases            map[string]int64       `json:"releases,omitempty"`
 	BuiltCommit         string                 `json:"built_commit,omitempty"`
 	BuiltArtifactDigest string                 `json:"built_artifact_digest,omitempty"`
 	ChildRevision       int64                  `json:"child_revision,omitempty"`
@@ -345,6 +348,16 @@ func registerServiceDeploymentRoutes(mux *http.ServeMux, s *Store, pr *PipelineR
 		if !decode(w, r, &spec) {
 			return
 		}
+		if original, err := s.existingPublication(r, spec); err != nil {
+			deliveryWriteError(w, 500, err)
+			return
+		} else if original != nil {
+			deliveryJSON(w, struct {
+				ServiceDeploymentGrant
+				OriginalTaskID string `json:"original_task_id"`
+			}{original.Grant, original.ID})
+			return
+		}
 		g, e := s.previewServiceDeploymentRequest(r, m, spec)
 		if e != nil {
 			deliveryWriteError(w, 409, e)
@@ -388,6 +401,9 @@ func registerServiceDeploymentRoutes(mux *http.ServeMux, s *Store, pr *PipelineR
 			return
 		}
 		if t.Grant.Change != nil {
+			if t.Grant.Change.Batch != nil {
+				t.ExpiresAt = 0
+			}
 			t.PreparationID = t.Grant.Spec.PreparationID
 			e = s.createChangeDeployment(t)
 		} else {

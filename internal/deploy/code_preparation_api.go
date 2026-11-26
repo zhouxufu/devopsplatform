@@ -182,6 +182,10 @@ func registerCodePreparationRoutes(mux *http.ServeMux, s *Store, pr *PipelineRun
 						deliveryWriteError(w, 400, "目标提交必须是完整SHA")
 						return
 					}
+					if p.Repositories[i].Direct && sha != p.Repositories[i].TargetCommit {
+						deliveryWriteError(w, 409, "直接构建必须使用首次确认的提交")
+						return
+					}
 					if (p.State == "building" || p.Repositories[i].Status == "merged") && sha != p.Repositories[i].ResultCommit {
 						deliveryWriteError(w, 409, "已有构建必须继续使用原冻结结果提交")
 						return

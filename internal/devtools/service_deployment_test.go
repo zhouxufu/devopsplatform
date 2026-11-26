@@ -172,3 +172,77 @@ func TestIndependentChangeMCPReturnsOriginalInsteadOfAnotherConfirmation(t *test
 		t.Fatal(again, creates.Load())
 	}
 }
+
+// A normal request from chat (with no phase or artifact hints) must reach the
+// same coordinator as an explicitly mixed direct/merge delivery.
+func TestPublishDeliveryRoutesCodeAndRecoversOriginal(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "mixed"}[explicit], func(t *testing.T) {
+			var creates atomic.Int32
+			var grant map[string]any
+			id := strings.Repeat("e", 32)
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var result any
+				switch r.URL.Path {
+				case "/api/environments":
+					result = []any{map[string]any{"name": "test", "purpose": "test"}}
+				case "/api/environments/test/delivery-policy":
+					result = map[string]any{"workflow_template_id": 9}
+				case "/api/delivery/draft-plan":
+					result = map[string]any{"scope": map[string]any{"changes": []any{map[string]any{"service": "orders", "kind": "code"}}}}
+				case "/api/service-deployments/preview":
+					var spec map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+						t.Error(err)
+					}
+					req := mapValue(spec["delivery"])
+					if spec["mode"] != "change" || req["source_type"] != "work_items" || len(req["selected_change_ids"].([]any)) != map[bool]int{false: 1, true: 2}[explicit] {
+						t.Error("incorrect publication scope", spec)
+					}
+					if explicit && mapValue(req["code_modes"])["billing"] != "direct" {
+						t.Error("lost direct mode")
+					}
+					grant = map[string]any{"spec": spec, "digest": "frozen", "change": map[string]any{"publication_scope": map[string]any{"applications": []any{map[string]any{"service": "orders"}, map[string]any{"service": "billing"}}}}}
+					if creates.Load() > 0 {
+						grant["original_task_id"] = id
+					}
+					result = grant
+				case "/api/service-deployments":
+					creates.Add(1)
+					result = map[string]any{"id": id, "state": "running"}
+				case "/api/service-deployments/" + id:
+					result = map[string]any{"id": id, "owner": "alice", "state": "running", "grant": grant}
+				default:
+					t.Errorf("unexpected route %s", r.URL.Path)
+					w.WriteHeader(404)
+					return
+				}
+				json.NewEncoder(w).Encode(result)
+			}))
+			defer up.Close()
+			store, _ := OpenTokenStore(t.TempDir())
+			svc := NewToolService(Upstreams{Deploy: up.URL})
+			svc.actions = store
+			tok := workflowToken(t, store)
+			tok.Applications = []string{"*"}
+			tok.Environments = []string{"test"}
+			tok.Scopes = []string{"delivery:execute", "delivery:read", "delivery:prepare", "delivery:write", "builds:trigger", "builds:read", "changes:read"}
+			req := map[string]any{"environment": "test", "reason": "fixture", "work_item_ids": []any{24}, "selected_change_ids": []any{13}}
+			if explicit {
+				req["selected_change_ids"] = []any{13, 14}
+				req["code_modes"] = map[string]any{"orders": "merge", "billing": "direct"}
+			}
+			args := map[string]any{"request": req}
+			preview := docCall(t, svc, tok, "publish_delivery", args)
+			if creates.Load() != 0 {
+				t.Fatal("preview dispatched")
+			}
+			docConfirm(t, svc, tok, preview)
+			docConfirm(t, svc, tok, preview)
+			original := mapValue(docCall(t, svc, tok, "publish_delivery", args))
+			if creates.Load() != 1 || original["id"] != id || original["confirmation_id"] != nil {
+				t.Fatal("original publication not recovered", original)
+			}
+		})
+	}
+}

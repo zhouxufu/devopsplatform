@@ -68,6 +68,10 @@ func developmentChanges() []any {
 func TestDevelopmentChangeMCPIndependentRoundtripAndOnce(t *testing.T) {
 	svc, tok, st, _, writes := changesFixture(t)
 	p := docCall(t, svc, tok, "report_changes", map[string]any{"service": "orders", "changes": developmentChanges()})
+	preview := mapValue(mapValue(p)["preview"])
+	if mapValue(p)["service"] != "orders" || preview["service"] != "orders" || preview["result_status"] != "draft" || preview["association"] != "独立草稿" || intArg(preview, "count", 0) != int64(len(developmentChanges())) {
+		t.Fatalf("incomplete draft preview: %+v", preview)
+	}
 	if writes.Load() != 0 || len(st.Changes("", "orders", "", 100)) != 0 {
 		t.Fatal("preview saved")
 	}

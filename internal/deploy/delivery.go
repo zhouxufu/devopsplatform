@@ -51,6 +51,7 @@ type DeliveryTemplate struct {
 	Owner       string         `json:"owner"`
 }
 type DeliveryRequest struct {
+	CodeModes         map[string]string `json:"code_modes,omitempty"`
 	Scene             string            `json:"scene,omitempty"`
 	PreparationRunID  int64             `json:"preparation_run_id,omitempty"`
 	ArtifactSources   map[string]string `json:"artifact_sources,omitempty"`
@@ -387,12 +388,19 @@ func (s *Store) deliveryDestinationDigest(target ServiceEnvironment) (string, er
 
 func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*DeliveryPlan, map[string]string, error) {
 
+	return s.resolveDelivery(req, manager, false)
+}
+
+// beforeBuild resolves read-only resource preflight before the authorized build produces artifacts.
+func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, beforeBuild bool) (*DeliveryPlan, map[string]string, error) {
 	draft, err := s.DraftDelivery(req)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.validateWorkflowPreparation(req, draft.Scope, &draft.Template); err != nil {
-		return nil, nil, err
+	if !beforeBuild {
+		if err := s.validateWorkflowPreparation(req, draft); err != nil {
+			return nil, nil, err
+		}
 	}
 	tpl, env := &draft.Template, s.GetEnvironment(req.Environment)
 	nodes := draft.Nodes
@@ -497,7 +505,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	if len(req.ArtifactSources) == 0 && req.CodePreparationID != "" {
 		needsExisting = false
 	}
-	if needsBuild && req.CodePreparationID == "" {
+	if !beforeBuild && needsBuild && req.CodePreparationID == "" {
 		p.Blockers = append(p.Blockers, "本次构建尚未完成，请先准备代码与制品，再预检环境变更")
 	}
 	if scope != nil && env.Purpose == "production" {
@@ -632,6 +640,20 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	sort.Strings(names)
 	for _, name := range names {
 		sv, artifact := s.GetService(name), s.GetArtifact(req.Artifacts[name])
+		if beforeBuild && modes[name] == "build" && artifact == nil {
+			target, e := manager.ValidateTarget(name, env.Name, p.Reason)
+			if e != nil {
+				p.Blockers = append(p.Blockers, e.Error())
+				continue
+			}
+			target.RuntimeEnv = nil
+			dest, e := s.deliveryDestinationDigest(*target)
+			if e != nil {
+				return nil, nil, e
+			}
+			p.Services = append(p.Services, DeliveryService{Service: name, Target: *target, DestinationDigest: dest})
+			continue
+		}
 		if sv == nil || artifact == nil || artifact.Service != name || !s.artifactMatchesEnvironment(artifact, sv, env.Name) {
 			p.Blockers = append(p.Blockers, "请选择应用的有效制品："+name)
 			continue
@@ -691,7 +713,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	for nodeIndex, node := range nodes {
 		switch node.Kind {
 		case "extension":
-			binding, err := s.prepareWorkflowExtension(node, p.Services, env.Name)
+			binding, err := s.resolveWorkflowExtension(node, p.Services, env.Name, beforeBuild)
 			if err != nil {
 				p.Blockers = append(p.Blockers, node.Name+"："+err.Error())
 			} else {

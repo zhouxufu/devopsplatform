@@ -57,13 +57,14 @@ func platformTools() []Tool {
 		makeTool("list_release_versions", "查询版本范围和状态（跨应用，需全部应用授权）", "delivery:read", map[string]any{}),
 		makeTool("list_delivery_templates", "查询可配置流程编排模板与审核节点（跨应用）", "delivery:read", map[string]any{}),
 		makeTool("list_data_sync_tasks", "查询应用可复用的数据对比同步任务定义；不查询或同步业务数据", "changes:read", map[string]any{"service": str("应用标识")}, "service"),
-		makeTool("get_code_conflict", "读取本人原任务的冻结冲突上下文供本地Agent处理；不克隆、不合并、不构建", "builds:read", map[string]any{"preparation_id": str("原代码准备ID"), "environment": str("明确的任务环境")}, "preparation_id", "environment"),
+		makeTool("get_code_conflict", "读取本人原任务的冻结冲突上下文供本地Agent处理；不克隆、不合并、不构建", "builds:read", map[string]any{"preparation_id": str("原代码准备ID"), "environment": str("明确的任务环境"), "publication_task_id": str("冲突所属的整次发布任务ID")}, "preparation_id", "environment"),
 		makeTool("get_code_preparation", "查询本人代码合并、冲突、冻结提交和构建准备状态", "builds:read", map[string]any{"preparation_id": str("代码准备 ID")}, "preparation_id"),
 		makeTool("get_delivery_run", "查询交付单冻结范围、审核与执行进度；校验全部应用与环境", "delivery:read", map[string]any{"run_id": id, "environment": str("实际目标环境")}, "run_id", "environment"),
 		makeTool("get_platform_action", "读取 MCP 写操作确认状态；结果不确定时不得自动重试", "", map[string]any{"confirmation_id": str("预览返回的 ID")}, "confirmation_id"),
 	}
 	for _, t := range []Tool{
-		makeTool("maintain_change", "预览维护本人原编号变更：就绪代码仅修改title/summary保留ready，其他内容修改经冻结检查后退回draft；独立代码草稿可用 ready 就绪，发布请直接用 deploy_service；草稿可编辑/归档及调整归属。不执行", "changes:write", map[string]any{"service": str("原应用"), "change_id": id, "digest": str("get_change_maintenance返回的原摘要"), "action": map[string]any{"type": "string", "enum": []string{"edit", "archive", "ready"}}, "reason": str("修改或撤销原因"), "patch": changeMaintenancePatchSchema(), "work_item_ids": map[string]any{"type": "array", "minItems": 0, "maxItems": 100, "items": id}, "origin_work_item_id": id}, "service", "change_id", "digest", "action", "reason"),
+		makeTool("mark_independent_changes_ready", "按同一应用批量校验本人独立的代码、SQL、Nacos、Redis 草稿。展示全部待就绪编号，用户确认一次后整批就绪；不会执行资源或部署。已就绪项保留在后续发布范围中", "changes:write", map[string]any{"service": str("应用稳定标识"), "change_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 50}}, "service", "change_ids"),
+		makeTool("maintain_change", "预览维护本人原编号变更：就绪代码仅修改title/summary保留ready，其他内容修改经冻结检查后退回draft；独立代码草稿可用 ready 就绪；草稿可编辑/归档及调整归属。不执行", "changes:write", map[string]any{"service": str("原应用"), "change_id": id, "digest": str("get_change_maintenance返回的原摘要"), "action": map[string]any{"type": "string", "enum": []string{"edit", "archive", "ready"}}, "reason": str("修改或撤销原因"), "patch": changeMaintenancePatchSchema(), "work_item_ids": map[string]any{"type": "array", "minItems": 0, "maxItems": 100, "items": id}, "origin_work_item_id": id}, "service", "change_id", "digest", "action", "reason"),
 		makeTool("report_changes", "预览登记开发变更草稿：代码、数据库表结构/数据 SQL、Nacos 等；可独立保存或关联工作项，不执行构建或发布", "changes:write", map[string]any{"service": str("应用稳定标识；未填写应用的变更使用此应用，禁止混入其他应用"), "work_item_id": id, "changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": changeDraftSchema()}}, "service", "changes"),
 		makeTool("attach_source_work_item", "预览关联来源需求或 Bug 引用，返回平台工作项 ID", "workitems:write", map[string]any{"connection": str("来源连接名"), "external_id": str("来源编号"), "kind": map[string]any{"type": "string", "enum": []string{"bug", "requirement"}}}, "connection", "external_id"),
 		makeTool("change_work_item_state", "预览 Bug 解决、激活、关闭、指派或评论；不立即回写", "workitems:write", map[string]any{"work_item_id": id, "action": str("resolve、activate、close、assignTo、comment"), "resolution": str("从 action-options 读取的来源解决方案，不自行猜测"), "resolved_build": str("解决版本"), "assigned_to": str("来源账号"), "duplicate_bug": str("重复 Bug 编号"), "comment": str("操作说明"), "keep_following": map[string]any{"type": "boolean"}}, "work_item_id", "action"),
@@ -183,6 +184,14 @@ func (s *ToolService) platformRequest(ctx context.Context, t *AccessToken, metho
 		return nil, fmt.Errorf("上游响应过大")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusConflict && (path == deliveryPreviewPath("release") || path == deliveryPreviewPath("preparation")) {
+			var detail struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(raw, &detail) == nil && detail.Error != "" {
+				return nil, fmt.Errorf("平台返回 %d: %s", resp.StatusCode, truncate(detail.Error, 16000))
+			}
+		}
 		return nil, fmt.Errorf("平台返回 %d: %s", resp.StatusCode, truncate(string(raw), 500))
 	}
 	if imageResponse {

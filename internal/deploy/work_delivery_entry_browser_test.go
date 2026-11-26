@@ -68,6 +68,12 @@ func TestDeliveryEntryBrowserFixture(t *testing.T) {
 		}
 		r.Header.Set("X-User", "alice")
 		r.Header.Set("X-Role", "member")
+		if strings.HasPrefix(r.URL.Path, "/api/plugins/deploy/") {
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/plugins/deploy")
+			if r.URL.Path == "/ui" {
+				r.URL.Path = "/deploy.html"
+			}
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/plugins/research/api/") {
 			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/plugins/research")
 		}
@@ -108,6 +114,7 @@ func TestDeliveryEntryBrowserFixture(t *testing.T) {
 			safe = safe || r.Method == "GET" && (strings.HasPrefix(r.URL.Path, "/api/release-versions") || strings.HasPrefix(r.URL.Path, "/api/work-items") || r.URL.Path == "/api/changes")
 			safe = safe || r.Method == "GET" && (strings.HasPrefix(r.URL.Path, "/api/research/work-items/") || strings.HasPrefix(r.URL.Path, "/api/changes/"))
 			write := r.Method == "PUT" && r.URL.Path == fmt.Sprintf("/api/work-items/%d/delivery-content", w.ID)
+			write = write || r.Method == "POST" && r.URL.Path == "/api/changes/batch"
 			write = write || r.Method == "POST" && (r.URL.Path == "/api/work-items" || r.URL.Path == "/api/changes") || r.Method == "PUT" && (strings.HasPrefix(r.URL.Path, "/api/work-items/") && !strings.HasSuffix(r.URL.Path, "/delivery-content") || strings.HasPrefix(r.URL.Path, "/api/changes/"))
 			write = write || r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/changes/") && strings.HasSuffix(r.URL.Path, "/ready")
 			reopen := r.Method == "POST" && (r.URL.Path == fmt.Sprintf("/api/changes/%d/reopen", req.Changes[0].ID) || r.URL.Path == fmt.Sprintf("/api/changes/%d/reopen", req.Changes[1].ID))

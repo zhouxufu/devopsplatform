@@ -23,6 +23,7 @@ type PreparedSource struct {
 	Changes []int64 `json:"change_ids"`
 }
 type PreparedRepository struct {
+	Direct               bool             `json:"direct,omitempty"`
 	URL                  string           `json:"url"`
 	Service              string           `json:"service"`
 	Services             []string         `json:"services"`
@@ -176,6 +177,13 @@ func codeChangeReadinessError(change Change) error {
 }
 
 func (s *Store) previewCodePreparation(ctx context.Context, req CodePreparationRequest, actor string) (*CodePreparation, error) {
+	p, err := s.resolveCodePreparation(ctx, req, actor)
+	if err != nil {
+		return nil, err
+	}
+	return p, s.saveCodePreparation(p)
+}
+func (s *Store) resolveCodePreparation(ctx context.Context, req CodePreparationRequest, actor string) (*CodePreparation, error) {
 	if req.BuildConcurrency < 0 || req.BuildConcurrency > 8 {
 		return nil, fmt.Errorf("构建并发数须为 1–8")
 	}
@@ -284,6 +292,9 @@ func (s *Store) previewCodePreparation(ctx context.Context, req CodePreparationR
 			return nil, e
 		}
 		key := url + "\x00" + policy.TargetBranch
+		if req.Delivery.CodeModes[sv.Name] == "direct" {
+			key += "\x00direct"
+		}
 		index, exists := group[key]
 		if !exists {
 			if len(group) >= 10 {
@@ -317,6 +328,16 @@ func (s *Store) previewCodePreparation(ctx context.Context, req CodePreparationR
 			p.Repositories = append(p.Repositories, PreparedRepository{URL: url, Service: sv.Name, Policy: policy, BaseBranch: policy.BaseBranch, BaseCommit: base, TargetBranch: policy.TargetBranch, TargetCommit: target, ConnectionDigest: preparationGitIdentity(url, c), Status: "pending", Services: []string{}, Sources: []PreparedSource{}})
 		}
 		r := &p.Repositories[index]
+		mode := req.Delivery.CodeModes[sv.Name]
+		if mode != "" && mode != "direct" && mode != "merge" {
+			return nil, fmt.Errorf("未知发布方式：%s", mode)
+		}
+		direct := mode == "direct"
+		if direct && (policy.Mode != "integration" || r.TargetCommit == "") {
+			return nil, fmt.Errorf("直接构建需要已存在的公共分支")
+		}
+
+		r.Direct = direct
 		if r.Policy != policy || r.ConnectionDigest != preparationGitIdentity(url, c) {
 			return nil, fmt.Errorf("同仓库同目标分支的应用必须使用一致基线、策略和 Git 凭据")
 		}
@@ -332,6 +353,9 @@ func (s *Store) previewCodePreparation(ctx context.Context, req CodePreparationR
 			commit, e := g.branch(ctx, change.Reference)
 			if e != nil {
 				return nil, fmt.Errorf("关联源分支不存在或无法读取")
+			}
+			if direct && !g.ancestor(ctx, commit, r.TargetCommit) {
+				return nil, fmt.Errorf("应用 %s 的公共分支尚未包含所选提交，请选择合并后发布", sv.Name)
 			}
 			r.Sources = append(r.Sources, PreparedSource{Branch: change.Reference, Commit: commit, Changes: []int64{change.ID}})
 		}
@@ -352,7 +376,7 @@ func (s *Store) previewCodePreparation(ctx context.Context, req CodePreparationR
 		sort.Slice(p.Repositories[i].Sources, func(a, b int) bool { return p.Repositories[i].Sources[a].Branch < p.Repositories[i].Sources[b].Branch })
 	}
 	p.Message = "源提交和目标基线已冻结；请核对代码范围，再明确开始合并。尚未推送或构建。"
-	return p, s.saveCodePreparation(p)
+	return p, nil
 }
 
 func (s *Store) preparationSourceValid(p *CodePreparation) error {
@@ -485,8 +509,13 @@ func (s *Store) performCodePreparation(p *CodePreparation, pr *PipelineRunner, r
 			fail(err)
 			return
 		}
-		err = mergePreparationRepository(ctx, g, r, resume || p.VerifyOnly)
-		if err == nil && !resume && !p.VerifyOnly {
+		if r.Direct {
+			r.ResultCommit = r.TargetCommit
+			r.Status = "merged"
+		} else {
+			err = mergePreparationRepository(ctx, g, r, resume || p.VerifyOnly)
+		}
+		if err == nil && !resume && !p.VerifyOnly && !r.Direct {
 			r.Status = "publishing"
 			if e := s.saveCodePreparation(p); e != nil {
 				g.close()

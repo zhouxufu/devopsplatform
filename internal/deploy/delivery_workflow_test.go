@@ -28,6 +28,14 @@ func TestWorkflowDynamicCodePoliciesAndLegacyScope(t *testing.T) {
 		t.Fatal("existing artifact caused a build", err)
 	}
 	missing := []DeliveryNode{{ID: "code", Kind: "code-prepare", ApplicationScope: "delivery"}}
+	store, _, _ := deliveryFixture(t)
+	draft := &DeliveryDraftPlan{Template: DeliveryTemplate{Preparation: missing}, Scope: scope, Defaults: defaults}
+	err := store.validateWorkflowPreparation(DeliveryRequest{Environment: "test"}, draft)
+	for _, detail := range []string{"环境 test", "待配置：billing #3", "分支策略已配置：orders #1、orders #2", "配置环境"} {
+		if err == nil || !strings.Contains(err.Error(), detail) {
+			t.Fatalf("missing %q in first release preflight: %v", detail, err)
+		}
+	}
 	if err := resolvePreparationPolicies(missing, scope, nil, DeliveryDefaults{}, nil); err == nil || !strings.Contains(err.Error(), "orders") {
 		t.Fatal("missing policy was guessed", err)
 	}

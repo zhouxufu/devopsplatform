@@ -29,6 +29,7 @@ type DeliveryListItem struct {
 	UpdatedAt        int64                `json:"updated_at"`
 	CreatedAt        int64                `json:"created_at"`
 	Frozen           bool                 `json:"frozen,omitempty"`
+	MissingBranch    bool                 `json:"missing_branch,omitempty"`
 	DataSync         bool                 `json:"data_sync,omitempty"`
 	WorkItems        []DeliveryLinkedWork `json:"work_items"`
 	ApplicationCount int                  `json:"application_count"`
@@ -132,9 +133,9 @@ func (s *Store) DeliveryRecordsPage(f DeliveryRecordFilter) (DeliveryRecordPage,
 	}
 	out.PageSize = f.PageSize
 	out.Page = min(f.Page, max(1, (out.Total+f.PageSize-1)/f.PageSize))
-	fields := "r.id,r.title,r.status,COALESCE(r.owner,''),r.created_at,r.updated_at,COALESCE(r.kind,''),COALESCE(r.service,''),''"
+	fields := "r.id,r.title,r.status,COALESCE(r.owner,''),r.created_at,r.updated_at,COALESCE(r.kind,''),COALESCE(r.service,''),'',r.kind='code' AND r.status='draft' AND TRIM(COALESCE(r.reference,''))=''"
 	if f.Type == "versions" {
-		fields = "r.id,r.title,r.status,COALESCE(r.owner,''),r.created_at,r.updated_at,'','',r.version"
+		fields = "r.id,r.title,r.status,COALESCE(r.owner,''),r.created_at,r.updated_at,'','',r.version,0"
 	}
 	rows, err := tx.Query("SELECT "+fields+" FROM "+table+" r"+suffix+" ORDER BY r.updated_at DESC,r.id DESC LIMIT ? OFFSET ?", append(args, f.PageSize, (out.Page-1)*f.PageSize)...)
 	if err != nil {
@@ -142,7 +143,7 @@ func (s *Store) DeliveryRecordsPage(f DeliveryRecordFilter) (DeliveryRecordPage,
 	}
 	for rows.Next() {
 		v := DeliveryListItem{WorkItems: []DeliveryLinkedWork{}}
-		if err = rows.Scan(&v.ID, &v.Title, &v.Status, &v.Owner, &v.CreatedAt, &v.UpdatedAt, &v.Kind, &v.Service, &v.Version); err != nil {
+		if err = rows.Scan(&v.ID, &v.Title, &v.Status, &v.Owner, &v.CreatedAt, &v.UpdatedAt, &v.Kind, &v.Service, &v.Version, &v.MissingBranch); err != nil {
 			rows.Close()
 			return out, err
 		}

@@ -41,6 +41,7 @@ function editorContent(data){
 }
 const progress=computed(()=>deliveryEntryProgress(rows.value,dirty.value));
 const markingReady=ref(false);
+const readyBatch=ref([]);
 watch([dirty,saving,loading,branchBusy],()=>emit('state',{dirty:dirty.value,busy:saving.value||loading.value||branchBusy.value}));
 const activeKey=ref(''),rowSearch=ref(''),visitedKeys=ref(new Set());
 const sqlScripts=ref({});
@@ -94,7 +95,7 @@ function restoreDraft(draft){rows.value=draft.rows;also.value=draft.also;baselin
 async function load(focusRequested=false){
  const current=++session,sameContext=loadedDraftKey.value===draftKey.value,selected=sameContext?activeRow.value:null;loadedDraftKey.value=draftKey.value;error.value='';const draft=drafts.value.get(draftKey.value);
  if(!sameContext){rows.value=[];also.value=[];initial.value='';baseline.value='';sqlScripts.value={}}
- if(props.batch){rows.value=[];also.value=[];baseline.value='';initial.value=serialized();loading.value=false;if(draft)restoreDraft(draft)}
+ if(props.batch){readyBatch.value=[];rows.value=[];also.value=[];baseline.value='';initial.value=serialized();loading.value=false;if(draft)restoreDraft(draft)}
  else{
   loading.value=true;
   try{const data=await api(`api/work-items/${props.item.id}/delivery-content`);if(current!==session||!props.show)return;rows.value=deliveryRows(editorContent(data).changes,props.canManage,props.services,props.item?.id);baseline.value=data.digest;also.value=[];initial.value=serialized();
@@ -137,14 +138,22 @@ window.addEventListener('focus',resumeStandalone);onBeforeUnmount(()=>window.rem
 async function save(quiet=false,markReady=false){
  if(locked.value)return false;if(quiet===true&&!dirty.value)return true;error.value='';clearMarkers();const origins=[];let items;
  try{items=expandDeliveryRows(rows.value,props.batch?'变更':props.item.title,origins,markReady)}catch(e){if(e.rowKey)await reportInvalid(e);else toast(e.message,'error',{duration:6000});return false}
- for(const [i,item] of items.entries()){const issue=validateDeliveryChange(item,origins[i]);if(issue){await reportInvalid(issue);return false}}
+ for(const [i,item] of items.entries()){const issue=validateDeliveryChange(item,origins[i],markReady);if(issue){await reportInvalid(issue);return false}}
  if(!items.length){toast('没有需要保存的修改','warning');return false}saving.value=true;markingReady.value=markReady;const current=session;
  const selected=items[origins.indexOf(activeRow.value?.key)],knownIDs=rows.value.flatMap(row=>row.originals.map(c=>c.id));
  try{
   const saved=await api(props.batch?'api/changes/batch':`api/work-items/${props.item.id}/delivery-content`,{method:props.batch?'POST':'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({digest:baseline.value,changes:items,also_work_item_ids:also.value,mark_ready:markReady})});
   if(current!==session)return false;
   drafts.value.delete(draftKey.value);emit('saved');
-  if(props.batch){rows.value=[];initial.value=serialized();emit('close')}
+  if(props.batch){
+   rows.value=[];also.value=[];initial.value=serialized();
+   if(markReady&&Array.isArray(saved)&&saved.length===items.length&&saved.every(change=>change.status==='ready'&&Number.isSafeInteger(change.id)&&change.id>0)){
+    readyBatch.value=saved.map(({id,title,service})=>({id,title,service}));
+    await nextTick();editor.value?.querySelector('[data-ready-heading]')?.focus();
+    return true
+   }
+   emit('close')
+  }
   else{await load();if(error.value){toast('变更已保存，但重新读取失败，请核对后再继续','warning');return false}const selectedID=savedDeliverySelection(selected,saved.changes,knownIDs);const row=rows.value.find(row=>row.originals.some(c=>c.id===selectedID));if(row)activeKey.value=row.key}
   if(quiet!==true)toast(markReady?'本次可编辑变更已校验并就绪；发布前仍需环境预检与审批':props.batch?'变更草稿已保存':'变更草稿已保存，可继续补充或校验并就绪','success');
   return true
@@ -168,6 +177,12 @@ import {Accordion,AccordionContent,AccordionItem,AccordionTrigger,Badge,Button,D
   </DialogHeader>
   <div ref="editor" :class="inline?'delivery-editor min-w-0':'delivery-editor flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'" @input="clearInvalid" @change="clearInvalid">
    <div v-if="loading" class="flex min-h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Spinner/>正在读取交付内容</div>
+   <section v-else-if="readyBatch.length" class="min-h-0 space-y-3 overflow-auto px-5 py-4">
+    <h2 data-ready-heading tabindex="-1" class="font-semibold">{{readyBatch.length}} 项变更已就绪</h2>
+    <ul class="divide-y"><li v-for="change in readyBatch" :key="change.id" class="flex flex-wrap gap-x-3 py-2 text-sm">
+     <span class="text-muted-foreground">#{{change.id}}</span><span class="min-w-0 break-words">{{change.title}}</span><span class="text-muted-foreground">{{change.service}}</span>
+    </li></ul>
+   </section>
    <template v-else>
     <div ref="toolbar" class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-5 py-3"><div class="flex items-center gap-2"><strong class="text-sm">交付清单</strong><span class="text-xs text-muted-foreground">{{rows.length}} 项</span><ContextHelp text="清单用于维护交付内容；实际执行顺序由发布编排决定。"/></div><div class="flex items-center gap-1">
      <Button variant="ghost" size="sm" v-if="!focusChangeId" :disabled="locked" @click="linksOpen=!linksOpen"><LinkIcon class="size-4"/><span class="hidden sm:inline">关联工作项</span><Badge variant="secondary">{{batch?also.length:also.length+1}}</Badge></Button>
@@ -204,7 +219,11 @@ import {Accordion,AccordionContent,AccordionItem,AccordionTrigger,Badge,Button,D
     </div>
    </template>
   </div>
-  <DialogFooter v-if="!embeddedSubmit" class="flex-row flex-wrap items-center gap-2 border-t bg-background px-5 py-3 sm:justify-between">
+  <DialogFooter v-if="readyBatch.length" class="flex-wrap gap-2 border-t px-5 py-3">
+   <Button variant="outline" @click="close">返回列表</Button>
+   <Button :disabled="locked" @click="emit('next-step',readyBatch.map(change=>change.id))">选择环境并预览发布</Button>
+  </DialogFooter>
+  <DialogFooter v-else-if="!embeddedSubmit" class="flex-row flex-wrap items-center gap-2 border-t bg-background px-5 py-3 sm:justify-between">
    <div class="mr-auto min-w-0 basis-full space-y-1 text-xs sm:basis-auto" role="status"><div>{{refreshing?'正在合并新增内容':dirty?'有未保存修改 · '+changedRows.size+' 项':'已就绪 '+progress.ready+' / '+progress.total+' 项'}}</div><div class="text-muted-foreground">{{progress.hint}}</div></div>
    <ContextHelp text="校验并就绪只确认录入内容，不进行环境预检或执行；发布仍须按环境预检与审批。"/>
    <Button variant="ghost" :disabled="locked" @click="close">关闭</Button>

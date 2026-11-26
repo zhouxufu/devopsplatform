@@ -2,6 +2,29 @@ package deploy
 
 import "testing"
 
+func TestCodeDraftWithoutBranchMustBeCompletedBeforeReady(t *testing.T) {
+	store, _, _ := deliveryFixture(t)
+	draft := WorkDeliverySave{Changes: []Change{{Kind: "code", Service: "orders", Title: "订单修订"}}}
+	if err := store.CreateChangeBatch(&draft, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	id := draft.Changes[0].ID
+	page, err := store.DeliveryRecordsPage(DeliveryRecordFilter{Type: "changes", Query: "订单修订"})
+	if err != nil || len(page.Items) != 1 || !page.Items[0].MissingBranch {
+		t.Fatalf("missing draft indicator: %+v %v", page, err)
+	}
+	if _, err := store.SetChangeReady(id, true); err == nil || store.GetChange(id).Status != ChangeDraft {
+		t.Fatal("incomplete draft became ready")
+	}
+	batch := WorkDeliverySave{MarkReady: true, Changes: []Change{
+		{Kind: "code", Service: "orders", Title: "第一项", Reference: "feature/orders"},
+		{Kind: "code", Service: "orders", Title: "第二项"},
+	}}
+	if err := store.CreateChangeBatch(&batch, "alice"); err == nil || batch.Changes[0].ID != 0 {
+		t.Fatal("incomplete batch accepted")
+	}
+}
+
 func TestDeliveryEntryReadyUsesSharedAndCatalogResources(t *testing.T) {
 	s, _, g := resourceGroupFixture(t)
 	if err := s.UpsertConnection(ResourceConnection{Name: "config", Kind: "nacos", Endpoint: "http://127.0.0.1:1", Config: map[string]string{"nacos_auth": "none"}}); err != nil {

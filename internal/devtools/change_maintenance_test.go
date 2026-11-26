@@ -5,9 +5,73 @@ import (
 	"logplatform/internal/deploy"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+func TestAgentIndependentReadinessValidatesAndConfirmsWholeBatch(t *testing.T) {
+	st, err := deploy.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpsertService(deploy.Service{Name: "orders"}); err != nil {
+		t.Fatal(err)
+	}
+	code := &deploy.Change{Kind: "code", Title: "更新服务", Service: "orders", Reference: "feature/orders", Owner: "alice"}
+	config := &deploy.Change{Kind: "nacos", Title: "服务配置", Service: "orders", Owner: "alice", Nacos: &deploy.NacosChange{
+		ResourceAlias: "config", Group: "DEFAULT_GROUP", Format: "yaml", Entries: []deploy.NacosEntry{{Key: "feature.enabled", Action: "set", Value: "true"}},
+	}}
+	for _, change := range []*deploy.Change{code, config} {
+		if err := st.CreateChange(change); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hub := deploy.NewLogHub()
+	up := httptest.NewServer(deploy.Routes(st, deploy.NewBuilder(st, t.TempDir(), hub), hub, "", deploy.NewStepLib(t.TempDir())))
+	defer up.Close()
+	store, _ := OpenTokenStore(t.TempDir())
+	svc := NewToolService(Upstreams{Deploy: up.URL})
+	svc.actions = store
+	token := workflowToken(t, store)
+	token.Applications = []string{"orders"}
+	const tool = "mark_independent_changes_ready"
+	args := map[string]any{"service": "orders", "change_ids": []any{code.ID, config.ID}}
+	if _, _, _, err := svc.Call(context.Background(), token, tool, args); err == nil || !strings.Contains(err.Error(), "未声明") {
+		t.Fatal("accepted undeclared Nacos resource", err)
+	}
+	if err := st.SaveApplicationResources("orders", deploy.ApplicationResources{Requirements: []deploy.ApplicationResourceRequirement{{Alias: "config", Kind: "nacos"}}}); err != nil {
+		t.Fatal(err)
+	}
+	preview := docCall(t, svc, token, tool, args)
+	code.Reference = "feature/revised"
+	if err := st.UpdateChange(code); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := svc.Call(context.Background(), token, "confirm_platform_action", map[string]any{"confirmation_id": mapValue(preview)["confirmation_id"], "confirm": true, "reason": "确认就绪"}); err == nil {
+		t.Fatal("accepted stale batch")
+	}
+	preview = docCall(t, svc, token, tool, args)
+	token.Applications = []string{"other"}
+	if _, _, _, err := svc.Call(context.Background(), token, "confirm_platform_action", map[string]any{"confirmation_id": mapValue(preview)["confirmation_id"], "confirm": true, "reason": "确认就绪"}); err == nil {
+		t.Fatal("confirmation ignored revoked application access")
+	}
+	token.Applications = []string{"orders"}
+	preview = docCall(t, svc, token, tool, args)
+	for _, change := range []*deploy.Change{code, config} {
+		if st.GetChange(change.ID).Status != deploy.ChangeDraft {
+			t.Fatal("preview or stale confirmation wrote", change.ID)
+		}
+	}
+	docConfirm(t, svc, token, preview)
+	docConfirm(t, svc, token, preview)
+	for _, change := range []*deploy.Change{code, config} {
+		if st.GetChange(change.ID).Status != deploy.ChangeReady {
+			t.Fatal("missing ready receipt", change.ID)
+		}
+	}
+}
 
 func TestMaintainChangeMCPRealHandlersPreviewConfirmAndCAS(t *testing.T) {
 	st, err := deploy.Open(t.TempDir())

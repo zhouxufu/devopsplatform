@@ -220,7 +220,7 @@ func (s *Store) ResearchFlowPlan(req DeliveryRequest, accounts map[string]string
 		}
 	}
 	if err := resolvePreparationPolicies(nodes, scope, v, policy.Defaults, req.ArtifactSources); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("环境 %s 的交付准备受阻：%w", env.Name, err)
 	}
 	for i := range nodes {
 		n := &nodes[i]
@@ -330,10 +330,19 @@ func (s *Store) ResearchFlowPlan(req DeliveryRequest, accounts map[string]string
 	if _, err := orderChangeNodes(includeManualRecords(append([]DeliveryNode(nil), original.Nodes...), scope), scope, true); err != nil {
 		p.Blockers = append(p.Blockers, err.Error())
 	}
+	var pendingDraft bool
 	for _, change := range scope.Changes {
 		if change.Status != ChangeReady {
-			p.Blockers = append(p.Blockers, fmt.Sprintf("变更 #%d · %s 尚未就绪，请先在变更清单校验并就绪", change.ID, change.Title))
+			p.Blockers = append(p.Blockers, fmt.Sprintf("变更 #%d · %s 尚未就绪，请先校验并就绪", change.ID, change.Title))
+			pendingDraft = pendingDraft || change.Status == ChangeDraft
 		}
+	}
+	if pendingDraft && scope.Type == "changes" && len(scope.Changes) > 1 {
+		ids := make([]string, 0, len(scope.Changes))
+		for _, change := range scope.Changes {
+			ids = append(ids, fmt.Sprintf("#%d", change.ID))
+		}
+		p.Warnings = append(p.Warnings, fmt.Sprintf("请让 Agent 或变更清单校验待就绪项，然后保留本次全部编号 %s，在 %s 重新预览同一次交付。仅在用户明确选择拆分发布时调整范围。", strings.Join(ids, "、"), env.Name))
 	}
 	if unified {
 		req.PreflightToken, req.CodePreparationID, req.ClientRequestID = "", "", ""
@@ -598,6 +607,9 @@ func (s *Store) AdvanceResearchFlow(ctx context.Context, id int64, actor string,
 }
 
 func (s *Store) advanceResearchFlowState(ctx context.Context, v *DeliveryRun, actor string, pr *PipelineRunner) (*DeliveryRun, error) {
+	return s.advanceFrozenResearchFlow(ctx, v, actor, pr, nil)
+}
+func (s *Store) advanceFrozenResearchFlow(ctx context.Context, v *DeliveryRun, actor string, pr *PipelineRunner, batch *publicationScope) (*DeliveryRun, error) {
 	if v == nil || v.Plan.PreparationRequest == nil || v.Plan.Template.Workbench != "research" || (v.Status != "approved" && v.Status != "running" && v.Status != "blocked") {
 		return nil, fmt.Errorf("流程不在待执行状态")
 	}
@@ -678,7 +690,13 @@ func (s *Store) advanceResearchFlowState(ctx context.Context, v *DeliveryRun, ac
 		return nil, fmt.Errorf("代码节点没有匹配变更")
 	}
 	req := *v.Plan.PreparationRequest
-	p, err := s.previewCodePreparation(ctx, CodePreparationRequest{BuildConcurrency: n.BuildConcurrency, Delivery: req, Policies: n.Policies, VerifyOnly: n.Kind == "code-verify"}, actor)
+	var p *CodePreparation
+	var err error
+	if batch == nil {
+		p, err = s.previewCodePreparation(ctx, CodePreparationRequest{BuildConcurrency: n.BuildConcurrency, Delivery: req, Policies: n.Policies, VerifyOnly: n.Kind == "code-verify"}, actor)
+	} else {
+		p, err = s.createFrozenPublicationCandidate(v, n, actor, batch)
+	}
 	if err != nil {
 		step.Status = "failed"
 		step.Detail = err.Error()

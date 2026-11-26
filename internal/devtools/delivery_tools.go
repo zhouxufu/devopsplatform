@@ -25,6 +25,7 @@ func deliveryTools() []Tool {
 		"selected_change_ids": map[string]any{"type": "array", "items": id, "maxItems": 200},
 		"source_change_ids":   map[string]any{"type": "array", "items": id, "maxItems": 200},
 		"artifacts":           map[string]any{"type": "object", "additionalProperties": id},
+		"code_modes":          map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string", "enum": []string{"direct", "merge"}}, "description": "逐应用选择直接构建公共分支或合并选定代码后构建；发布从准备阶段一次执行"},
 		"artifact_sources":    map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string", "enum": []string{"build", "existing"}}},
 		"preparation_run_id":  id, "code_preparation_id": str("已有代码准备任务ID"),
 		"nodes":  map[string]any{"type": "array", "maxItems": 30, "items": objectSchema(map[string]any{"id": str("原节点 ID；拆分 SQL 阶段使用新的唯一 ID"), "sql_group": str("拆分 SQL 时引用预览中的原 SQL 节点 ID"), "change_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 50}}, "id"), "description": "可选的执行顺序：仅提交原节点 id；SQL 拆分可附 sql_group 和 change_ids。服务端保留原节点类型、目标、脚本和审核，不能增添其他节点或改写执行内容。"},
@@ -39,14 +40,14 @@ func deliveryTools() []Tool {
 		return t
 	}
 	return []Tool{
-		makeTool("preview_delivery", "解析交付准备范围或执行环境预检，不创建执行单、不合并构建或发布", "delivery:read", map[string]any{"phase": phase, "request": request}, "phase", "request"),
-		makeTool("create_delivery_run", "预览创建统一交付准备/发布执行单；创建不代表执行", "delivery:write", map[string]any{"phase": phase, "request": request}, "phase", "request"),
-		makeTool("publish_delivery", "预览并一次授权最终发布：展示目标环境、不可变制品、SQL、配置及步骤顺序；确认后后台推进一小时，独立审批和人工步骤由指定人员处理。仅非受保护开发/测试环境。", "delivery:execute", map[string]any{"request": request}, "request"),
-		makeTool("advance_delivery", "预览推进准确执行单的当前自动节点；代码节点先生成冻结代码候选，另行确认才合并构建；不能代审", "delivery:execute", map[string]any{"run_id": id, "environment": str("执行单实际环境")}, "run_id", "environment"),
-		makeTool("resume_code_preparation", "预览核对本地Agent推送的合并结果并恢复原任务；确认后可能构建，不执行部署", "delivery:prepare", map[string]any{"preparation_id": str("原代码准备任务ID"), "environment": str("任务实际环境"), "expected_revision": id, "scope_digest": str("读取冲突上下文返回的冻结范围摘要"), "target_commits": map[string]any{"type": "array", "items": str("按repository_index顺序，解决后远端目标分支完整SHA"), "minItems": 1, "maxItems": 100}}, "preparation_id", "environment", "expected_revision", "scope_digest", "target_commits"),
+		makeTool("preview_delivery", "解析交付准备范围或执行环境预检。多条独立变更按完整编号联合预览，包含同应用代码与 Nacos 等配套项。受阻时保留原范围，草稿校验并就绪后整批重试。不创建执行单、不合并构建或发布", "delivery:read", map[string]any{"phase": phase, "request": request}, "phase", "request"),
+		makeTool("create_delivery_run", "仅用户明确要求单独建单时使用。要完成发布请用 publish_delivery 或 deploy_service", "delivery:write", map[string]any{"phase": phase, "request": request}, "phase", "request"),
+		makeTool("publish_delivery", "单服务或多服务一次确认发布。代码范围可自动识别待构建应用，code_modes 按应用选 direct 或 merge；关联需求用 work_item_ids 加 selected_change_ids。此入口从准备推进到部署，不应转为逐步确认。已有制品时展示目标环境、不可变制品、SQL、配置及步骤顺序；确认后后台推进一小时，独立审批和人工步骤由指定人员处理。仅非受保护开发/测试环境。", "delivery:execute", map[string]any{"request": request}, "request"),
+		makeTool("advance_delivery", "仅用于人工逐步维护原执行单。普通发布由 publish_delivery 后台推进", "delivery:execute", map[string]any{"run_id": id, "environment": str("执行单实际环境")}, "run_id", "environment"),
+		makeTool("resume_code_preparation", "按解决提交预览原任务恢复。确认后校验远端并构建，已授权的整次发布继续执行", "delivery:prepare", map[string]any{"preparation_id": str("原代码准备任务ID"), "environment": str("任务实际环境"), "publication_task_id": str("如来自整次发布，填等待冲突处理的原发布任务ID"), "expected_revision": id, "scope_digest": str("读取冲突上下文返回的冻结范围摘要"), "target_commits": map[string]any{"type": "array", "items": str("按repository_index顺序，解决后远端目标分支完整SHA"), "minItems": 1, "maxItems": 100}}, "preparation_id", "environment", "expected_revision", "scope_digest", "target_commits"),
 		makeTool("start_code_preparation", "预览开始已冻结的统一流程代码任务；确认后可能合并、推送和构建，不执行部署", "delivery:prepare", map[string]any{"preparation_id": str("由统一交付代码节点生成的原任务ID"), "environment": str("代码任务实际环境")}, "preparation_id", "environment"),
 		makeTool("retry_prepared_builds", "从原任务已合并的提交和原构建配置续跑失败构建，保留成功制品，不重新合并或发布", "delivery:prepare", map[string]any{"preparation_id": str("原代码准备任务ID"), "environment": str("原开发或测试环境")}, "preparation_id", "environment"),
-		makeTool("confirm_delivery_scope", "预览由本人Key记录开发/测试范围确认；展示冻结范围并获用户明确同意后调用confirm_platform_action；不代他人确认、不审批、不执行构建或部署", "delivery:prepare", map[string]any{"run_id": id, "environment": str("准备单实际环境"), "comment": str("本人确认的范围说明"), "work_item_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 100}}, "run_id", "environment", "comment"),
+		makeTool("confirm_delivery_scope", "仅维护未由整次发布接管的范围节点；展示冻结范围并获用户明确同意后调用confirm_platform_action；不代他人确认、不审批、不执行构建或部署", "delivery:prepare", map[string]any{"run_id": id, "environment": str("准备单实际环境"), "comment": str("本人确认的范围说明"), "work_item_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 100}}, "run_id", "environment", "comment"),
 		makeTool("record_delivery_manual_step", "预览登记当前人工步骤的实际回执；不是机器验证、不允许代审范围确认或审批", "delivery:execute", map[string]any{"run_id": id, "environment": str("执行单实际环境"), "comment": str("已人工处理的内容、结果和凭据/记录地址；不填密码或Token")}, "run_id", "environment", "comment"),
 		makeTool("mark_work_item_changes_ready", "预览将本人指定变更校验并标记就绪；原文/摘要冻结，不执行环境预检或发布", "changes:write", map[string]any{"work_item_id": id, "change_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 50}}, "work_item_id", "change_ids"),
 	}
@@ -80,6 +81,9 @@ func (s *ToolService) deliveryEnvironment(ctx context.Context, t *AccessToken, e
 	if err := deliveryAccess(t, env); err != nil {
 		return err
 	}
+	return s.unprotectedDeliveryEnvironment(ctx, t, env)
+}
+func (s *ToolService) unprotectedDeliveryEnvironment(ctx context.Context, t *AccessToken, env string) error {
 	v, err := s.platformRequest(ctx, t, "GET", "/api/environments", nil, nil)
 	if err != nil {
 		return err
@@ -98,6 +102,26 @@ func (s *ToolService) deliveryEnvironment(ctx context.Context, t *AccessToken, e
 	return fmt.Errorf("目标环境不存在")
 }
 
+func (s *ToolService) resolvePublicationOrder(ctx context.Context, t *AccessToken, phase string, req map[string]any) error {
+	if requested, ok := req["nodes"].([]any); ok {
+		if phase != "release" {
+			return fmt.Errorf("执行顺序仅能在发布预检阶段调整")
+		}
+		draftRequest := mapValue(cloneJSON(req))
+		delete(draftRequest, "nodes")
+		draft, err := s.platformRequest(ctx, t, "POST", "/api/delivery/draft-plan", nil, draftRequest)
+		if err != nil {
+			return err
+		}
+		generated, _ := mapValue(draft)["nodes"].([]any)
+		nodes, err := deliveryOrderedNodes(generated, requested)
+		if err != nil {
+			return err
+		}
+		req["nodes"] = nodes
+	}
+	return nil
+}
 func deliveryPreviewPath(phase string) string {
 	if phase == "preparation" {
 		return "/api/delivery/preparations/preview"
@@ -119,22 +143,8 @@ func (s *ToolService) deliveryPreview(ctx context.Context, t *AccessToken, phase
 	if err := s.resolveDeliveryMCPRequest(ctx, t, phase, req); err != nil {
 		return nil, err
 	}
-	if requested, ok := req["nodes"].([]any); ok {
-		if phase != "release" {
-			return nil, fmt.Errorf("执行顺序仅能在发布预检阶段调整")
-		}
-		draftRequest := mapValue(cloneJSON(req))
-		delete(draftRequest, "nodes")
-		draft, err := s.platformRequest(ctx, t, "POST", "/api/delivery/draft-plan", nil, draftRequest)
-		if err != nil {
-			return nil, err
-		}
-		generated, _ := mapValue(draft)["nodes"].([]any)
-		nodes, err := deliveryOrderedNodes(generated, requested)
-		if err != nil {
-			return nil, err
-		}
-		req["nodes"] = nodes
+	if err := s.resolvePublicationOrder(ctx, t, phase, req); err != nil {
+		return nil, err
 	}
 	v, err := s.platformRequest(ctx, t, "POST", deliveryPreviewPath(phase), nil, req)
 	if err != nil {
@@ -222,6 +232,53 @@ func (s *ToolService) prepareDeliveryAction(ctx context.Context, t *AccessToken,
 		phase := stringArg(args, "phase")
 		if name == "publish_delivery" {
 			phase = "release"
+			modes := mapValue(req["artifact_sources"])
+			needsBuild := len(mapValue(req["code_modes"])) > 0
+			for _, mode := range modes {
+				if mode == "build" {
+					needsBuild = true
+				}
+			}
+			if !needsBuild && len(modes) == 0 && stringArg(req, "code_preparation_id") == "" {
+				if err := publicationAccess(t, stringArg(req, "environment")); err != nil {
+					return err
+				}
+				if err := s.resolveDeliveryMCPRequest(ctx, t, "release", req); err != nil {
+					return err
+				}
+				input := mapValue(cloneJSON(req))
+				delete(input, "nodes")
+				draft, err := s.platformRequest(ctx, t, "POST", "/api/delivery/draft-plan", nil, input)
+				if err != nil {
+					return err
+				}
+				changes, _ := mapValue(mapValue(draft)["scope"])["changes"].([]any)
+				for _, row := range changes {
+					c := mapValue(row)
+					if stringArg(c, "kind") == "code" && intArg(mapValue(req["artifacts"]), stringArg(c, "service"), 0) == 0 {
+						needsBuild = true
+						break
+					}
+				}
+			}
+			if needsBuild && stringArg(req, "code_preparation_id") == "" {
+				env := stringArg(req, "environment")
+				if err := publicationAccess(t, env); err != nil {
+					return err
+				}
+				if err := s.resolveDeliveryMCPRequest(ctx, t, "preparation", req); err != nil {
+					return err
+				}
+				if err := s.resolvePublicationOrder(ctx, t, "release", req); err != nil {
+					return err
+				}
+				spec := map[string]any{"environment": env, "mode": "change", "reason": stringArg(req, "reason"), "delivery": req}
+				if id := intArg(req, "preparation_run_id", 0); id > 0 {
+					spec["preparation_id"] = id
+					delete(req, "preparation_run_id")
+				}
+				return s.prepareServiceDeployment(ctx, t, spec, a)
+			}
 			if err := publicationAccess(t, stringArg(req, "environment")); err != nil {
 				return err
 			}
@@ -270,7 +327,13 @@ func (s *ToolService) prepareDeliveryAction(ctx context.Context, t *AccessToken,
 		return nil
 	}
 	env := stringArg(args, "environment")
-	if err := s.deliveryEnvironment(ctx, t, env); err != nil {
+	var accessErr error
+	if name == "resume_code_preparation" {
+		accessErr = s.publicationRecoveryAccess(ctx, t, stringArg(args, "publication_task_id"), stringArg(args, "preparation_id"), env)
+	} else {
+		accessErr = s.deliveryEnvironment(ctx, t, env)
+	}
+	if err := accessErr; err != nil {
 		return err
 	}
 	a.Query = url.Values{"environment": {env}}
@@ -347,6 +410,14 @@ func (s *ToolService) prepareDeliveryAction(ctx context.Context, t *AccessToken,
 			a.Body["target_commits"] = cloneJSON(args["target_commits"])
 		}
 		a.Preview = map[string]any{"environment": env, "code_preparation": v, "merges_and_builds": true, "publishes": false, "action": action, "target_commits": a.Body["target_commits"], "verification": "平台重新读取远端并校验冻结范围；不信任Agent自行声明成功"}
+		if action == "resume" && stringArg(args, "publication_task_id") != "" {
+			a.Preview["publication_task_id"] = args["publication_task_id"]
+			a.Preview["publishes"] = true
+			a.Preview["continues_publication"] = true
+		}
+		if action == "resume" {
+			a.Preview["continuation"] = "恢复原代码任务；若隶属已授权整次发布，构建就绪后按原范围继续部署。"
+		}
 		if action == "retry-builds" {
 			a.Preview["merges_and_builds"] = false
 			a.Preview["build_only"] = true
