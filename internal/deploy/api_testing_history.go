@@ -137,11 +137,11 @@ func (m *apiTestManager) history(w http.ResponseWriter, r *http.Request, app, ow
 		if e != nil || page < 1 || page > 1000000 {
 			return fmt.Errorf("页码无效")
 		}
-		size = 15
+		size = 20
 		if q.Get("page_size") != "" {
 			size, e = strconv.Atoi(q.Get("page_size"))
-			if e != nil || size < 1 || size > 50 {
-				return fmt.Errorf("每页需要 1–50 条")
+			if e != nil || size < 1 || size > 100 {
+				return fmt.Errorf("每页需要 1–100 条")
 			}
 		}
 	}

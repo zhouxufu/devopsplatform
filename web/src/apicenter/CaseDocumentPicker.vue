@@ -1,4 +1,5 @@
 <script setup>
+import ListPagination from '../shared/components/ListPagination.vue'
 import {computed,onBeforeUnmount,onMounted,ref,watch} from 'vue'
 import {Badge,Button,Field,FieldLabel,Input,Spinner} from '../shared/shadcn-ui.js'
 import OptionPicker from '../shared/components/OptionPicker.vue'
@@ -6,12 +7,12 @@ import {applicationOption} from '../shared/applicationName.js'
 const props=defineProps({service:{type:String,default:''},initialService:{type:String,default:''},services:{type:Array,default:()=>[]},opening:Boolean})
 const emit=defineEmits(['choose','close'])
 const protocol=ref('http')
-const search=ref(''),application=ref(props.service||props.initialService),environment=ref('__all'),environments=ref([]),rows=ref([]),total=ref(0),page=ref(1),loading=ref(false),error=ref('')
+const search=ref(''),application=ref(props.service||props.initialService),environment=ref('__all'),environments=ref([]),rows=ref([]),total=ref(0),page=ref(1),pageSize=ref(20),loading=ref(false),error=ref('')
 const applications=computed(()=>props.services.map(applicationOption))
 let controller,timer,epoch=0,destroyed=false
 async function load(){
  clearTimeout(timer);controller?.abort();controller=new AbortController();const token=++epoch;loading.value=true;error.value='';rows.value=[]
- const q=new URLSearchParams({protocol:protocol.value,q:search.value.trim(),page:String(page.value),page_size:'10'})
+ const q=new URLSearchParams({protocol:protocol.value,q:search.value.trim(),page:String(page.value),page_size:String(pageSize.value)})
  if(props.service||application.value)q.set('service',props.service||application.value)
  if(environment.value!=='__all')q.set('environment',environment.value==='__unassigned'?'':environment.value)
  try{const r=await fetch('api/api-documents/search?'+q,{signal:controller.signal}),v=await r.json();if(token!==epoch)return;if(!r.ok||v.error)throw Error(v.error||'接口检索失败');rows.value=v.items||[];total.value=v.total||0}
@@ -32,6 +33,6 @@ onBeforeUnmount(()=>{destroyed=true;epoch++;controller?.abort();clearTimeout(tim
   <div v-if="loading||opening" class="flex items-center gap-2 py-2 text-sm" role="status"><Spinner/>{{opening?'正在读取接口定义':'正在检索接口'}}</div>
   <div v-if="error" role="alert" class="space-y-2 rounded-lg border p-3 text-sm"><p>{{error}}</p><Button size="sm" variant="outline" @click="load">重试</Button></div>
   <div v-else class="space-y-2"><Button v-for="row in rows" :key="row.snapshot_id+':'+row.id" variant="outline" class="h-auto w-full min-w-0 flex-col items-start gap-2 whitespace-normal p-3 text-left" :disabled="opening||loading" :aria-label="'选择接口 '+row.service+' '+row.method+' '+row.path+' 快照 '+row.snapshot_id" @click="emit('choose',row)"><span class="flex min-w-0 items-start gap-2"><Badge variant="secondary">{{row.method}}</Badge><span class="break-words font-medium">{{row.summary||row.path}}</span></span><code class="max-w-full break-all text-xs text-muted-foreground">{{row.path}}</code><span class="max-w-full break-words text-xs text-muted-foreground">{{row.display_name||row.service}} · {{row.environment||'未区分环境'}} · 快照 #{{row.snapshot_id}}</span></Button><p v-if="!loading&&!rows.length" class="py-6 text-center text-sm text-muted-foreground">没有匹配接口，请调整筛选或先导入接口文档</p></div>
-  <div class="flex items-center justify-end gap-2"><Button variant="outline" size="sm" :disabled="loading||opening||page===1" @click="turn(-1)">上一页</Button><span class="text-sm">{{page}} / {{Math.max(1,Math.ceil(total/10))}}</span><Button variant="outline" size="sm" :disabled="loading||opening||page*10>=total" @click="turn(1)">下一页</Button></div>
+  <ListPagination :page="page" :total="total" :page-size="pageSize" :disabled="loading||opening" @update:page="page=$event;load()" @update:page-size="pageSize=$event;page=1;load()"/>
  </section>
 </template>

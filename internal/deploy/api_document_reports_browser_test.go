@@ -31,6 +31,27 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 	receiptSubmit(t, h, doc, strings.Repeat("c", 32), false, "")
 	receiptSubmit(t, h, doc, strings.Repeat("d", 32), true, "")
 	s.db.Exec(`UPDATE api_document_reports SET actor='bob' WHERE id=?`, b.ID)
+	if os.Getenv("UNIFIED_PAGINATION_BROWSER_FIXTURE") == "1" {
+		for i := 0; i < 100; i++ {
+			receiptSubmit(t, h, doc, fmt.Sprintf("%032x", i+1000), false, "")
+		}
+	}
+	if os.Getenv("DOCUMENT_REPORT_PAGINATION_FIXTURE") == "1" {
+		paths := []string{}
+		for i := 1; i <= 45; i++ {
+			paths = append(paths, fmt.Sprintf(`"/page-%02d":{"get":{"summary":"分页接口%02d","responses":{"200":{"description":"原说明"}}}}`, i, i))
+		}
+		before := `{"openapi":"3.0.3","info":{"title":"分页隔离验证","version":"1"},"paths":{` + strings.Join(paths, ",") + `}}`
+		receiptSubmit(t, h, before, strings.Repeat("8", 32), false, "")
+		receiptSubmit(t, h, strings.ReplaceAll(before, "原说明", "新说明"), strings.Repeat("9", 32), false, "")
+	}
+	if os.Getenv("DOCUMENT_FIELD_DIFF_FIXTURE") == "1" {
+		before := strings.Replace(doc, `"description":"图片列表"`, `"description":"图片列表","content":{"application/json":{"schema":{"type":"object","properties":{"userNick":{"type":"string","description":"业主昵称"}}},"example":{"code":200,"data":{"id":210000000000000001,"userNick":"演示业主","images":[{"url":"demo.jpg","auditStatus":0}],"cover":null}}}}`, 1)
+		receiptSubmit(t, h, before, strings.Repeat("e", 32), false, "")
+		after := strings.Replace(before, `,"example":{"code":200,"data":{"id":210000000000000001,"userNick":"演示业主","images":[{"url":"demo.jpg","auditStatus":0}],"cover":null}}`, "", 1)
+		after = strings.Replace(after, "业主昵称", "业主显示名称", 1)
+		receiptSubmit(t, h, after, strings.Repeat("f", 32), false, "")
+	}
 	stop := make(chan struct{})
 	var once sync.Once
 	var ledgerMu sync.Mutex

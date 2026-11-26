@@ -425,6 +425,11 @@ func registerDocumentReportRoutes(mux *http.ServeMux, s *Store, wj func(http.Res
 			fail(w, 400, "页码过大")
 			return
 		}
+		size, err := requestListPageSize(r)
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
 		where := " WHERE 1=1"
 		args := []any{}
 		for _, key := range []string{"service", "environment", "protocol", "actor", "source", "state"} {
@@ -465,7 +470,7 @@ func registerDocumentReportRoutes(mux *http.ServeMux, s *Store, wj func(http.Res
 			fail(w, 500, "上报记录读取失败")
 			return
 		}
-		rows, e := s.db.Query(`SELECT `+reportSelectColumns+` FROM api_document_reports`+where+` ORDER BY created_at DESC,sequence DESC LIMIT 20 OFFSET ?`, append(args, (page-1)*20)...)
+		rows, e := s.db.Query(`SELECT `+reportSelectColumns+` FROM api_document_reports`+where+` ORDER BY created_at DESC,sequence DESC LIMIT ? OFFSET ?`, append(args, size, (page-1)*size)...)
 		if e != nil {
 			fail(w, 500, "上报记录读取失败")
 			return
@@ -490,7 +495,7 @@ func registerDocumentReportRoutes(mux *http.ServeMux, s *Store, wj func(http.Res
 			items[i] = s.publicDocumentReport(items[i])
 			items[i].ActorName = personnames.FromRequest(r).Name(items[i].Actor)
 		}
-		wj(w, map[string]any{"items": items, "total": total, "page": page, "page_size": 20})
+		wj(w, map[string]any{"items": items, "total": total, "page": page, "page_size": size})
 	})
 	mux.HandleFunc("GET /api/api-document-reports/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.documentReport(r.PathValue("id"))

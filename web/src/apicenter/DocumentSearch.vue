@@ -1,4 +1,5 @@
 <script setup>
+import ListPagination from '../shared/components/ListPagination.vue'
 import {computed,ref,watch,onMounted,onBeforeUnmount} from 'vue'
 import {Badge,Button,Field,FieldGroup,FieldLabel,InputGroup,InputGroupInput,InputGroupAddon,InputGroupButton,Popover,PopoverTrigger,PopoverContent,Spinner} from '../shared/shadcn-ui.js'
 import {DropdownMenu,DropdownMenuTrigger,DropdownMenuContent,DropdownMenuItem} from '@/components/ui/dropdown-menu'
@@ -10,7 +11,7 @@ import {reportTime} from './reportModel.js'
 import {applicationName} from '../shared/applicationName.js'
 const props=defineProps({protocol:{type:String,default:'http'},service:{type:String,default:''},search:{type:String,default:''},group:{type:String,default:''},maintainer:{type:String,default:''},environment:{type:String,default:'__all'},services:{type:Array,default:()=>[]},environments:{type:Array,default:()=>[]},opening:Boolean})
 const emit=defineEmits(['update:search','update:group','update:maintainer','open','total'])
-const sort=ref(''),rows=ref([]),groups=ref([]),page=ref(1),pageSize=ref(30),total=ref(0),snapshots=ref(0),loading=ref(false),error=ref('')
+const sort=ref(''),rows=ref([]),groups=ref([]),page=ref(1),pageSize=ref(20),total=ref(0),snapshots=ref(0),loading=ref(false),error=ref('')
 const filterCount=computed(()=>Number(!!props.group)+Number(!!props.maintainer)+Number(props.protocol!=='http'))
 let controller,timer,epoch=0
 const columns=[{id:'operation',label:'功能 / 接口路径',size:340,minSize:220,flex:true,required:true},{id:'application',label:'所属应用 / 环境',size:145,minSize:110,required:true},{id:'update',label:'文档更新',size:185,minSize:155,required:true},{id:'tags',label:'功能分组',size:130,minSize:100},{id:'maintainer',label:'维护人',size:100,minSize:90},{id:'actions',label:'操作',size:100,minSize:100,pin:'right',required:true}]
@@ -58,6 +59,6 @@ onBeforeUnmount(()=>{epoch++;clearTimeout(timer);controller?.abort()})
    <template #cell-actions="{record}"><div class="flex items-center gap-0.5"><Button size="sm" variant="ghost" class="px-2" :disabled="opening||loading" @click="emit('open',record,'test-execution')">调试</Button><DropdownMenu><DropdownMenuTrigger as-child><Button size="icon-sm" variant="ghost" :disabled="opening||loading" :aria-label="(record.summary||record.path)+'更多操作'"><MoreHorizontalIcon/></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem @select="emit('open',record,'view')">查看详情</DropdownMenuItem><DropdownMenuItem @select="emit('open',record,'test-cases')">生成用例</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div></template>
    <template #empty><p class="p-6 text-center text-sm text-muted-foreground">{{loading?'正在检索接口':snapshots?'没有匹配的接口，可调整关键词或筛选条件':'暂无接口文档；导入或生成文档后即可按功能查询'}}</p></template>
   </DataTable>
-  <div class="flex shrink-0 flex-wrap items-center justify-end gap-2 pt-1"><span class="mr-auto text-xs text-muted-foreground">共 {{total}} 个接口</span><OptionPicker v-model="pageSize" aria-label="每页接口数量" class="w-32" :options="[15,30,50].map(value=>({value,label:'每页 '+value+' 条'}))" @update:model-value="page=1;refresh()"/><Button variant="outline" size="sm" :disabled="loading||page<=1" @click="turn(page-1)">上一页</Button><span class="text-sm">{{page}} / {{Math.max(1,Math.ceil(total/pageSize))}}</span><Button variant="outline" size="sm" :disabled="loading||page*pageSize>=total" @click="turn(page+1)">下一页</Button></div>
+  <ListPagination class="shrink-0" :page="page" :total="total" :page-size="pageSize" :disabled="loading" @update:page="turn($event)" @update:page-size="pageSize=$event;page=1;refresh()"/>
  </section>
 </template>

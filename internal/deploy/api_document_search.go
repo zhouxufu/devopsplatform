@@ -64,7 +64,7 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 			fail(w, 400, "检索条件过长")
 			return
 		}
-		result := documentSearchResult{Items: []documentSearchItem{}, Groups: []string{}, Page: 1, PageSize: 15}
+		result := documentSearchResult{Items: []documentSearchItem{}, Groups: []string{}, Page: 1, PageSize: 20}
 		for key, target := range map[string]*int{"page": &result.Page, "page_size": &result.PageSize} {
 			if q.Has(key) {
 				v, e := strconv.Atoi(q.Get(key))
