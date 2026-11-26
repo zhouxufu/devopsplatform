@@ -407,9 +407,14 @@ func registerResearchRoutes(mux *http.ServeMux, s *Store, pr *PipelineRunner, ma
 			deliveryWriteError(w, 400, "页码过大")
 			return
 		}
-		start := min(len(filtered), (page-1)*20)
-		end := min(len(filtered), start+20)
-		deliveryJSON(w, map[string]any{"items": filtered[start:end], "total": len(filtered), "page": page, "page_size": 20})
+		size, err := requestListPageSize(r)
+		if err != nil {
+			deliveryWriteError(w, 400, err)
+			return
+		}
+		start := min(len(filtered), (page-1)*size)
+		end := min(len(filtered), start+size)
+		deliveryJSON(w, map[string]any{"items": filtered[start:end], "total": len(filtered), "page": page, "page_size": size})
 	})
 	mux.HandleFunc("POST /api/research/tasks/{id}/{node}", func(w http.ResponseWriter, r *http.Request) {
 		var v struct {

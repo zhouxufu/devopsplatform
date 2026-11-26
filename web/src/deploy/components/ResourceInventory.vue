@@ -1,4 +1,7 @@
 <script setup>
+import {ref as paginationRef} from 'vue'
+const listPageSize=paginationRef(20)
+import ListPagination from '../../shared/components/ListPagination.vue'
 import {computed,ref,watch} from 'vue'
 import {PlusIcon,RefreshCwIcon} from '@lucide/vue'
 import DataTable from '../../shared/components/DataTable.vue'
@@ -6,16 +9,16 @@ import OptionPicker from '../../shared/components/OptionPicker.vue'
 import {filterResourceInventory,resourceInventory} from '../resourceWorkspace.js'
 import {resourceConnectionStatus} from '../resourceExperience.js'
 import {resourceKindLabels} from '../resourceConnections.js'
-import {Badge,Button,DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuTrigger,Empty,EmptyHeader,EmptyTitle,EmptyDescription,EmptyContent,Input,Pagination,PaginationContent,PaginationPrevious,PaginationNext,Spinner} from '../../shared/shadcn-ui.js'
+import {Badge,Button,DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuTrigger,Empty,EmptyHeader,EmptyTitle,EmptyDescription,EmptyContent,Input,Spinner} from '../../shared/shadcn-ui.js'
 const props=defineProps({connections:Array,hosts:Array,environments:Array,connectionKinds:Array,allowHosts:Boolean,hostOnly:Boolean,loading:Boolean,error:String,showAgents:Boolean,hostPending:Object,connectionPending:Object,hostTests:Object,connectionTests:Object,agentState:Function})
 const emit=defineEmits(['create','edit','fork','remove','test','refresh','agent-config','agent-check','agent-install','agent-deployment','audit'])
 const query=ref(''),kind=ref(''),page=ref(1)
 const kinds=computed(()=>[...(props.allowHosts?[{value:'host',label:'主机（SSH）'}]:[]),...(props.connectionKinds||[])])
 const all=computed(()=>resourceInventory(props.connections,props.allowHosts?props.hosts:[],props.connectionKinds).map(r=>({...r,typeLabel:r.kind==='host'?'主机（SSH）':resourceKindLabels[r.kind]||r.kind,environmentLabel:r.category==='hosts'?(props.environments||[]).find(e=>e.name===r.environment)?.display_name||r.environment:'跨环境复用'})))
 const filtered=computed(()=>filterResourceInventory(all.value,query.value,kind.value))
-const rows=computed(()=>filtered.value.slice((page.value-1)*20,page.value*20))
+const rows=computed(()=>filtered.value.slice((page.value-1)*listPageSize.value,page.value*listPageSize.value))
 watch([query,kind],()=>page.value=1)
-watch(()=>filtered.value.length,n=>page.value=Math.min(page.value,Math.max(1,Math.ceil(n/20))))
+watch(()=>filtered.value.length,n=>page.value=Math.min(page.value,Math.max(1,Math.ceil(n/listPageSize.value))))
 const pending=row=>row.category==='hosts'?props.hostPending||{}:props.connectionPending||{}
 const testing=row=>(row.category==='hosts'?props.hostTests:props.connectionTests)?.[row.name]
 const busy=row=>props.loading||!!pending(row)[row.name]||testing(row)==='testing'
@@ -51,7 +54,7 @@ function clear(){query.value='';kind.value=''}
     </div></template>
     <template #empty><Empty><EmptyHeader><EmptyTitle>{{loading?'正在读取资源':all.length?'没有匹配的资源':hostOnly?'尚未登记主机':'尚未添加服务连接'}}</EmptyTitle><EmptyDescription v-if="!all.length&&!loading">{{hostOnly?'登记主机后即可在应用环境直接选择；需要采集日志时再配置 Agent。':'添加所需服务连接，再在应用中按环境绑定。'}}</EmptyDescription></EmptyHeader><EmptyContent v-if="all.length&&!loading"><Button variant="outline" @click="clear">清空筛选</Button></EmptyContent></Empty></template>
    </DataTable>
-   <div class="flex flex-wrap items-center justify-between gap-3"><span class="text-sm text-muted-foreground">共 {{filtered.length}} 项</span><Pagination class="mx-0 w-auto" :page="page" :total="filtered.length" :items-per-page="20" @update:page="page=$event"><PaginationContent><PaginationPrevious/><span class="px-2 text-sm">{{page}} / {{Math.max(1,Math.ceil(filtered.length/20))}}</span><PaginationNext/></PaginationContent></Pagination></div>
+   <ListPagination :page="page" :total="filtered.length" :page-size="listPageSize" @update:page="page=$event" @update:page-size="listPageSize=$event;page=1" :disabled="loading"/>
   </template>
  </section>
 </template>

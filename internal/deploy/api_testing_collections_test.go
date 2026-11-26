@@ -209,7 +209,7 @@ func TestAPISuiteFailureSkipsDataAndCasesAndRejectsInvalidPlans(t *testing.T) {
 func TestAPIHistoryBackfillsLegacyAndPaginatesBeforeDecryption(t *testing.T) {
 	st, h := apiTestingFixture(t)
 	app := st.GetService("orders").ApplicationID
-	for i := 0; i < 35; i++ {
+	for i := 0; i < 105; i++ {
 		v := apiTestRun{Name: fmt.Sprintf("历史%02d", i), Owner: "alice", Environment: "test", Status: "success", StartedAt: 100 + int64(i)}
 		if i%2 == 0 {
 			v.CaseID = 9
@@ -228,6 +228,22 @@ func TestAPIHistoryBackfillsLegacyAndPaginatesBeforeDecryption(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &page)
 	if w.Code != 200 || page.Total != 11 || len(page.Items) != 5 || page.Items[0].Name != "历史20" {
 		t.Fatal(w.Body.String())
+	}
+	for _, v := range []struct {
+		query      string
+		size, rows int
+	}{{"", 20, 20}, {"&page_size=50", 50, 50}, {"&page_size=100", 100, 100}} {
+		w = apiTestingRequest(h, "GET", "/api/api-testing/runs?service=orders&page=1"+v.query, "alice", "member", nil)
+		var result struct {
+			Items []apiTestRun `json:"items"`
+			Size  int          `json:"page_size"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 200 || result.Size != v.size || len(result.Items) != v.rows {
+			t.Fatal("history page mismatch", v, w.Body.String())
+		}
 	}
 	w = apiTestingRequest(h, "GET", "/api/api-testing/runs?service=orders&page=0", "alice", "member", nil)
 	if w.Code != 400 {

@@ -1,11 +1,14 @@
 <script setup>
+import {ref as paginationRef} from 'vue'
+const listPageSize=paginationRef(20)
+import ListPagination from '../../shared/components/ListPagination.vue'
 import {computed,onBeforeUnmount,onDeactivated,ref,watch} from 'vue'
 import {RefreshCwIcon} from '@lucide/vue'
 import DataTable from '../../shared/components/DataTable.vue'
 import DateRangeFilter from '../../shared/components/DateRangeFilter.vue'
 import OptionPicker from '../../shared/components/OptionPicker.vue'
 import {auditActionLabel,auditResourceLabel,auditActionLabels} from '../resourceCatalog.js'
-import {Button,Empty,EmptyHeader,EmptyTitle,EmptyDescription,EmptyContent,Input,Pagination,PaginationContent,PaginationPrevious,PaginationNext,Spinner} from '../../shared/shadcn-ui.js'
+import {Button,Empty,EmptyHeader,EmptyTitle,EmptyDescription,EmptyContent,Input,Spinner} from '../../shared/shadcn-ui.js'
 const props=defineProps({request:Function,scope:Object})
 const query=ref(''),type=ref(props.scope?.type||''),resource=ref(props.scope?.id||''),start=ref(''),end=ref(''),page=ref(1),items=ref([]),total=ref(0),types=ref([]),loading=ref(false),error=ref('')
 let sequence=0,controller,timer
@@ -14,7 +17,7 @@ const columns=[{id:'created_at',label:'时间',size:180,required:true},{id:'acto
 async function load(){
  clearTimeout(timer);controller?.abort();const current=++sequence;controller=new AbortController();loading.value=true;error.value=''
  try{
-  const params=new URLSearchParams({page:String(page.value),page_size:'20'})
+  const params=new URLSearchParams({page:String(page.value),page_size:String(listPageSize.value)})
   const term=query.value.trim(),action=Object.entries(auditActionLabels).find(([,label])=>label===term)?.[0]
   if(term)params.set('q',action||term)
   if(type.value)params.set('resource_type',type.value)
@@ -24,7 +27,7 @@ async function load(){
   if(current!==sequence)return
   if(!Array.isArray(result.items)||!Number.isFinite(result.total))throw Error('操作记录数据格式异常')
   items.value=result.items;total.value=result.total;types.value=result.resource_types||[]
-  const last=Math.max(1,Math.ceil(total.value/20));if(page.value>last)page.value=last
+  const last=Math.max(1,Math.ceil(total.value/listPageSize.value));if(page.value>last)page.value=last
  }catch(e){if(current===sequence&&e.name!=='AbortError')error.value=e.message||'操作记录读取失败'}finally{if(current===sequence)loading.value=false}
 }
 function queue(){clearTimeout(timer);controller?.abort();sequence++;loading.value=true;timer=setTimeout(load,250)}
@@ -54,7 +57,7 @@ load()
     <template #cell-resource_type="{record}">{{auditResourceLabel(record.resource_type)}}</template>
     <template #empty><Empty><EmptyHeader><EmptyTitle>{{loading?'正在查询操作记录':'没有匹配的操作记录'}}</EmptyTitle><EmptyDescription v-if="!loading">可调整筛选条件，或在资源配置和交付操作后查看。</EmptyDescription></EmptyHeader></Empty></template>
    </DataTable>
-   <div class="flex flex-wrap items-center justify-between gap-3"><span class="text-sm text-muted-foreground">{{loading?'查询中…':'共 '+total+' 项'}}</span><Pagination class="mx-0 w-auto" :page="page" :total="total" :items-per-page="20" @update:page="!loading&&(page=$event)"><PaginationContent><PaginationPrevious/><span class="px-2 text-sm">{{page}} / {{Math.max(1,Math.ceil(total/20))}}</span><PaginationNext/></PaginationContent></Pagination></div>
+   <ListPagination :page="page" :total="total" :page-size="listPageSize" :disabled="loading" @update:page="!loading&&(page=$event)" @update:page-size="listPageSize=$event;page=1;queue()"/>
   </template>
  </section>
 </template>

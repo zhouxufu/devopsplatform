@@ -97,6 +97,11 @@ func registerEnvironmentNacosRoutes(mux *http.ServeMux, s *Store) {
 			deliveryWriteError(w, 400, "搜索参数无效")
 			return
 		}
+		size, err := requestListPageSize(r)
+		if err != nil {
+			deliveryWriteError(w, 400, err)
+			return
+		}
 		client, err := newNacosClient(r.Context(), c)
 		if err != nil {
 			deliveryWriteError(w, 502, err)
@@ -105,7 +110,7 @@ func registerEnvironmentNacosRoutes(mux *http.ServeMux, s *Store) {
 		if q != "" && !strings.Contains(q, "*") {
 			q = "*" + q + "*"
 		}
-		args := url.Values{"search": {"blur"}, "tenant": {c.Config["namespace"]}, "dataId": {q}, "group": {group}, "pageNo": {strconv.Itoa(page)}, "pageSize": {"20"}}
+		args := url.Values{"search": {"blur"}, "tenant": {c.Config["namespace"]}, "dataId": {q}, "group": {group}, "pageNo": {strconv.Itoa(page)}, "pageSize": {strconv.Itoa(size)}}
 		body, _, err := client.request(r.Context(), http.MethodGet, "/v1/cs/configs", args, "")
 		if err != nil {
 			deliveryWriteError(w, 502, err)
