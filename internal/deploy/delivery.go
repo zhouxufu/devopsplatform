@@ -178,7 +178,7 @@ func deliverySchema(dialect string) []string {
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS delivery_templates (id %s, document %s NOT NULL, owner VARCHAR(191) NOT NULL)`, identity, doc),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS delivery_runs (id %s, plan %s NOT NULL, digest VARCHAR(80) NOT NULL, status VARCHAR(32) NOT NULL, execution %s NOT NULL, env_secrets %s NOT NULL, owner VARCHAR(191) NOT NULL, approver VARCHAR(191) NOT NULL, created_at BIGINT NOT NULL, revision BIGINT NOT NULL)`, identity, doc, doc, doc),
 	}
-	queries = append(queries, documentReportSchema(doc), fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_operation_updates (snapshot_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc))
+	queries = append(queries, documentReportSchema(doc), documentReportLinksSchema(doc), fmt.Sprintf(`CREATE TABLE IF NOT EXISTS api_document_operation_updates (snapshot_id BIGINT PRIMARY KEY, document %s NOT NULL)`, doc))
 	queries = append(queries, artifactRetentionSchema()...)
 	queries = append(queries, integrationSchema(identity, doc)...)
 	queries = append(queries, researchSchema(identity, doc)...)

@@ -17,6 +17,10 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 		t.Skip("opt-in isolated browser fixture")
 	}
 	s, h := apiTestingFixture(t)
+	if os.Getenv("DOCUMENT_REPORT_LINK_FIXTURE") == "1" {
+		reportLinkWork(t, s, "requirement", "演示需求：业主媒体管理")
+		reportLinkWork(t, s, "bug", "演示Bug：图片地址返回不完整")
+	}
 	doc := `{"openapi":"3.0.3","info":{"title":"上报记录隔离验证","version":"1"},"paths":{"/images":{"get":{"summary":"图片审核详情","responses":{"200":{"description":"图片列表"}}}},"/videos":{"get":{"summary":"视频审核详情","responses":{"200":{"description":"视频列表"}}}}}}`
 	a := receiptSubmit(t, h, doc, strings.Repeat("a", 32), false, "")
 	s.db.Exec(`UPDATE api_document_versions SET created_at=? WHERE id=?`, time.Now().Add(-48*time.Hour).Unix(), a.SnapshotID)
@@ -43,6 +47,7 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 		})
 		mux.HandleFunc("GET /api/registry/applications", func(w http.ResponseWriter, r *http.Request) { deliveryJSON(w, []any{}) })
 		mux.HandleFunc("GET /api/plugins/api-center/ui", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
 			http.ServeFile(w, r, filepath.Join(root, "api-center.html"))
 		})
 		mux.Handle("GET /api/plugins/api-center/assets/", http.StripPrefix("/api/plugins/api-center/", http.FileServer(http.Dir(root))))
@@ -87,6 +92,7 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 		h.ServeHTTP(w, r)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		if r.URL.Path == "/" || r.URL.Path == "/api-center.html" {
 			if r.URL.Path == "/" && os.Getenv("DOCUMENT_WORKSPACE_FIXTURE") == "1" {
 				http.ServeFile(w, r, filepath.Join(root, "shell.html"))
