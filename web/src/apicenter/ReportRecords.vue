@@ -16,11 +16,11 @@ import {Badge,Button,Input,InputGroup,InputGroupInput,InputGroupAddon,InputGroup
 import {FilterIcon,XIcon} from '@lucide/vue'
 import {reportStates,reportSources,reportRelation,reportTime,documentDestination,openDocumentWorkspace} from './reportModel.js'
 const route=useRoute(),router=useRouter(),navigateView=createViewNavigation(router)
-const service=ref(String(route.query.service||'')),environment=ref(String(route.query.environment||'')),actor=ref(String(route.query.actor||'')),source=ref(String(route.query.source||'')),state=ref(String(route.query.state||'')),protocol=ref(String(route.query.protocol||'')),mine=ref(route.query.mine==='1'),start=ref(String(route.query.start||'')),end=ref(String(route.query.end||'')),page=ref(Number(route.query.page)||1),pageSize=ref([20,50,100].includes(Number(route.query.page_size))?Number(route.query.page_size):20)
+const service=ref(String(route.query.service||'')),actor=ref(String(route.query.actor||'')),state=ref(String(route.query.state||'')),mine=ref(route.query.mine==='1'),start=ref(String(route.query.start||'')),end=ref(String(route.query.end||'')),page=ref(Number(route.query.page)||1),pageSize=ref([20,50,100].includes(Number(route.query.page_size))?Number(route.query.page_size):20)
 const me=ref(null),services=ref([]),environments=ref([]),rows=ref([]),total=ref(0),loading=ref(false),error=ref(''),detail=ref(null),detailLoading=ref(false),detailError=ref(''),selectedID=ref(String(route.query.report||'')),cancelBusy=ref(false),returnBusy=ref(false)
 let epoch=0,detailEpoch=0,controller
 const columns=[{id:'time',label:'上报时间 / 编号',size:155,minSize:145,required:true},{id:'target',label:'应用 / 环境',size:135,minSize:115,required:true},{id:'actor',label:'上报人 / 来源',size:125,minSize:100},{id:'result',label:'上报结果 / 当前关系',size:170,minSize:150,required:true},{id:'workItems',label:'关联需求 / Bug',size:220,minSize:180,flex:true},{id:'changes',label:'接口变化',size:165,minSize:145},{id:'actions',label:'操作',size:60,minSize:60,required:true,pin:'right'}]
-const filterCount=computed(()=>Number(!!protocol.value)+Number(!!source.value)+Number(!!(start.value||end.value)))
+const filterCount=computed(()=>Number(!!(start.value||end.value)))
 const changeColumns=[{id:'kind',label:'变化',size:90},{id:'operation',label:'功能 / 接口',size:360,flex:true},{id:'actions',label:'操作',size:115}]
 const differences=computed(()=>detail.value?.comparison?.changes||[])
 const changePage=ref(1),changePageSize=ref(20)
@@ -46,7 +46,7 @@ watch([linksDraft,linksBusy,selectingLinks],()=>{if(window.parent!==window)windo
 const appName=value=>services.value.find(s=>s.name===value)?.display_name||value
 const envName=value=>environments.value.find(e=>e.name===value)?.display_name||value||'未区分环境'
 const kindName=value=>({added:'新增',modified:'修改',removed:'删除'})[value]||value
-function query(){return {...(selectedID.value&&report.value?{detail_service:report.value.service,detail_environment:report.value.environment,detail_protocol:report.value.protocol}:{}),service:service.value,environment:environment.value,actor:actor.value,source:source.value,state:state.value,protocol:protocol.value,mine:mine.value?'1':'',start:start.value,end:end.value,page:String(page.value),page_size:String(pageSize.value),...(selectedID.value?{report:selectedID.value}:{})}}
+function query(){return {...(selectedID.value&&report.value?{detail_service:report.value.service,detail_environment:report.value.environment,detail_protocol:report.value.protocol}:{}),service:service.value,actor:actor.value,state:state.value,mine:mine.value?'1':'',start:start.value,end:end.value,page:String(page.value),page_size:String(pageSize.value),...(selectedID.value?{report:selectedID.value}:{})}}
 function remember(mode='replace'){const navigation=navigateView({path:'/reports',query:Object.fromEntries(Object.entries(query()).filter(([,v])=>v!==''))},mode==='push');if(window.parent!==window)window.parent.postMessage({type:'workspace.label',label:report.value&&selectedID.value?'上报记录 · '+appName(report.value.service)+' · '+envName(report.value.environment)+' · R'+report.value.number:'上报记录'},location.origin);return navigation}
 async function request(url,options){const r=await fetch(url,options);const v=await r.json();if(!r.ok){const e=Error(r.status===401?'登录已过期，请重新登录后重试':v.error||'读取失败');e.status=r.status;throw e}return v}
 async function load(reset=false,sync=true){if(reset)page.value=1;if(sync)remember();controller?.abort();controller=new AbortController();const seq=++epoch;loading.value=true;error.value='';const q=new URLSearchParams(Object.fromEntries(Object.entries(query()).filter(([k,v])=>v!==''&&!['report','start','end','detail_service','detail_environment','detail_protocol'].includes(k))));for(const [k,v] of [['start',start.value],['end',end.value]])if(v)q.set(k,String(Math.floor(new Date(v).getTime()/1000)));try{const v=await request('api/api-document-reports?'+q,{signal:controller.signal});if(seq!==epoch)return;rows.value=v.items;total.value=v.total}catch(e){if(seq===epoch&&e.name!=='AbortError')error.value=e.message}finally{if(seq===epoch)loading.value=false}}
@@ -64,7 +64,7 @@ function viewOperation(v){const target={...report.value,snapshot_id:v.kind==='re
 onMounted(async()=>{window.document.title='上报记录';try{[services.value,environments.value,me.value]=await Promise.all([request('api/services'),request('api/environments'),request('/api/me')]);await load();if(selectedID.value)await open(selectedID.value,false)}catch(e){error.value=e.message}})
 watch(()=>route.query,async q=>{
  let changed=false
- for(const [key,target] of Object.entries({service,environment,actor,source,state,protocol,start,end})){const value=String(q[key]||'');if(target.value!==value){target.value=value;changed=true}}
+ for(const [key,target] of Object.entries({service,actor,state,start,end})){const value=String(q[key]||'');if(target.value!==value){target.value=value;changed=true}}
  const nextSize=[20,50,100].includes(Number(q.page_size))?Number(q.page_size):20;if(pageSize.value!==nextSize){pageSize.value=nextSize;changed=true}
  const nextPage=Number(q.page)||1,nextMine=q.mine==='1';if(nextPage!==page.value||nextMine!==mine.value){page.value=nextPage;mine.value=nextMine;changed=true}
  if(q.report&&String(q.report)!==selectedID.value)await open(String(q.report),false)
@@ -78,20 +78,15 @@ onBeforeUnmount(()=>{epoch++;detailEpoch++;controller?.abort()})
   <PageHeader compact class="shrink-0 mb-3!" title="上报记录"><template #context><span v-if="!selectedID" class="text-sm text-muted-foreground">共 {{total}} 次上报</span></template><template #actions><Button v-if="selectedID" variant="outline" size="sm" :disabled="returnBusy" @click="back()"><Spinner v-if="returnBusy"/>返回上报记录</Button><Button variant="outline" size="sm" :disabled="loading||detailLoading||linksBusy||linksDraft!==null" @click="selectedID?open(selectedID):load()"><Spinner v-if="loading||detailLoading"/>刷新</Button></template></PageHeader>
   <section v-show="!selectedID" aria-label="上报记录检索" class="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
    <div class="flex shrink-0 flex-wrap items-center gap-2">
-    <InputGroup class="min-w-0 flex-1 basis-56"><InputGroupInput v-model="actor" placeholder="上报账号精确匹配" aria-label="上报账号" @keydown.enter="load(true)"/><InputGroupAddon align="inline-end"><InputGroupButton v-if="actor" aria-label="清空上报账号" size="icon-xs" @click="actor='';load(true)"><XIcon/></InputGroupButton></InputGroupAddon></InputGroup>
+    <InputGroup class="min-w-0 flex-1 basis-56"><InputGroupInput v-model="actor" placeholder="上报人" aria-label="上报人" title="按上报人的账号精确匹配" @keydown.enter="load(true)"/><InputGroupAddon align="inline-end"><InputGroupButton v-if="actor" aria-label="清空上报人" size="icon-xs" @click="actor='';load(true)"><XIcon/></InputGroupButton></InputGroupAddon></InputGroup>
     <OptionPicker v-model="service" aria-label="上报所属应用" class="w-40 max-w-full" :options="services.map(s=>({value:s.name,label:s.display_name||s.name}))" all-label="全部应用"/>
-    <OptionPicker v-model="environment" aria-label="上报环境" class="w-36 max-w-full" :options="environments.map(e=>({value:e.name,label:e.display_name||e.name}))" all-label="全部环境"/>
     <OptionPicker v-model="state" aria-label="上报结果" class="w-32 max-w-full" :options="Object.entries(reportStates).map(([value,label])=>({value,label}))" all-label="全部结果"/>
     <Popover><PopoverTrigger as-child><Button variant="outline" size="sm"><FilterIcon/>更多筛选<Badge v-if="filterCount" variant="secondary">{{filterCount}}</Badge></Button></PopoverTrigger><PopoverContent align="end" class="w-80 max-w-[calc(100vw-2rem)]"><FieldGroup class="gap-4">
-     <Field><FieldLabel>协议</FieldLabel><OptionPicker v-model="protocol" aria-label="上报协议" :options="[{value:'http',label:'HTTP'},{value:'dubbo',label:'Dubbo'}]" all-label="全部协议"/></Field>
-     <Field><FieldLabel>来源</FieldLabel><OptionPicker v-model="source" aria-label="上报来源" :options="Object.entries(reportSources).map(([value,label])=>({value,label}))" all-label="全部来源"/></Field>
      <DateRangeFilter v-model:start="start" v-model:end="end" label="上报时间" width="100%"/>
     </FieldGroup></PopoverContent></Popover>
     <Button size="sm" :disabled="loading" @click="load(true)"><Spinner v-if="loading"/>查询</Button>
    </div>
    <div v-if="filterCount" aria-label="已选上报筛选条件" class="flex shrink-0 flex-wrap items-center gap-2">
-    <Button v-if="protocol" variant="outline" size="sm" class="h-7 text-xs" :aria-label="'清除协议：'+(protocol==='dubbo'?'Dubbo':'HTTP')" @click="protocol='';load(true)">{{protocol==='dubbo'?'Dubbo':'HTTP'}}<XIcon class="size-3"/></Button>
-    <Button v-if="source" variant="outline" size="sm" class="h-7 max-w-full text-xs" :aria-label="'清除来源：'+(reportSources[source]||source)" @click="source='';load(true)"><span class="truncate">来源：{{reportSources[source]||source}}</span><XIcon class="size-3"/></Button>
     <Button v-if="start||end" variant="outline" size="sm" class="h-7 max-w-full text-xs" aria-label="清除上报时间" :title="(start||'不限开始')+' → '+(end||'不限结束')" @click="start='';end='';load(true)"><span class="truncate">{{start?start.replace('T',' '):'不限开始'}} → {{end?end.replace('T',' '):'不限结束'}}</span><XIcon class="size-3"/></Button>
    </div>
    <p v-if="error" role="alert" class="shrink-0 text-sm text-destructive">{{error}} <Button variant="outline" size="sm" @click="load()">重试</Button></p>
