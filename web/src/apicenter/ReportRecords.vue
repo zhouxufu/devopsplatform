@@ -1,6 +1,7 @@
 <script setup>
 import {ref,computed,onMounted,onBeforeUnmount,watch} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
+import {createViewNavigation} from '../shared/viewHistory.js'
 import PageSurface from '../shared/components/PageSurface.vue'
 import PageHeader from '../shared/components/PageHeader.vue'
 import OptionPicker from '../shared/components/OptionPicker.vue'
@@ -9,7 +10,7 @@ import DataTable from '../shared/components/DataTable.vue'
 import HelpTip from '../shared/components/HelpTip.vue'
 import {Badge,Button,Input,Checkbox,Field,FieldLabel,Spinner,Accordion,AccordionItem,AccordionTrigger,AccordionContent} from '../shared/shadcn-ui.js'
 import {reportStates,reportSources,reportRelation,reportTime,documentDestination,openDocumentWorkspace} from './reportModel.js'
-const route=useRoute(),router=useRouter()
+const route=useRoute(),router=useRouter(),navigateView=createViewNavigation(router)
 const service=ref(String(route.query.service||'')),environment=ref(String(route.query.environment||'')),actor=ref(String(route.query.actor||'')),source=ref(String(route.query.source||'')),state=ref(String(route.query.state||'')),protocol=ref(String(route.query.protocol||'')),mine=ref(route.query.mine==='1'),start=ref(String(route.query.start||'')),end=ref(String(route.query.end||'')),page=ref(Number(route.query.page)||1)
 const me=ref(null),services=ref([]),environments=ref([]),rows=ref([]),total=ref(0),loading=ref(false),error=ref(''),detail=ref(null),detailLoading=ref(false),detailError=ref(''),selectedID=ref(String(route.query.report||'')),changeKind=ref(''),changeSearch=ref(''),cancelBusy=ref(false)
 let epoch=0,detailEpoch=0,controller
@@ -21,15 +22,26 @@ const appName=value=>services.value.find(s=>s.name===value)?.display_name||value
 const envName=value=>environments.value.find(e=>e.name===value)?.display_name||value||'未区分环境'
 const kindName=value=>({added:'新增',modified:'修改',removed:'删除'})[value]||value
 function query(){return {...(selectedID.value&&report.value?{detail_service:report.value.service,detail_environment:report.value.environment,detail_protocol:report.value.protocol}:{}),service:service.value,environment:environment.value,actor:actor.value,source:source.value,state:state.value,protocol:protocol.value,mine:mine.value?'1':'',start:start.value,end:end.value,page:String(page.value),...(selectedID.value?{report:selectedID.value}:{})}}
-function remember(){router.replace({path:'/reports',query:Object.fromEntries(Object.entries(query()).filter(([,v])=>v!==''))});if(window.parent!==window)window.parent.postMessage({type:'workspace.label',label:report.value&&selectedID.value?'上报记录 · '+appName(report.value.service)+' · '+envName(report.value.environment)+' · R'+report.value.number:'上报记录'},location.origin)}
+function remember(mode='replace'){const navigation=navigateView({path:'/reports',query:Object.fromEntries(Object.entries(query()).filter(([,v])=>v!==''))},mode==='push');if(window.parent!==window)window.parent.postMessage({type:'workspace.label',label:report.value&&selectedID.value?'上报记录 · '+appName(report.value.service)+' · '+envName(report.value.environment)+' · R'+report.value.number:'上报记录'},location.origin);return navigation}
 async function request(url,options){const r=await fetch(url,options);const v=await r.json();if(!r.ok)throw Error(r.status===401?'登录已过期，请重新登录后重试':v.error||'读取失败');return v}
-async function load(reset=false){if(reset)page.value=1;remember();controller?.abort();controller=new AbortController();const seq=++epoch;loading.value=true;error.value='';const q=new URLSearchParams(Object.fromEntries(Object.entries(query()).filter(([k,v])=>v!==''&&!['report','start','end','detail_service','detail_environment','detail_protocol'].includes(k))));for(const [k,v] of [['start',start.value],['end',end.value]])if(v)q.set(k,String(Math.floor(new Date(v).getTime()/1000)));try{const v=await request('api/api-document-reports?'+q,{signal:controller.signal});if(seq!==epoch)return;rows.value=v.items;total.value=v.total}catch(e){if(seq===epoch&&e.name!=='AbortError')error.value=e.message}finally{if(seq===epoch)loading.value=false}}
-async function open(id){selectedID.value=id;remember();const seq=++detailEpoch;detailLoading.value=true;detailError.value='';detail.value=null;changeKind.value='';changeSearch.value='';try{const v=await request('api/api-document-reports/'+encodeURIComponent(id));if(seq===detailEpoch){detail.value=v;remember()}}catch(e){if(seq===detailEpoch)detailError.value=e.message}finally{if(seq===detailEpoch)detailLoading.value=false}}
-function back(){detailEpoch++;selectedID.value='';detail.value=null;detailError.value='';remember()}
+async function load(reset=false,sync=true){if(reset)page.value=1;if(sync)remember();controller?.abort();controller=new AbortController();const seq=++epoch;loading.value=true;error.value='';const q=new URLSearchParams(Object.fromEntries(Object.entries(query()).filter(([k,v])=>v!==''&&!['report','start','end','detail_service','detail_environment','detail_protocol'].includes(k))));for(const [k,v] of [['start',start.value],['end',end.value]])if(v)q.set(k,String(Math.floor(new Date(v).getTime()/1000)));try{const v=await request('api/api-document-reports?'+q,{signal:controller.signal});if(seq!==epoch)return;rows.value=v.items;total.value=v.total}catch(e){if(seq===epoch&&e.name!=='AbortError')error.value=e.message}finally{if(seq===epoch)loading.value=false}}
+async function open(id,push=true){const changed=selectedID.value!==id,seq=++detailEpoch;detail.value=null;selectedID.value=id;detailLoading.value=true;detailError.value='';changeKind.value='';changeSearch.value='';try{await remember(push&&changed?'push':'replace');if(seq!==detailEpoch)return;const v=await request('api/api-document-reports/'+encodeURIComponent(id));if(seq===detailEpoch){detail.value=v;remember()}}catch(e){if(seq===detailEpoch)detailError.value=e.message}finally{if(seq===detailEpoch)detailLoading.value=false}}
+
+function back(useHistory=true){
+ if(useHistory){const previous=router.options.history.state.back;if(typeof previous==='string'){const u=new URL(previous,location.origin);if(u.pathname==='/reports'&&!u.searchParams.has('report')){router.back();return}}}
+ detailEpoch++;selectedID.value='';detail.value=null;detailError.value='';detailLoading.value=false;remember()
+}
 async function cancel(){if(cancelBusy.value)return;cancelBusy.value=true;try{await request('api/api-document-reports/'+report.value.id+'/cancel',{method:'POST'});await open(report.value.id);await load()}catch(e){detailError.value=e.message}finally{cancelBusy.value=false}}
 function viewOperation(v){const target={...report.value,snapshot_id:v.kind==='removed'?report.value.baseline_id:report.value.snapshot_id};openDocumentWorkspace(documentDestination(target,{operation:v.id}))}
-onMounted(async()=>{window.document.title='上报记录';try{[services.value,environments.value,me.value]=await Promise.all([request('api/services'),request('api/environments'),request('/api/me')]);await load();if(selectedID.value)await open(selectedID.value)}catch(e){error.value=e.message}})
-watch(()=>route.query.report,id=>{if(id&&id!==selectedID.value)open(String(id));else if(!id&&selectedID.value)back()})
+onMounted(async()=>{window.document.title='上报记录';try{[services.value,environments.value,me.value]=await Promise.all([request('api/services'),request('api/environments'),request('/api/me')]);await load();if(selectedID.value)await open(selectedID.value,false)}catch(e){error.value=e.message}})
+watch(()=>route.query,async q=>{
+ let changed=false
+ for(const [key,target] of Object.entries({service,environment,actor,source,state,protocol,start,end})){const value=String(q[key]||'');if(target.value!==value){target.value=value;changed=true}}
+ const nextPage=Number(q.page)||1,nextMine=q.mine==='1';if(nextPage!==page.value||nextMine!==mine.value){page.value=nextPage;mine.value=nextMine;changed=true}
+ if(q.report&&String(q.report)!==selectedID.value)await open(String(q.report),false)
+ else if(!q.report&&selectedID.value)back(false)
+ if(changed)await load(false,false)
+})
 onBeforeUnmount(()=>{epoch++;detailEpoch++;controller?.abort()})
 </script>
 <template>

@@ -43,6 +43,7 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 		})
 		mux.HandleFunc("GET /api/registry/applications", func(w http.ResponseWriter, r *http.Request) { deliveryJSON(w, []any{}) })
 		mux.HandleFunc("GET /api/plugins/api-center/ui", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
 			http.ServeFile(w, r, filepath.Join(root, "api-center.html"))
 		})
 		mux.Handle("GET /api/plugins/api-center/assets/", http.StripPrefix("/api/plugins/api-center/", http.FileServer(http.Dir(root))))
@@ -87,6 +88,7 @@ func TestDocumentReportsBrowserFixture(t *testing.T) {
 		h.ServeHTTP(w, r)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		if r.URL.Path == "/" || r.URL.Path == "/api-center.html" {
 			if r.URL.Path == "/" && os.Getenv("DOCUMENT_WORKSPACE_FIXTURE") == "1" {
 				http.ServeFile(w, r, filepath.Join(root, "shell.html"))

@@ -10,6 +10,7 @@ import {workspaceNavigation, workspaceBreadcrumb} from './navigation.js'
 import {platformPage,platformWorkspacePlugin} from './platformPages.js'
 import {workspaceCloseTargets,nextWorkspaceAfterClose} from './workspaceActions.js'
 import {chooseWorkspace} from './workspaceTarget.js'
+import {createWorkspaceHistory} from './workspaceHistory.js'
 
 
 import AppearanceSettings from './AppearanceSettings.vue'
@@ -84,6 +85,13 @@ const activeWorkspace = computed(() => st.workspaces.find(w => w.id === st.activ
 const homeWorkspaces=computed(()=>st.workspaces.map(w=>({...w,displayTitle:workspaceTitle(w)})))
 const windowsReady=ref(false),authReady=ref(false)
 st._activationSeq=0
+const workspaceHistory=createWorkspaceHistory(window,{
+ activeName:()=>activeWorkspace.value?.el?.name||'',
+ hasWorkspace:name=>st.workspaces.some(w=>w.el.name===name),
+ activate:name=>switchWs(st.workspaces.find(w=>w.el.name===name)?.id||0,{history:false}),
+ canRestore:()=>windowsReady.value&&!st.showLogin,
+})
+onBeforeUnmount(()=>workspaceHistory.dispose())
 let loginResumeURL='/'
 watch(()=>st.showLogin,value=>{document.documentElement.toggleAttribute('data-console-auth-page',value);document.title=value?'登录 · DevOps 控制台':'DevOps 控制台'},{immediate:true})
 function currentWorkspaceHash(w){
@@ -104,7 +112,7 @@ function openPlatformWorkspace(view){
 function workspaceRoute(w){try{if(w.el?.contentWindow?.location.origin===location.origin)return w.el.contentWindow.location.hash||w.hash}catch{}return w.hash}
 function openTarget(plugin,hash,source={context:windowContext({})},{menu=false,forceNew=false}={}){
  const match=chooseWorkspace(st.workspaces.map(w=>({...w,hash:currentWorkspaceHash(w),routeHash:workspaceRoute(w)})),plugin.name,hash,{menu,forceNew,active:st.active,context:source.context})
- if(match){const workspace=st.workspaces.find(w=>w.id===match.workspace.id);switchWs(workspace.id);if(match.navigate)workspace.el.contentWindow.postMessage({type:'workspace.navigate',hash:match.hash||hash},location.origin)}
+ if(match){const workspace=st.workspaces.find(w=>w.id===match.workspace.id),replace=st.active!==workspace.id;switchWs(workspace.id);if(match.navigate)workspace.el.contentWindow.postMessage({type:'workspace.navigate',hash:match.hash||hash,replace},location.origin)}
  else openPlugin(plugin,hash,source)
 }
 function navigationOpen(action){
@@ -208,7 +216,7 @@ function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
   st.workspaces.push(ws)
   switchWs(ws.id)
 }
-function switchWs(id) {
+function switchWs(id,{history:recordHistory=true}={}) {
   if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
   st.active = id
   if(activeWorkspace.value)activeWorkspace.value.lastActivated=++st._activationSeq
@@ -216,6 +224,7 @@ function switchWs(id) {
   if(c){st.gSvc=c.service;st.gEnv=c.environment;st.range=[...(c.range||[])];st.rangeMinutes=c.rangeMinutes;if(c.rangeMinutes>0)st.range=recentRange(c.rangeMinutes)}
   st.workspaces.forEach(w => {w.el.style.display = w.id === id ? 'block' : 'none';try{w.el.contentWindow.postMessage({type:'workspace.visibility',active:w.id===id},location.origin)}catch{}})
   rememberWindows()
+  if(recordHistory)workspaceHistory.record()
 }
 const closingWorkspace = ref(false)
 async function closeWorkspaceIDs(ids){
@@ -289,10 +298,10 @@ function requireLogin(){
  if(st.showLogin)return
  loginResumeURL=location.pathname==='/'?location.pathname+location.search+location.hash:'/'
  st.reauthUser=st.me.username||'';st.username=st.reauthUser||st.username;st.pwd='';st.loginError='';st.loginExpired=!!st.reauthUser;st.showLogin=true
- history.replaceState(null,'',loginPageURL(loginReturnTarget(),st.loginExpired))
+ history.replaceState(history.state,'',loginPageURL(loginReturnTarget(),st.loginExpired))
  for(const ws of st.workspaces)ws.el.contentWindow?.postMessage({type:'workspace.visibility',active:false},location.origin)
 }
-function loginRouteChanged(){if(st.showLogin&&location.pathname!=='/login')history.replaceState(null,'',loginPageURL(loginReturnTarget(),st.loginExpired))}
+function loginRouteChanged(){if(st.showLogin&&location.pathname!=='/login')history.replaceState(history.state,'',loginPageURL(loginReturnTarget(),st.loginExpired))}
 window.addEventListener('popstate',loginRouteChanged)
 window.addEventListener(AUTH_REQUIRED_EVENT,requireLogin)
 async function login() {
@@ -304,7 +313,7 @@ async function login() {
   st.pwd='';resetPlatformAuth()
   if(st.loginExpired&&st.reauthUser===result.username){
    await loadIdentity();st.showLogin=false;st.loginExpired=false
-   history.replaceState(null,'',loginResumeURL)
+   history.replaceState(history.state,'',loginResumeURL)
    for(const ws of st.workspaces)ws.el.contentWindow?.postMessage({type:'platform.auth.restored'},location.origin)
    switchWs(st.active)
    return
@@ -398,6 +407,7 @@ window.addEventListener('message', e => {
   if (e.origin !== location.origin) return
   const ws = st.workspaces.find(w => w.el.contentWindow === e.source)
   if(ws&&e.data?.type==='platform.auth.required'){requireLogin();return}
+  if(ws&&e.data?.type==='workspace.history'){workspaceHistory.fromFrame(ws.el.name);return}
   if(ws&&e.data?.type==='workspace.route'){ws.hash=currentWorkspaceHash(ws);rememberWindows()}
   if(ws&&e.data?.type==='workspace.label'&&typeof e.data.label==='string')ws.label=e.data.label.trim().slice(0,160)
   if(ws&&e.data?.type==='application.presentation.changed')loadServices()
@@ -461,7 +471,7 @@ onMounted(async () => {
   for(const row of restored.windows)openPlugin(row.plugin,row.hash,row,row)
   if(restored.active>=0)switchWs(st.workspaces[restored.active]?.id||0)
   else openDefault()
-  windowsReady.value=true;rememberWindows()
+  windowsReady.value=true;workspaceHistory.start();rememberWindows()
 })
 window.addEventListener('pagehide',rememberWindows)
 const recentClock = setInterval(() => { if (st.rangeMinutes > 0) st.range = recentRange(st.rangeMinutes) }, 30000)
