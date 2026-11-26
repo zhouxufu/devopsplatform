@@ -490,7 +490,7 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
 <template>
 <TooltipProvider>
 <LoginView v-if="st.showLogin" v-model:username="st.username" v-model:password="st.pwd" :busy="st.loginBusy" :error="st.loginError" :expired="st.loginExpired" :preserve-workspace="!!st.reauthUser" @submit="login"/>
-<SidebarProvider v-show="authReady&&!st.showLogin" class="h-svh min-h-0" :style="{'--sidebar-width':'var(--console-sidebar-width,15rem)',...(activeWorkspace?.plugin?.name==='api-center'&&activeWorkspace.hash?.startsWith('#/documents')?{'--sidebar-width':'12.5rem'}:{})}" :inert="st.showLogin?true:undefined">
+<SidebarProvider v-show="authReady&&!st.showLogin" class="h-svh min-h-0" :style="{'--sidebar-width':'var(--console-sidebar-width,15rem)',...(activeWorkspace?.plugin?.name==='api-center'&&/^#\/(documents|reports)(\?|$)/.test(activeWorkspace.hash||'')?{'--sidebar-width':'12.5rem'}:{})}" :inert="st.showLogin?true:undefined">
  <ConsoleNavigation :plugins="st.plugins" :workspace="activeWorkspace" :home="st.active===0" :admin="st.me.role==='admin'" @home="openHome" @open="navigationOpen" @platform="openPlatformWorkspace"/>
  <SidebarInset class="h-svh min-w-0 overflow-hidden">
   <HeaderWithTabs

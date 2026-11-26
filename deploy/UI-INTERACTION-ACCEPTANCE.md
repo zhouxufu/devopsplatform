@@ -3631,3 +3631,12 @@ fixture.html 为临时组件验收页备份，测试后已从 web/ 移除。只�
 - 收尾回读：最终独立复验 1908×910 内容视口、接口工作区 1708×854，表格宽／容器净宽／scrollWidth 均为 1661px，仍有 12 个完整数据行。已成功保存并目视核对 `desktop-final.png`；随后把分页选择器加宽到 128px，生产构建与 402 项测试重跑通过，浏览器确认“每页 30 条”标签的 clientWidth=scrollWidth=65px，无截断，12 行与无横向溢出不变。最后一次截图超时，最终标签调整以运行时几何记录为证，未算截图成功。Ego 验收空间已结束，隔离 Node 服务已正常退出（退出码 0），fixture-stop-state.json 中业务写请求为 0。
 - 用户要求本地试用后，确认既有 9800 平台及四插件、VictoriaLogs 正常运行，仅重启 5173 的 Windows Vite 开发入口。该入口的接口文档 UI 单独读取当前源码，API 仍代理至原 9800 鉴权网关；HTTP 回读首页与文档 UI 为 200、DocumentSearch 返回本轮紧凑实现、后端 health.ok=true，未登录文档查询仍返回 401。前端 PID 5084，原后台 PID 9624 保持；未更换二进制或改动数据库，未更新远端环境。初次 UI 路由仍被 API 代理接管，改用 Vite proxy 的静态 UI bypass 后已回读确认生效。
 - main 源码提交复验：只转入本轮四个源码文件及本节记录，原工作区已有面包屑／详情外侧关闭修改仍留在原工作区。main 上 402 项前端测试与生产构建、组件／表格／样式隔离检查通过（main-frontend-tests.log、main-build.log 位于原工作区本轮 artifacts 目录）；未重新运行完整浏览器矩阵及后端 race。此提交只含源码和记录，不同步内嵌前端产物；打包使用既有 scripts/build-web.sh／build-all.sh 生成，不代表已替换本地或远端运行二进制。
+
+### 2026-11-26 上报记录紧凑布局合入 main（源码提交，未发布）
+
+- 在 main 的 ffab924 上叠加紧凑标题／筛选、更多筛选浮层、fill／compact 列表、合并结果与当前关系、精简关联摘要，以及上报工作区的 200px 侧栏。未带入原工作区其余修改。
+- 保留 main 已合入的统一 ListPagination（20／50／100）、page_size 路由与查询契约、接口变化分页、FieldDiffDetails 层级差异，以及 reportListLocation／returnBusy 的显式返回与防重复保护。分页组件仅为本列表添加 shrink-0 与紧凑上下间距，未更改共享组件。源码对比确认详情模板及除 UI 导入／列配置／筛选计数外的主线脚本完全一致；权限、关联 CAS、草稿离开保护与原快照归属保持。
+- main 上最终 411 项前端测试通过，0 失败／跳过；生产构建、组件／表格／样式隔离与编辑器资产检查通过，git diff --check 通过。隔离生产 UI 实测从 20 切换 50 条、第二页 26 条；打开 R13 并展开主线字段差异，实际展示修改前“图片列表”及修改后“图片完整地址列表”；跳到原快照文档后返回仍为 page=2&page_size=50；切换 100 后为 76 条、1/1 页。
+- 本次浏览器使用 main 构建与内存 API；仅验证前端契约与交互，不代表真实后台保存或外部资源集成通过。原工作区既有响应式／关联冲突／登录过期验收见其 artifacts/reports-compact-20261126/，本次未重跑完整矩阵与后端 race；Windows 缺 gcc 和系统调用兼容性的既有限制仍保留，不作完整上线就绪声明。
+- 证据：原工作区 artifacts/reports-compact-20261126/main-commit/ 中 frontend-tests.log、build.log、browser-result.json、fixture-stop-state.json 与三轮浏览器脚本。浏览器空间已结束，19843 临时 Node 夹具退出码 0，未预期业务写入 0；未更换本地运行二进制、未更新远端、未推送。浏览器工具提示更新，本轮未升级。
+- 此次提交源码与验收记录，未同步内嵌前端产物；打包继续使用 scripts/build-web.sh／build-all.sh 生成，不能将源码提交当作发布已生效。
