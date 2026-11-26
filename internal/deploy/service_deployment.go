@@ -136,8 +136,8 @@ func (s *Store) serviceDeploymentTerms(spec ServiceDeploymentSpec) (string, stri
 	return config, td, policy, nil
 }
 func (s *Store) previewServiceDeployment(ctx context.Context, m *ReleaseManager, spec ServiceDeploymentSpec) (*ServiceDeploymentGrant, error) {
-	if strings.TrimSpace(spec.Reason) == "" || len(spec.Reason) > 2000 {
-		return nil, fmt.Errorf("请填写部署原因（最多2000字符）")
+	if len(spec.Reason) > 2000 {
+		return nil, fmt.Errorf("部署原因最多 2000 字节")
 	}
 	if spec.ChangeID != 0 || spec.PreparationID != 0 {
 		return nil, fmt.Errorf("独立变更请使用整次发布入口")

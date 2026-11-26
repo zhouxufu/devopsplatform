@@ -448,7 +448,7 @@ func TestDeliveryNacosPreflightIgnoresRandomBackupNonceButDetectsRemoteDrift(t *
 	}
 }
 
-func TestDeliveryStopUncertainWriteRequiresPauseReasonAndPreservesLedger(t *testing.T) {
+func TestDeliveryStopUncertainWriteRequiresPauseAndPreservesLedger(t *testing.T) {
 	s, m, req := deliveryFixture(t)
 	run, e := s.CreateDeliveryRun(req, "alice", m)
 	if e != nil {
@@ -472,9 +472,6 @@ func TestDeliveryStopUncertainWriteRequiresPauseReasonAndPreservesLedger(t *test
 	if w := call("outsider", "核对中断"); w.Code == 200 {
 		t.Fatal("outsider stopped run")
 	}
-	if w := call("alice", ""); w.Code == 200 {
-		t.Fatal("empty stop reason")
-	}
 	lease, e := s.claimDeliveryControl(run.ID, "alice")
 	if e != nil {
 		t.Fatal(e)
@@ -483,7 +480,7 @@ func TestDeliveryStopUncertainWriteRequiresPauseReasonAndPreservesLedger(t *test
 		t.Fatal("active coordinator stopped unsafely")
 	}
 	s.finishDeliveryControl(run.ID, lease, "paused", "operator paused")
-	if w := call("alice", "确认后终止后续"); w.Code != 200 {
+	if w := call("alice", ""); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
 	got := s.DeliveryRun(run.ID)

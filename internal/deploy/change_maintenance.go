@@ -91,8 +91,8 @@ func (s *Store) maintenanceState(id int64, service, actor string) (map[string]an
 // A single transaction locks and rechecks the exact reviewed record, payload,
 // ownership and links. Preview performs identical validation then rolls back.
 func (s *Store) maintainChange(id int64, req changeMaintenanceRequest, actor string, save bool) (map[string]any, error) {
-	if req.Digest == "" || len(req.Reason) < 1 || len(req.Reason) > 2000 || (req.Action != "edit" && req.Action != "archive" && req.Action != "ready") {
-		return nil, fmt.Errorf("请提供原摘要、edit/archive/ready 动作和说明")
+	if req.Digest == "" || len(req.Reason) > 2000 || (req.Action != "edit" && req.Action != "archive" && req.Action != "ready") {
+		return nil, fmt.Errorf("请提供原摘要和有效动作，说明最多 2000 字节")
 	}
 	tx, err := s.db.Begin()
 	if err != nil {

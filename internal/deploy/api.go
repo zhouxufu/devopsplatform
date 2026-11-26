@@ -1461,7 +1461,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				writeError(w, http.StatusPreconditionRequired, "受保护环境回滚需要二次确认")
 				return
 			}
-			if env != nil && env.RequireReason && strings.TrimSpace(req.Reason) == "" {
+			if env != nil && env.Protected && env.RequireReason && strings.TrimSpace(req.Reason) == "" {
 				writeError(w, http.StatusBadRequest, "受保护环境回滚必须填写原因")
 				return
 			}
@@ -1744,7 +1744,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				writeError(w, http.StatusPreconditionRequired, "受保护环境必须通过发布单审批，不能从流水线直接部署")
 				return
 			}
-			if target.RequireReason && strings.TrimSpace(req.Reason) == "" {
+			if target.Protected && target.RequireReason && strings.TrimSpace(req.Reason) == "" {
 				writeError(w, http.StatusBadRequest, "该环境要求填写发布原因")
 				return
 			}

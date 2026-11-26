@@ -28,3 +28,9 @@ test('Jpom compatibility keeps instance management while custom/manual targets r
  assert.equal(instanceVersionText({java_mode:'jpom'}),'未核验（Jpom 共享 JAR）')
  assert.equal(instanceVersionText({version:'verified-version'}),'verified-version')
 })
+
+test('an unprotected target with a legacy reason flag accepts an empty reason',()=>{
+ const body=instanceActionPayload(row,{protected:false,require_reason:true},{...pending,reason:''})
+ assert.equal(body.reason,'')
+ assert.equal(body.confirm_protected,false)
+})

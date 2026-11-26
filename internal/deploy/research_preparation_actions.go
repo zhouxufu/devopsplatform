@@ -11,13 +11,14 @@ import (
 )
 
 type researchPreparationActions struct {
-	Revision      int64  `json:"revision"`
-	Digest        string `json:"digest"`
-	NodeID        string `json:"node_id"`
-	CanReview     bool   `json:"can_review"`
-	ReviewBlocker string `json:"review_blocker,omitempty"`
-	CanCancel     bool   `json:"can_cancel"`
-	CancelBlocker string `json:"cancel_blocker,omitempty"`
+	ReasonOptional bool   `json:"reason_optional"`
+	Revision       int64  `json:"revision"`
+	Digest         string `json:"digest"`
+	NodeID         string `json:"node_id"`
+	CanReview      bool   `json:"can_review"`
+	ReviewBlocker  string `json:"review_blocker,omitempty"`
+	CanCancel      bool   `json:"can_cancel"`
+	CancelBlocker  string `json:"cancel_blocker,omitempty"`
 }
 
 // This narrowly cancels a preparation waiting at a human gate, before any
@@ -71,7 +72,7 @@ func (s *Store) researchPreparationActionContext(v *DeliveryRun, actor string) (
 	if actor == "" || actor == "local" || (v.Owner != actor && (n == nil || !namedApprover(n, actor))) {
 		return nil, fmt.Errorf("仅发起人或当前节点指定人员可以查看处理范围")
 	}
-	out := &researchPreparationActions{Revision: v.Revision, Digest: v.Digest}
+	out := &researchPreparationActions{Revision: v.Revision, Digest: v.Digest, ReasonOptional: s.environmentReasonOptional(v.Plan.Environment.Name, v.Plan.Environment.Protected)}
 	if step != nil {
 		out.NodeID = step.NodeID
 	}
@@ -98,7 +99,7 @@ func (s *Store) cancelResearchPreparation(v *DeliveryRun, actor, digest, reason 
 	if v == nil || revision <= 0 || revision != v.Revision || digest == "" || digest != v.Digest {
 		return nil, fmt.Errorf("准备单修订或摘要已变化，请核对最新状态")
 	}
-	if utf8.RuneCountInString(strings.TrimSpace(reason)) < 6 || len(reason) > 2000 {
+	if !s.environmentReasonOptional(v.Plan.Environment.Name, v.Plan.Environment.Protected) && utf8.RuneCountInString(strings.TrimSpace(reason)) < 6 || len(reason) > 2000 {
 		return nil, fmt.Errorf("请填写至少6字、最多2000字节的终止原因")
 	}
 	if blocker := s.researchPreparationCancelBlocker(v, actor); blocker != "" {
@@ -109,7 +110,10 @@ func (s *Store) cancelResearchPreparation(v *DeliveryRun, actor, digest, reason 
 	// a review of this same human gate; cancellation never advances a node.
 	step.Status = "canceled"
 	step.EndedAt = time.Now().Unix()
-	step.Detail = strings.TrimSpace(step.Detail + "\n终止旧准备 · " + actor + "：" + strings.TrimSpace(reason))
+	step.Detail = strings.TrimSpace(step.Detail + "\n终止旧准备 · " + actor)
+	if strings.TrimSpace(reason) != "" {
+		step.Detail += "：" + strings.TrimSpace(reason)
+	}
 	v.Status = "canceled"
 	if err := s.saveDeliveryRun(v); err != nil {
 		return nil, err

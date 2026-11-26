@@ -90,6 +90,7 @@ func TestWaitingPreparationCancelGuards(t *testing.T) {
 			case "digest":
 				digest = "other"
 			case "reason":
+				run.Plan.Environment.Protected = true
 				reason = "短"
 			case "lease":
 				run.Steps[1].LeaseUntil = time.Now().Unix() + 60

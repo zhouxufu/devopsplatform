@@ -12,13 +12,23 @@ import (
 
 var fullBuildCommit = regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`)
 
+// nil scope denotes a historical snapshot that did not record its build environment.
+// An explicit empty name is an environment-independent build.
+type buildReasonScope struct {
+	Name      string `json:"name"`
+	Protected bool   `json:"protected,omitempty"`
+}
 type buildSnapshot struct {
-	Service  Service         `json:"service"`
-	Delivery ServiceDelivery `json:"delivery"`
+	ReasonScope *buildReasonScope `json:"reason_scope,omitempty"`
+	Service     Service           `json:"service"`
+	Delivery    ServiceDelivery   `json:"delivery"`
 }
 
-func (s *Store) saveBuildSnapshot(id int64, sv *Service, d *ServiceDelivery) error {
+func (s *Store) saveBuildSnapshot(id int64, sv *Service, d *ServiceDelivery, scope ...*buildReasonScope) error {
 	v := buildSnapshot{Service: *sv}
+	if len(scope) > 0 {
+		v.ReasonScope = scope[0]
+	}
 	// Freeze the concrete template content/version without mutating app settings.
 	v.Service.Steps = make([]StepInst, len(sv.Steps))
 	for i, step := range sv.Steps {
@@ -75,6 +85,30 @@ func (s *Store) buildReplay(id int64) (*Service, *ServiceDelivery, string, error
 	}
 	return &v.Service, &v.Delivery, commit, nil
 }
+func (s *Store) buildControlScope(run *PipelineRun) (*buildReasonScope, bool) {
+	var sealed string
+	var snap buildSnapshot
+	if s.db.QueryRow(`SELECT config_cipher FROM build_run_snapshots WHERE run_id=?`, run.ID).Scan(&sealed) == nil {
+		plain, err := s.decryptSecret(sealed)
+		if err == nil && json.Unmarshal([]byte(plain), &snap) == nil && snap.Service.Name == run.Service {
+			if snap.ReasonScope == nil && snap.Service.DocumentEnvironment != "" {
+				snap.ReasonScope = &buildReasonScope{Name: snap.Service.DocumentEnvironment}
+			}
+		} else {
+			return nil, true
+		}
+	}
+	scope := snap.ReasonScope
+	if scope == nil && run.DeployEnvironment != "" {
+		scope = &buildReasonScope{Name: run.DeployEnvironment}
+	}
+	required := scope == nil || scope.Protected || scope.Name != "" && !s.environmentReasonOptional(scope.Name, false)
+	if run.DeployEnvironment != "" && !s.environmentReasonOptional(run.DeployEnvironment, false) {
+		required = true
+	}
+	return scope, required
+}
+
 func registerBuildControlRoutes(mux *http.ServeMux, st *Store, pr *PipelineRunner, wj func(http.ResponseWriter, any), failure func(http.ResponseWriter, int, any), actor func(*http.Request) string) {
 	mux.HandleFunc("GET /api/services/{name}/build-environments", func(w http.ResponseWriter, r *http.Request) {
 		options, required, err := st.buildEnvironmentOptions(r.PathValue("name"))
@@ -133,7 +167,8 @@ func registerBuildControlRoutes(mux *http.ServeMux, st *Store, pr *PipelineRunne
 		if replayError != nil {
 			detail = replayError.Error()
 		}
-		result := map[string]any{"can_stop": allowed(r, run) && cancel && run.Status == "running", "can_retry": allowed(r, run) && replayError == nil && run.Status != "running" && run.Status != "waiting_deploy", "commit": commit, "retry_unavailable": detail}
+		_, required := st.buildControlScope(run)
+		result := map[string]any{"reason_required": required, "can_stop": allowed(r, run) && cancel && run.Status == "running", "can_retry": allowed(r, run) && replayError == nil && run.Status != "running" && run.Status != "waiting_deploy", "commit": commit, "retry_unavailable": detail}
 		if d != nil {
 			result["runner"] = d.Runner
 			result["build_environment"] = d.BuildEnvironment
@@ -157,7 +192,8 @@ func registerBuildControlRoutes(mux *http.ServeMux, st *Store, pr *PipelineRunne
 			Confirm bool   `json:"confirm"`
 			Reason  string `json:"reason"`
 		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&body) != nil || !body.Confirm || strings.TrimSpace(body.Reason) == "" {
+		scope, required := st.buildControlScope(run)
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&body) != nil || !body.Confirm || required && strings.TrimSpace(body.Reason) == "" {
 			failure(w, 400, "确认并填写重试原因")
 			return
 		}
@@ -166,7 +202,7 @@ func registerBuildControlRoutes(mux *http.ServeMux, st *Store, pr *PipelineRunne
 			failure(w, 409, e)
 			return
 		}
-		next, e := pr.StartWithOptions(sv, false, PipelineRunOptions{Branch: commit, ReplayDelivery: d, Trigger: "retry"}, actor(r))
+		next, e := pr.StartWithOptions(sv, false, PipelineRunOptions{Branch: commit, ReplayDelivery: d, replayReasonScope: scope, Trigger: "retry"}, actor(r))
 		if e != nil {
 			failure(w, 409, e)
 			return
@@ -186,7 +222,8 @@ func registerBuildControlRoutes(mux *http.ServeMux, st *Store, pr *PipelineRunne
 		var body struct {
 			Reason string `json:"reason"`
 		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&body) != nil || strings.TrimSpace(body.Reason) == "" {
+		_, required := st.buildControlScope(run)
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&body) != nil || required && strings.TrimSpace(body.Reason) == "" {
 			failure(w, 400, "请填写取消原因")
 			return
 		}

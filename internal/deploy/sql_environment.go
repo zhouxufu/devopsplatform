@@ -57,8 +57,8 @@ func normalizeSQLEnvironmentOverridesForSave(v *SQLChange, strictSQL bool) error
 			return fmt.Errorf("第 %d 个 SQL 环境例外：请选择有效且不重复的环境", i+1)
 		}
 		seen[x.Environment] = true
-		if x.Reason == "" || len(x.Reason) > 2000 {
-			return fmt.Errorf("第 %d 个 SQL 环境例外：请填写原因（不超过 2000 字节）", i+1)
+		if len(x.Reason) > 2000 {
+			return fmt.Errorf("第 %d 个 SQL 环境例外：原因不能超过 2000 字节", i+1)
 		}
 		if x.Skip {
 			if x.Content != "" {
@@ -86,9 +86,12 @@ func validateSQLOverrideEnvironments(q interface{ QueryRow(string, ...any) *sql.
 		return nil
 	}
 	for _, x := range v.EnvironmentOverrides {
-		var name string
-		if err := q.QueryRow(`SELECT name FROM environments WHERE name=?`, x.Environment).Scan(&name); err != nil {
+		var protected bool
+		if err := q.QueryRow(`SELECT protected FROM environments WHERE name=?`, x.Environment).Scan(&protected); err != nil {
 			return fmt.Errorf("SQL 环境例外的环境 %s 不存在或无法读取", x.Environment)
+		}
+		if protected && strings.TrimSpace(x.Reason) == "" {
+			return fmt.Errorf("受保护环境 %s 的 SQL 例外须填写原因", x.Environment)
 		}
 	}
 	return nil
@@ -110,13 +113,20 @@ func selectEnvironmentSQL(v *SQLChange, environment string) (SQLEnvironmentOverr
 	}
 	return SQLEnvironmentOverride{Environment: environment, Content: v.Content}, false, nil
 }
+func (s *Store) selectEnvironmentSQL(v *SQLChange, environment string) (SQLEnvironmentOverride, bool, error) {
+	selected, explicit, err := selectEnvironmentSQL(v, environment)
+	if err == nil && explicit && selected.Reason == "" && !s.environmentReasonOptional(environment, false) {
+		return selected, explicit, fmt.Errorf("环境 %s 的 SQL 例外须填写原因", environment)
+	}
+	return selected, explicit, err
+}
 func (s *Store) verifySQLScriptSelections(p *SQLExecutionPlan, environment string) error {
 	for _, selection := range p.ScriptSelections {
 		c := s.GetChange(selection.ChangeID)
 		if c == nil || c.SQL == nil || c.Status != ChangeReady || digestJSON([]any{c.Service, c.SQL}) != selection.ChangeDigest || selection.Environment != environment {
 			return fmt.Errorf("SQL 环境例外内容或状态已变化，请重新预检审批")
 		}
-		selected, explicit, err := selectEnvironmentSQL(c.SQL, environment)
+		selected, explicit, err := s.selectEnvironmentSQL(c.SQL, environment)
 		if err != nil || !explicit || selected.Skip != selection.Skip || selected.Content != selection.Content || selected.Reason != selection.Reason || c.SQL.Content != selection.DefaultContent {
 			return fmt.Errorf("SQL 环境脚本选择已变化，请重新预检审批")
 		}

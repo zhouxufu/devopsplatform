@@ -1,0 +1,1 @@
+import{d as t,o,A as r,B as n,e as c,z as l,b as d}from"./OptionPicker-2E_tGn1I.js";const m=t({__name:"CardDescription",props:{class:{}},setup(s){const e=s;return(a,p)=>(o(),r("div",{"data-slot":"card-description",class:n(c(l)("text-muted-foreground text-sm",e.class))},[d(a.$slots,"default")],2))}});export{m as _};

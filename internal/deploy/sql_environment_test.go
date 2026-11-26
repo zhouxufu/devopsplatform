@@ -32,6 +32,17 @@ func TestSQLEnvironmentOverridesValidationAndPersistence(t *testing.T) {
 			}
 		})
 	}
+	ordinary := base()
+	ordinary.SQL.EnvironmentOverrides = []SQLEnvironmentOverride{{Environment: "test", Skip: true}}
+	if err := st.CreateChange(ordinary); err != nil {
+		t.Fatal("unprotected override should allow an empty reason", err)
+	}
+	if err := st.UpsertEnvironment(Environment{Name: "test", DisplayName: "测试", Protected: true, Approvers: "reviewer"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.selectEnvironmentSQL(ordinary.SQL, "test"); err == nil {
+		t.Fatal("existing skip with no reason used after environment became protected")
+	}
 	unsupported := base()
 	unsupported.SQL.EnvironmentOverrides = []SQLEnvironmentOverride{{Environment: "prod", Content: "DROP TABLE menus", Reason: "保存原文待核对"}}
 	if err := st.CreateChange(unsupported); err != nil {

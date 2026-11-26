@@ -36,7 +36,7 @@ func (s *Store) deliveryChangeTarget(c *Change, environment string) (DeliveryRes
 			return t, fmt.Errorf("变更 #%d 缺少结构化 SQL", c.ID)
 		}
 		t.Alias = c.SQL.ResourceAlias
-		selected, _, selectionErr := selectEnvironmentSQL(c.SQL, environment)
+		selected, _, selectionErr := s.selectEnvironmentSQL(c.SQL, environment)
 		if selectionErr != nil {
 			return t, selectionErr
 		}

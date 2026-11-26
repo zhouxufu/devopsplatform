@@ -189,7 +189,7 @@ func (s *Store) previewPublicationScope(r *http.Request, m *ReleaseManager, spec
 		return nil, fmt.Errorf("整次发布仅适用于非受保护开发／测试环境")
 	}
 	req := *spec.Delivery
-	if req.Environment != spec.Environment || spec.Environment == "" || strings.TrimSpace(spec.Reason) == "" || req.PreflightToken != "" || req.CodePreparationID != "" || req.PreparationRunID != 0 || req.ClientRequestID != "" || spec.ArtifactID != 0 || spec.Branch != "" {
+	if req.Environment != spec.Environment || spec.Environment == "" || len(spec.Reason) > 2000 || req.PreflightToken != "" || req.CodePreparationID != "" || req.PreparationRunID != 0 || req.ClientRequestID != "" || spec.ArtifactID != 0 || spec.Branch != "" {
 		return nil, fmt.Errorf("交付来源或环境不一致")
 	}
 	req.Reason = spec.Reason

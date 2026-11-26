@@ -104,7 +104,10 @@ func registerResearchRuleEditor(mux *http.ServeMux, s *Store) {
 			return
 		}
 		if local != nil && local.ReleaseRequired != nil {
-			effective = policy.Result{Decision: "not_independent", Reason: "人工调整：" + local.NoReleaseReason}
+			effective = policy.Result{Decision: "not_independent", Reason: "人工调整"}
+			if local.NoReleaseReason != "" {
+				effective.Reason += "：" + local.NoReleaseReason
+			}
 			if *local.ReleaseRequired {
 				effective.Decision = "independent"
 			}

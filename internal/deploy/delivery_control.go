@@ -233,7 +233,7 @@ func registerDeliveryControlRoutes(mux *http.ServeMux, s *Store, m *ReleaseManag
 			}
 			if action == "stop" {
 				control := s.DeliveryControl(id)
-				if (run.Status != "approved" && run.Status != "running") || control.State == "running" || control.State == "pausing" || strings.TrimSpace(body.Reason) == "" || len(body.Reason) > 512 {
+				if (run.Status != "approved" && run.Status != "running") || control.State == "running" || control.State == "pausing" || !s.environmentReasonOptional(run.Plan.Environment.Name, run.Plan.Environment.Protected) && strings.TrimSpace(body.Reason) == "" || len(body.Reason) > 512 {
 					deliveryWriteError(w, 409, "请先暂停协调器、核对当前结果并填写终止原因")
 					return
 				}

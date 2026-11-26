@@ -627,7 +627,7 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 			p.Blockers = append(p.Blockers, "请明确核对跨类型步骤的业务依赖和执行顺序")
 		}
 	}
-	if env.RequireReason && p.Reason == "" {
+	if env.Protected && env.RequireReason && p.Reason == "" {
 		p.Blockers = append(p.Blockers, "该环境必须填写发布原因")
 	}
 	if env.Protected && strings.TrimSpace(env.Approvers) == "" {
@@ -1194,7 +1194,7 @@ func (s *Store) validateDeliveryExecution(v *DeliveryRun) (*Environment, error) 
 	if requiresReview && !hasApprovalNodes(&v.Plan) && (v.Approver == "" || v.Approver == v.Owner || !allowedApprover(env.Approvers, v.Approver) || !allowedApprover(v.Plan.Environment.Approvers, v.Approver)) {
 		return nil, fmt.Errorf("SQL/Redis 工作台操作必须经另一名环境审核人审核，且审核人仍须有权限")
 	}
-	if env.RequireReason && v.Plan.Reason == "" {
+	if env.Protected && env.RequireReason && v.Plan.Reason == "" {
 		return nil, fmt.Errorf("环境已要求发布原因，请重新提交执行单")
 	}
 	// Check ALL application artifacts before any SQL/config/script side effect,

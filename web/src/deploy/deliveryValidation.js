@@ -25,7 +25,6 @@ export function validateDeliveryChange(change, rowKey, requireBranch=true) {
     for(const [index,e] of exceptions.entries()){
       const prefix=`第 ${index+1} 个 SQL 环境例外：`
       if(!text(e.environment)||seen.has(e.environment))return fail('sql_environment_overrides',prefix+'请选择不重复的目标环境')
-      if(!text(e.reason))return fail('sql_environment_overrides',prefix+'请填写原因')
       if(!e.skip&&!text(e.content))return fail('sql_environment_overrides',prefix+'请填写专用 SQL')
       seen.add(e.environment)
     }

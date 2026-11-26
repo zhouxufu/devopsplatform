@@ -764,7 +764,7 @@ func (s *Store) prepareSQLStage(ctx context.Context, nodeID string, ids []int64,
 		if c == nil || c.Kind != "mysql" || c.SQL == nil {
 			return nil, fmt.Errorf("变更 #%d 缺少结构化 SQL 配置，请编辑后保存", id)
 		}
-		selected, explicit, err := selectEnvironmentSQL(c.SQL, environment)
+		selected, explicit, err := s.selectEnvironmentSQL(c.SQL, environment)
 		if err != nil {
 			return nil, fmt.Errorf("SQL 变更 #%d：%w", id, err)
 		}

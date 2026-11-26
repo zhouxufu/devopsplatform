@@ -509,7 +509,7 @@ func (s *Store) reviewResearchTaskState(v *DeliveryRun, node, actor, digest, com
 	if n.Kind == "approval" && actor == v.Owner {
 		return nil, fmt.Errorf("发起人不能审批自己的发布")
 	}
-	if len(comment) > 8000 || (!approve && strings.TrimSpace(comment) == "") {
+	if len(comment) > 8000 || (!approve && strings.TrimSpace(comment) == "" && !s.environmentReasonOptional(v.Plan.Environment.Name, v.Plan.Environment.Protected)) {
 		return nil, fmt.Errorf("拒绝须填写原因，意见不能过长")
 	}
 	if n.Kind == "verify" && strings.TrimSpace(comment) == "" {
@@ -720,16 +720,17 @@ func (s *Store) advanceFrozenResearchFlow(ctx context.Context, v *DeliveryRun, a
 }
 
 type ResearchTask struct {
-	WorkLoopID        string `json:"work_loop_id,omitempty"`
-	AttentionKey      string `json:"attention_key,omitempty"`
-	AttentionEvent    string `json:"attention_event,omitempty"`
-	AttentionState    string `json:"attention_state,omitempty"`
-	AttentionRevision int64  `json:"attention_revision,omitempty"`
-	AttentionReason   string `json:"attention_reason,omitempty"`
-	AttentionAt       int64  `json:"attention_at,omitempty"`
-	CanIgnore         bool   `json:"can_ignore,omitempty"`
-	CanArchive        bool   `json:"can_archive,omitempty"`
-	CanRestore        bool   `json:"can_restore,omitempty"`
+	WorkLoopID              string `json:"work_loop_id,omitempty"`
+	AttentionKey            string `json:"attention_key,omitempty"`
+	AttentionEvent          string `json:"attention_event,omitempty"`
+	AttentionState          string `json:"attention_state,omitempty"`
+	AttentionRevision       int64  `json:"attention_revision,omitempty"`
+	AttentionReason         string `json:"attention_reason,omitempty"`
+	AttentionAt             int64  `json:"attention_at,omitempty"`
+	AttentionReasonOptional bool   `json:"attention_reason_optional,omitempty"`
+	CanIgnore               bool   `json:"can_ignore,omitempty"`
+	CanArchive              bool   `json:"can_archive,omitempty"`
+	CanRestore              bool   `json:"can_restore,omitempty"`
 
 	ResolutionAction string   `json:"resolution_action,omitempty"`
 	ResolutionDigest string   `json:"resolution_digest,omitempty"`

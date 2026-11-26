@@ -68,12 +68,15 @@ func (s *Store) previewServiceDeploymentRequest(r *http.Request, m *ReleaseManag
 	if spec.Mode != "change" {
 		return s.previewServiceDeployment(r.Context(), m, spec)
 	}
-	if spec.ChangeID <= 0 || spec.PreparationID < 0 || spec.Branch != "" || spec.ArtifactID != 0 || strings.TrimSpace(spec.Reason) == "" || len(spec.Reason) > 2000 {
-		return nil, fmt.Errorf("请选择独立代码变更并填写发布原因，分支和制品由本次变更确定")
+	if spec.ChangeID <= 0 || spec.PreparationID < 0 || spec.Branch != "" || spec.ArtifactID != 0 || len(spec.Reason) > 2000 {
+		return nil, fmt.Errorf("请选择独立代码变更（原因最多 2000 字节），分支和制品由本次变更确定")
 	}
 	env := s.GetEnvironment(spec.Environment)
 	if env == nil || (env.Purpose != "development" && env.Purpose != "test") {
 		return nil, fmt.Errorf("整次变更发布仅适用于开发／测试环境")
+	}
+	if env.Protected && strings.TrimSpace(spec.Reason) == "" {
+		return nil, fmt.Errorf("受保护环境须填写发布原因")
 	}
 	c := s.GetChange(spec.ChangeID)
 	if c != nil && c.Service == spec.Service && c.Kind == "code" && len(c.WorkItems) > 0 {

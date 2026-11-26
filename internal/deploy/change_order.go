@@ -19,8 +19,8 @@ func validateChangePrerequisites(change *Change) error {
 	for i := range change.Prerequisites {
 		dep := &change.Prerequisites[i]
 		dep.Reason = strings.TrimSpace(dep.Reason)
-		if dep.ChangeID < 1 || dep.ChangeID == change.ID || seen[dep.ChangeID] || dep.Reason == "" || len(dep.Reason) > 1000 {
-			return fmt.Errorf("前置变更编号须为其他已保存的变更、不能重复，并需填写 1–1000 字节的原因")
+		if dep.ChangeID < 1 || dep.ChangeID == change.ID || seen[dep.ChangeID] || len(dep.Reason) > 1000 {
+			return fmt.Errorf("前置变更编号须为其他已保存的变更、不能重复，原因最多 1000 字节")
 		}
 		seen[dep.ChangeID] = true
 	}
