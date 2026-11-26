@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,63 @@ import (
 	"testing"
 	"time"
 )
+
+func TestJointCodeAndNacosPreparationKeepsScopeUntilReady(t *testing.T) {
+	store, _, nacos, config := nacosFixture(t)
+	if _, err := store.SetChangeReady(config.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	code := &Change{Service: "orders", Kind: "code", Owner: "alice", Title: "使用新配置", Reference: "feature/orders"}
+	if err := store.CreateChange(code); err != nil {
+		t.Fatal(err)
+	}
+	template := &DeliveryTemplate{
+		Name: "配置与服务联合发布", Mode: "version", Owner: "alice",
+		Preparation: []DeliveryNode{
+			{ID: "scope", Kind: "manual", Name: "核对范围", Instructions: "核对", AssigneeSource: "change_submitters", ApprovalMode: "all"},
+			{ID: "code", Kind: "code-prepare", Name: "准备代码", ApplicationScope: "delivery", DefaultCodePolicy: &CodePolicy{Mode: "integration", TargetBranch: "test-release"}},
+		},
+		Nodes: []DeliveryNode{{ID: "config", Kind: "nacos", Name: "更新配置"}, {ID: "deploy", Kind: "deploy", Name: "部署"}},
+	}
+	if err := store.SaveDeliveryTemplate(template); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := store.deliveryPolicy("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.WorkflowTemplateID = template.ID
+	if err := store.saveDeliveryPolicy("test", policy); err != nil {
+		t.Fatal(err)
+	}
+	ids := []int64{config.ID, code.ID}
+	request := DeliveryRequest{SourceType: "changes", SourceChangeIDs: ids, SelectedChangeIDs: ids, TemplateID: template.ID, Environment: "test", StrategyKind: "custom"}
+	for pending := 2; pending >= 0; pending-- {
+		plan, err := store.ResearchFlowPlan(request, nil, []string{"alice"}, "alice")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Scope.Changes) != 2 || plan.Scope.Changes[0].ID != config.ID || plan.Scope.Changes[1].ID != code.ID || len(plan.Blockers) != pending {
+			t.Fatal(plan.Scope, plan.Blockers)
+		}
+		guidance := strings.Join(plan.Warnings, " ")
+		if strings.Contains(guidance, fmt.Sprintf("#%d、#%d", config.ID, code.ID)) != (pending > 0) {
+			t.Fatal("unexpected joint readiness guidance", guidance)
+		}
+		if pending > 0 {
+			if _, err := store.SetChangeReady(ids[pending-1], true); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	run, err := store.CreateResearchFlow(request, nil, []string{"alice"}, "alice")
+	if err != nil || len(run.Plan.Scope.Changes) != 2 {
+		t.Fatal("joint preparation", run, err)
+	}
+	if _, writes := nacos.snapshot(); writes != 0 {
+		t.Fatal("preview published configuration")
+	}
+}
 
 func TestChangeDeploymentOneConfirmation(t *testing.T) {
 	for _, authority := range []string{"page", "mcp", "drift", "draft"} {

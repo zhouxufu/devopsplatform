@@ -37,7 +37,10 @@ function open(){
    if(data.name==='height'&&Number.isFinite(data.value))height.value=Math.min(12000,Math.max(220,data.value))
    if(data.name==='draft'){const entry=data.value;if(entry?.draft)deliveryDrafts.set(entry.key,entry.draft);else if(entry)deliveryDrafts.delete(entry.key)}
    if(data.name==='configure'){bindingService.value=data.value;showBindings.value=true;updateInert()}
-   if(data.name==='next-step'&&!props.hideNextSteps&&!props.batch&&!props.embeddedSubmit&&!state.value.dirty&&!state.value.busy){const target=deliveryNextWorkspace(data.value,props.item?.id);if(target){emit('close');openWorkspace(target.plugin,target.hash)}}
+   if(data.name==='next-step'&&!props.hideNextSteps&&!props.embeddedSubmit&&!state.value.dirty&&!state.value.busy){
+    const target=props.batch?deliveryNextWorkspace('changes',data.value):deliveryNextWorkspace(data.value,props.item?.id)
+    if(target){emit('close');openWorkspace(target.plugin,target.hash)}
+   }
    if(data.name==='saved'&&data.value!=='reopened')deliveryDrafts.delete(key.value)
    if(['close','saved','open-sync'].includes(data.name))emit(data.name,data.value)
   }

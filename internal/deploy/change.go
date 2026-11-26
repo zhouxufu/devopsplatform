@@ -813,6 +813,9 @@ func (s *Store) SetChangeReady(id int64, ready bool) (*Change, error) {
 		if e != nil {
 			return nil, e
 		}
+		if current == ChangeDraft && change.Kind == "code" && strings.TrimSpace(change.Reference) == "" {
+			return nil, fmt.Errorf("请补齐关联分支后再就绪")
+		}
 		if change.Kind == "mysql" {
 			var doc string
 			var payload struct {

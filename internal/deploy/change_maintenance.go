@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -147,8 +148,8 @@ func (s *Store) maintainChangeTx(tx *deployTx, id int64, req changeMaintenanceRe
 	next := *current
 	now := time.Now().Unix()
 	if req.Action == "ready" {
-		if next.Kind != "code" || len(next.WorkItems) != 0 || next.DeliveryOwnership != nil || !validPreparationBranch(next.Reference) || next.SQL != nil || next.Nacos != nil || next.Redis != nil {
-			return nil, fmt.Errorf("请选择本人带有有效源分支的独立代码草稿")
+		if len(next.WorkItems) != 0 || next.DeliveryOwnership != nil {
+			return nil, fmt.Errorf("关联变更请在原工作项校验就绪")
 		}
 		if req.Change != nil || req.Patch != nil || req.WorkItemIDs != nil || req.OriginWorkItemID != 0 {
 			return nil, fmt.Errorf("就绪不能同时修改变更内容或关联")
@@ -156,6 +157,27 @@ func (s *Store) maintainChangeTx(tx *deployTx, id int64, req changeMaintenanceRe
 		validated := next
 		if err = normalizeChange(&validated); err != nil {
 			return nil, err
+		}
+		alias := ""
+		switch {
+		case next.Kind == "code" && validPreparationBranch(next.Reference):
+		case next.Kind == "nacos" && next.Nacos != nil && next.Nacos.Restore == nil:
+			alias = next.Nacos.ResourceAlias
+		case next.Kind == "mysql" && next.SQL != nil:
+			alias = next.SQL.ResourceAlias
+		case next.Kind == "redis" && next.Redis != nil:
+			alias = next.Redis.ResourceAlias
+		default:
+			return nil, fmt.Errorf("请提供有效源分支或完整的独立 SQL、Nacos、Redis 变更内容")
+		}
+		if alias != "" {
+			kinds, err := s.workDeliveryResourceKinds(tx, next.Service)
+			if err != nil {
+				return nil, err
+			}
+			if kinds[alias] != next.Kind {
+				return nil, fmt.Errorf("应用 %s 未声明 %s 资源 %s", next.Service, next.Kind, alias)
+			}
 		}
 		next.Status = ChangeReady
 	} else if req.Action == "archive" {
@@ -339,6 +361,21 @@ func registerChangeMaintenanceRoutes(mux *http.ServeMux, s *Store) {
 		deliveryJSON(w, v)
 	})
 	for _, suffix := range []string{"", "/preview"} {
+		mux.HandleFunc("POST /api/changes/readiness"+suffix, func(w http.ResponseWriter, r *http.Request) {
+			var req independentReadinessRequest
+			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&req) != nil {
+				deliveryWriteError(w, 400, "就绪参数无效")
+				return
+			}
+			result, err := s.independentReadiness(req, deliveryActor(r), suffix == "")
+			if err != nil {
+				deliveryWriteError(w, 409, err)
+				return
+			}
+			deliveryJSON(w, result)
+		})
 		mux.HandleFunc("POST /api/changes/{id}/maintenance"+suffix, func(w http.ResponseWriter, r *http.Request) {
 			id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 			var req changeMaintenanceRequest
@@ -356,4 +393,55 @@ func registerChangeMaintenanceRoutes(mux *http.ServeMux, s *Store) {
 			deliveryJSON(w, v)
 		})
 	}
+}
+
+type independentReadinessRequest struct {
+	Service   string  `json:"service"`
+	ChangeIDs []int64 `json:"change_ids"`
+	Digest    string  `json:"digest,omitempty"`
+}
+
+func (s *Store) independentReadiness(req independentReadinessRequest, actor string, save bool) (map[string]any, error) {
+	if req.Service == "" || len(req.ChangeIDs) == 0 || len(req.ChangeIDs) > 50 || save && req.Digest == "" {
+		return nil, fmt.Errorf("请指定应用和 1–50 个变更，确认时需携带预览摘要")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	slices.Sort(req.ChangeIDs)
+	for index, id := range req.ChangeIDs {
+		if id <= 0 || index > 0 && id == req.ChangeIDs[index-1] {
+			return nil, fmt.Errorf("变更编号无效或重复")
+		}
+		if _, err := tx.Exec(`UPDATE changes SET updated_at=updated_at WHERE id=?`, id); err != nil {
+			return nil, err
+		}
+	}
+	digests := make([]string, 0, len(req.ChangeIDs))
+	items := make([]map[string]any, 0, len(req.ChangeIDs))
+	for _, id := range req.ChangeIDs {
+		change, err := loadMaintenanceChange(tx, id)
+		if err != nil {
+			return nil, fmt.Errorf("变更 #%d：%w", id, err)
+		}
+		digest := digestJSON(change)
+		_, err = s.maintainChangeTx(tx, id, changeMaintenanceRequest{Service: req.Service, Action: "ready", Reason: "校验独立变更并就绪", Digest: digest}, actor, save)
+		if err != nil {
+			return nil, fmt.Errorf("变更 #%d：%w", id, err)
+		}
+		digests = append(digests, digest)
+		items = append(items, map[string]any{"id": id, "kind": change.Kind, "title": change.Title})
+	}
+	digest := digestJSON(digests)
+	if req.Digest != "" && req.Digest != digest {
+		return nil, fmt.Errorf("变更内容已变化，请重新校验并预览")
+	}
+	if save {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"service": req.Service, "items": items, "digest": digest, "state_after": ChangeReady, "saved": save, "executes_resources": false}, nil
 }

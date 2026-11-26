@@ -391,7 +391,7 @@ func (s *Store) ResolveDelivery(req DeliveryRequest, manager *ReleaseManager) (*
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.validateWorkflowPreparation(req, draft.Scope, &draft.Template); err != nil {
+	if err := s.validateWorkflowPreparation(req, draft); err != nil {
 		return nil, nil, err
 	}
 	tpl, env := &draft.Template, s.GetEnvironment(req.Environment)

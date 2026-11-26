@@ -42,8 +42,16 @@ test('resource options show useful descriptions or config filenames but submit s
  assert.deepEqual(deliveryResourceOptions(undefined,'mysql'),[])
 })
 test('next-step navigation retains work item identity and never starts execution',()=>{
+ assert.deepEqual(deliveryNextWorkspace('changes',[21,12]),{plugin:'deploy',hash:'#/orchestration?changes=21,12'})
+ for(const ids of [[],[0],[1,'2&publish=1']])assert.equal(deliveryNextWorkspace('changes',ids),null)
  assert.deepEqual(deliveryNextWorkspace('delivery',42),{plugin:'deploy',hash:'#/orchestration?work_items=42'})
  assert.deepEqual(deliveryNextWorkspace('version','42'),{plugin:'research',hash:'#/versions?add_work_item=42'})
  for(const id of [0,-1,'42&publish=1','bad'])assert.equal(deliveryNextWorkspace('delivery',id),null)
  assert.equal(deliveryNextWorkspace('execute',42),null)
+})
+test('code drafts can omit the branch until ready',()=>{
+ const change={kind:'code',service:'orders',reference:' '}
+ assert.equal(validateDeliveryChange(change,'draft',false),null)
+ assert.equal(validateDeliveryChange(change,'ready',true).field,'reference')
+ assert.equal(validateDeliveryChange({...change,service:''},'draft',false).field,'services')
 })

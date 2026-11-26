@@ -5,7 +5,7 @@ import HelpTip from '../../shared/components/HelpTip.vue'
 import {toast} from '../../shared/composables/toast.js'
 // repositories: [{service}] for saved applications; git_url/connection may
 // explicitly override them while editing a draft (including empty connection).
-const props=defineProps({modelValue:{type:String,default:''},repositories:{type:Array,default:()=>[]},disabled:Boolean,compact:Boolean,placeholder:{type:String,default:'筛选或输入分支；留空使用默认分支'}})
+const props=defineProps({modelValue:{type:String,default:''},repositories:{type:Array,default:()=>[]},disabled:Boolean,compact:Boolean,emptyLabel:{type:String,default:'不限'},placeholder:{type:String,default:'筛选或输入分支；留空使用默认分支'}})
 const emit=defineEmits(['update:modelValue'])
 const branches=ref([]),defaults=ref([]),loading=ref(false),attempted=ref(false),error=ref(''),synced=ref(false)
 const scope=computed(()=>JSON.stringify(props.repositories))
@@ -62,6 +62,6 @@ import OptionPicker from '../../shared/components/OptionPicker.vue'
 
 import {Button,Spinner} from '../../shared/shadcn-ui.js'
 </script>
-<template><div :class="{'is-compact':compact}" @keydown.enter.capture="confirmManual" class="branch-field"><div class="branch-controls"><OptionPicker ref="selector" :model-value="modelValue||''" :disabled="disabled" :placeholder="placeholder" @update:model-value="emit('update:modelValue',$event||'')" class="min-w-36" :options="[...(options).map((branch)=>({value:branch,label:branch}))]" allow-create @open="opened(true)" all-label="不限"/><Button @click="sync" variant="outline" size="default" type="button" :disabled="(disabled||!ready)||(loading)"><Spinner v-if="loading"/>同步分支</Button><HelpTip v-if="compact" :text="hint" align="right" :class="{'branch-error':error}"/></div><small v-if="!compact" :class="{'branch-error':error}" :role="error?'alert':undefined">{{hint}}</small></div></template>
+<template><div :class="{'is-compact':compact}" @keydown.enter.capture="confirmManual" class="branch-field"><div class="branch-controls"><OptionPicker ref="selector" :model-value="modelValue||''" :disabled="disabled" :placeholder="placeholder" @update:model-value="emit('update:modelValue',$event||'')" class="min-w-36" :options="[...(options).map((branch)=>({value:branch,label:branch}))]" allow-create @open="opened(true)" :all-label="emptyLabel"/><Button @click="sync" variant="outline" size="default" type="button" :disabled="(disabled||!ready)||(loading)"><Spinner v-if="loading"/>同步分支</Button><HelpTip v-if="compact" :text="hint" align="right" :class="{'branch-error':error}"/></div><small v-if="!compact" :class="{'branch-error':error}" :role="error?'alert':undefined">{{hint}}</small></div></template>
 <style scoped>.branch-field{display:grid;gap:6px;min-width:0}.branch-controls{display:flex;gap:8px;min-width:0}.branch-field small{color:var(--muted-foreground);font-size:.75rem;line-height:1.5;overflow-wrap:anywhere}.branch-field .branch-error{color:var(--red,#e55)}
 .is-compact{display:block}.is-compact .branch-controls{align-items:center}.is-compact .help-tip{flex-shrink:0}</style>

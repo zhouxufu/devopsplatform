@@ -46,6 +46,13 @@ func validBugAction(a string) bool {
 	return false
 }
 func (s *ToolService) actionBaseline(ctx context.Context, t *AccessToken, a *PlatformAction) (string, error) {
+	if a.Tool == "mark_independent_changes_ready" {
+		result, err := s.platformRequest(ctx, t, "POST", a.Path+"/preview", nil, a.Body)
+		if err != nil {
+			return "", err
+		}
+		return stringArg(mapValue(result), "digest"), nil
+	}
 	if a.Tool == "deploy_service" {
 		v, e := s.platformRequest(ctx, t, "POST", "/api/service-deployments/preview", nil, a.Body["spec"])
 		if e != nil {
@@ -112,6 +119,20 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 	}
 	a.ID = hex.EncodeToString(buf)
 	switch name {
+	case "mark_independent_changes_ready":
+		a.Path = "/api/changes/readiness"
+		a.Query = url.Values{"service": {stringArg(args, "service")}}
+		a.Body = mapValue(cloneJSON(args))
+		result, err := s.platformRequest(ctx, t, "POST", a.Path+"/preview", nil, a.Body)
+		if err != nil {
+			return nil, err
+		}
+		a.Preview = mapValue(result)
+		a.Baseline = stringArg(a.Preview, "digest")
+		if a.Baseline == "" {
+			return nil, fmt.Errorf("未返回待就绪变更摘要")
+		}
+		a.Body["digest"] = a.Baseline
 	case "deploy_service":
 		if err := s.prepareServiceDeployment(ctx, t, args, &a); err != nil {
 			return nil, err
@@ -306,6 +327,14 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 			rows = append(rows, c)
 		}
 		a.Body = map[string]any{"changes": rows}
+		if name == "report_changes" {
+			if a.Preview == nil {
+				a.Preview = map[string]any{"association": "独立草稿"}
+			}
+			a.Preview["service"] = stringArg(args, "service")
+			a.Preview["count"] = len(rows)
+			a.Preview["result_status"] = "draft"
+		}
 		if digest != "" {
 			a.Body["digest"] = digest
 		}
@@ -366,7 +395,11 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 	if e := s.actions.addAction(a); e != nil {
 		return nil, e
 	}
-	return map[string]any{"confirmation_id": a.ID, "tool": name, "state": "preview", "expires_at": a.ExpiresAt, "actor": a.Owner, "request": a.Body, "preview": a.Preview, "service": a.Query.Get("service"), "environment": a.Query.Get("environment"), "warning": "尚未执行。请向用户展示此操作与目标，明确同意后调用 confirm_platform_action；不自动重放未知结果。"}, nil
+	service := a.Query.Get("service")
+	if name == "report_changes" {
+		service = stringArg(a.Preview, "service")
+	}
+	return map[string]any{"confirmation_id": a.ID, "tool": name, "state": "preview", "expires_at": a.ExpiresAt, "actor": a.Owner, "request": a.Body, "preview": a.Preview, "service": service, "environment": a.Query.Get("environment"), "warning": "尚未执行。请向用户展示此操作与目标，明确同意后调用 confirm_platform_action；不自动重放未知结果。"}, nil
 }
 func (s *TokenStore) addAction(a PlatformAction) error {
 	a.Body = mapValue(cloneJSON(a.Body))
@@ -529,8 +562,8 @@ func (s *ToolService) confirmAction(ctx context.Context, t *AccessToken, args ma
 			return nil, err
 		}
 	}
-	if a.Tool == "maintain_change" {
-		if err := globalWorkScope(t); err != nil && stringArg(a.Body, "action") != "ready" {
+	if a.Tool == "maintain_change" || a.Tool == "mark_independent_changes_ready" {
+		if err := globalWorkScope(t); err != nil && a.Tool == "maintain_change" && stringArg(a.Body, "action") != "ready" {
 			s.actions.finishAction(id, "stale", nil, err)
 			return nil, err
 		}

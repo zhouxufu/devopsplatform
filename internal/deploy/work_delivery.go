@@ -181,8 +181,11 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		if err := normalizeChangeForSave(c, !req.MarkReady); err != nil {
 			return fmt.Errorf("第 %d 项：%w", i+1, err)
 		}
-		if c.Kind == "code" && (c.Service == "" || c.Reference == "") {
-			return fmt.Errorf("第 %d 项：代码需要应用和分支", i+1)
+		if c.Kind == "code" && c.Service == "" {
+			return fmt.Errorf("第 %d 项：请选择代码变更的应用", i+1)
+		}
+		if c.Kind == "code" && req.MarkReady && c.Reference == "" {
+			return fmt.Errorf("第 %d 项：请补齐关联分支后再就绪", i+1)
 		}
 		if c.Kind == "mysql" && c.SQL == nil {
 			return fmt.Errorf("第 %d 项：请填写 SQL", i+1)

@@ -24,6 +24,10 @@ export function deliveryResourceOptions(document,kind){
  })
 }
 export function deliveryNextWorkspace(action,id){
+ if(action==='changes'){
+  if(!Array.isArray(id)||!id.length||!id.every(value=>Number.isSafeInteger(value)&&value>0))return null
+  return {plugin:'deploy',hash:'#/orchestration?changes='+[...new Set(id)].join(',')}
+ }
  if(!Number.isSafeInteger(Number(id))||Number(id)<1)return null
  if(action==='delivery')return {plugin:'deploy',hash:'#/orchestration?work_items='+Number(id)}
  if(action==='version')return {plugin:'research',hash:'#/versions?add_work_item='+Number(id)}

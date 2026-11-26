@@ -39,7 +39,7 @@ func deliveryTools() []Tool {
 		return t
 	}
 	return []Tool{
-		makeTool("preview_delivery", "解析交付准备范围或执行环境预检，不创建执行单、不合并构建或发布", "delivery:read", map[string]any{"phase": phase, "request": request}, "phase", "request"),
+		makeTool("preview_delivery", "解析交付准备范围或执行环境预检。多条独立变更按完整编号联合预览，包含同应用代码与 Nacos 等配套项。受阻时保留原范围，草稿校验并就绪后整批重试。不创建执行单、不合并构建或发布", "delivery:read", map[string]any{"phase": phase, "request": request}, "phase", "request"),
 		makeTool("create_delivery_run", "预览创建统一交付准备/发布执行单；创建不代表执行", "delivery:write", map[string]any{"phase": phase, "request": request}, "phase", "request"),
 		makeTool("publish_delivery", "预览并一次授权最终发布：展示目标环境、不可变制品、SQL、配置及步骤顺序；确认后后台推进一小时，独立审批和人工步骤由指定人员处理。仅非受保护开发/测试环境。", "delivery:execute", map[string]any{"request": request}, "request"),
 		makeTool("advance_delivery", "预览推进准确执行单的当前自动节点；代码节点先生成冻结代码候选，另行确认才合并构建；不能代审", "delivery:execute", map[string]any{"run_id": id, "environment": str("执行单实际环境")}, "run_id", "environment"),

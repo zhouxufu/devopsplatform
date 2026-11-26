@@ -28,7 +28,7 @@ func TestWorkflowSkillCatalogCompatibilityAndArchive(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &catalog) != nil || len(catalog) != 5 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	wantVersions := map[string]string{"devops-work-loop": "1.1.0", "devops-code-recovery": "1.0.0", "devops-change-report": "1.5.0", "devops-api-docs": "1.2.0", "devops-api-testing": "1.3.0"}
+	wantVersions := map[string]string{"devops-work-loop": "1.1.0", "devops-code-recovery": "1.0.0", "devops-change-report": "1.6.0", "devops-api-docs": "1.2.0", "devops-api-testing": "1.3.0"}
 	for _, skill := range catalog {
 		if !skill.Compatible || len(skill.MissingTools) > 0 || skill.Version != wantVersions[skill.ID] || !strings.Contains(skill.Prompt, "$"+skill.ID) {
 			t.Fatal(skill)

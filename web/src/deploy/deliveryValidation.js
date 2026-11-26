@@ -3,7 +3,7 @@
 const text = value => String(value ?? '').trim()
 const resourceName = /^[A-Za-z0-9_.-]+$/
 const nacosKey = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/
-export function validateDeliveryChange(change, rowKey) {
+export function validateDeliveryChange(change, rowKey, requireBranch=true) {
   const fail = (field, message, entry) => ({rowKey, field, message, entry})
   if(change.kind==='manual'){
     if(!text(change.reference)&&!text(change.summary))return fail('reference','请填写自定义处理记录')
@@ -11,7 +11,7 @@ export function validateDeliveryChange(change, rowKey) {
   }
   if(change.kind==='code'){
     if(!text(change.service))return fail('services','请选择至少一个影响应用')
-    if(!text(change.reference))return fail('reference','请填写关联分支')
+    if(requireBranch&&!text(change.reference))return fail('reference','请补齐关联分支后再就绪')
   }
   if(['mysql','nacos','redis'].includes(change.kind)){
     if(!text(change.service))return fail('service','请选择应用')

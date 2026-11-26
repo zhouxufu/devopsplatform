@@ -74,6 +74,7 @@ func expandCodePolicy(p CodePolicy, scope *DeliveryScope, v *ReleaseVersion) (Co
 
 func resolvePreparationPolicies(nodes []DeliveryNode, scope *DeliveryScope, v *ReleaseVersion, defaults DeliveryDefaults, sources map[string]string) error {
 	seen := map[string]bool{}
+	missing := map[string]bool{}
 	for i := range nodes {
 		n := &nodes[i]
 		if n.Kind != "code-prepare" && n.Kind != "code-verify" {
@@ -97,7 +98,8 @@ func resolvePreparationPolicies(nodes []DeliveryNode, scope *DeliveryScope, v *R
 					p = *n.DefaultCodePolicy
 				}
 				if !validateCodePolicy(p) {
-					return fmt.Errorf("应用 %s 缺少代码分支策略，请到应用 → 环境 → 配置环境设置代码与制品策略，或配置节点通用策略", c.Service)
+					missing[c.Service] = true
+					continue
 				}
 				n.Policies[c.Service] = p
 			}
@@ -123,11 +125,31 @@ func resolvePreparationPolicies(nodes []DeliveryNode, scope *DeliveryScope, v *R
 			n.Policies[app], seen[app] = p, true
 		}
 	}
+	if len(missing) > 0 {
+		var blocked, configured []string
+		for _, change := range scope.Changes {
+			if change.Kind != "code" {
+				continue
+			}
+			label := fmt.Sprintf("%s #%d", change.Service, change.ID)
+			if missing[change.Service] {
+				blocked = append(blocked, label)
+			} else if seen[change.Service] {
+				configured = append(configured, label)
+			}
+		}
+		message := "缺少代码分支策略，请到应用 → 环境 → 配置环境 → 代码与制品策略补齐。待配置：" + strings.Join(blocked, "、")
+		if len(configured) > 0 {
+			message += "。分支策略已配置：" + strings.Join(configured, "、")
+		}
+		return fmt.Errorf("%s", message)
+	}
 	return nil
 }
 
 // Pure metadata gate. Checking it never merges code or performs a remote read.
-func (s *Store) validateWorkflowPreparation(req DeliveryRequest, scope *DeliveryScope, t *DeliveryTemplate) error {
+func (s *Store) validateWorkflowPreparation(req DeliveryRequest, draft *DeliveryDraftPlan) error {
+	scope, t := draft.Scope, &draft.Template
 	if len(t.Preparation) == 0 {
 		if req.PreparationRunID != 0 {
 			return fmt.Errorf("本流程没有准备阶段，请清除不匹配的准备记录")
@@ -136,7 +158,17 @@ func (s *Store) validateWorkflowPreparation(req DeliveryRequest, scope *Delivery
 	}
 	run := s.DeliveryRun(req.PreparationRunID)
 	if scope == nil || run == nil || run.Status != "success" || run.Plan.PreparationRequest == nil || run.Plan.Scope == nil || run.Plan.Scene != req.Scene || digestJSON(run.Plan.Template) != digestJSON(preparationTemplate(t)) || run.Plan.Environment.Name != req.Environment || researchScopeDigest(run.Plan.Scope) != researchScopeDigest(scope) {
-		return fmt.Errorf("请先完成本次交付的范围确认与代码准备；流程、环境或范围变化后须重新准备")
+		if scope != nil {
+			var version *ReleaseVersion
+			if req.VersionID != 0 {
+				version = s.GetReleaseVersion(req.VersionID)
+			}
+			nodes := append([]DeliveryNode(nil), t.Preparation...)
+			if err := resolvePreparationPolicies(nodes, scope, version, draft.Defaults, req.ArtifactSources); err != nil {
+				return fmt.Errorf("环境 %s 的交付准备受阻：%w", req.Environment, err)
+			}
+		}
+		return fmt.Errorf("环境 %s：请先完成本次交付的范围确认与代码准备。进入交付准备，使用原范围完成准备后再预检发布", req.Environment)
 	}
 	if err := s.checkResearchScope(run); err != nil {
 		return err
