@@ -607,6 +607,9 @@ func (s *Store) AdvanceResearchFlow(ctx context.Context, id int64, actor string,
 }
 
 func (s *Store) advanceResearchFlowState(ctx context.Context, v *DeliveryRun, actor string, pr *PipelineRunner) (*DeliveryRun, error) {
+	return s.advanceFrozenResearchFlow(ctx, v, actor, pr, nil)
+}
+func (s *Store) advanceFrozenResearchFlow(ctx context.Context, v *DeliveryRun, actor string, pr *PipelineRunner, batch *publicationScope) (*DeliveryRun, error) {
 	if v == nil || v.Plan.PreparationRequest == nil || v.Plan.Template.Workbench != "research" || (v.Status != "approved" && v.Status != "running" && v.Status != "blocked") {
 		return nil, fmt.Errorf("流程不在待执行状态")
 	}
@@ -687,7 +690,13 @@ func (s *Store) advanceResearchFlowState(ctx context.Context, v *DeliveryRun, ac
 		return nil, fmt.Errorf("代码节点没有匹配变更")
 	}
 	req := *v.Plan.PreparationRequest
-	p, err := s.previewCodePreparation(ctx, CodePreparationRequest{BuildConcurrency: n.BuildConcurrency, Delivery: req, Policies: n.Policies, VerifyOnly: n.Kind == "code-verify"}, actor)
+	var p *CodePreparation
+	var err error
+	if batch == nil {
+		p, err = s.previewCodePreparation(ctx, CodePreparationRequest{BuildConcurrency: n.BuildConcurrency, Delivery: req, Policies: n.Policies, VerifyOnly: n.Kind == "code-verify"}, actor)
+	} else {
+		p, err = s.createFrozenPublicationCandidate(v, n, actor, batch)
+	}
 	if err != nil {
 		step.Status = "failed"
 		step.Detail = err.Error()

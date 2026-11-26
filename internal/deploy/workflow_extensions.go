@@ -45,6 +45,13 @@ func describeWorkflowProvider(ctx context.Context, id string) (*workflownode.Des
 
 // Only host-approved domain executors are allowed; no plugin-returned script is executed.
 func (s *Store) prepareWorkflowExtension(node DeliveryNode, apps []DeliveryService, environments ...string) (*workflownode.Binding, error) {
+	var env string
+	if len(environments) > 0 {
+		env = environments[0]
+	}
+	return s.resolveWorkflowExtension(node, apps, env, false)
+}
+func (s *Store) resolveWorkflowExtension(node DeliveryNode, apps []DeliveryService, env string, beforeBuild bool) (*workflownode.Binding, error) {
 	if node.Extension == nil || node.Extension.Provider == "" || node.Extension.NodeKey == "" {
 		return nil, fmt.Errorf("请选择已安装并启用的节点插件")
 	}
@@ -61,9 +68,7 @@ func (s *Store) prepareWorkflowExtension(node DeliveryNode, apps []DeliveryServi
 	b.Descriptor = d
 	b.ProviderVersion = d.ProviderVersion
 	b.ProviderDigest = d.ProviderDigest
-	if len(environments) > 0 {
-		b.Environment = environments[0]
-	}
+	b.Environment = env
 	if d.Executor == workflownode.APITestExecutor {
 		return s.prepareAPITestWorkflow(b, node, apps)
 	}
@@ -103,13 +108,23 @@ func (s *Store) prepareWorkflowExtension(node DeliveryNode, apps []DeliveryServi
 		if node.Service != "" && node.Service != app.Service {
 			continue
 		}
-		a := s.GetArtifact(app.Artifact.ID)
-		if a == nil || a.Source != "pipeline-run" || a.Digest != app.Artifact.Digest {
-			return nil, fmt.Errorf("%s：文档生成需要带原构建快照的制品", app.Service)
-		}
-		sv, _, commit, err := s.buildReplay(a.SourceID)
-		if err != nil {
-			return nil, fmt.Errorf("%s：%w", app.Service, err)
+		a := &app.Artifact
+		var sv *Service
+		var commit string
+		if beforeBuild && a.ID == 0 {
+			sv = s.GetService(app.Service)
+			if sv == nil {
+				return nil, fmt.Errorf("应用不存在")
+			}
+		} else {
+			a = s.GetArtifact(a.ID)
+			if a == nil || a.Source != "pipeline-run" || a.Digest != app.Artifact.Digest {
+				return nil, fmt.Errorf("%s：文档生成需要带原构建快照的制品", app.Service)
+			}
+			sv, _, commit, err = s.buildReplay(a.SourceID)
+			if err != nil {
+				return nil, fmt.Errorf("%s：%w", app.Service, err)
+			}
 		}
 		source, err := s.resolveDocumentSource(sv, b.Environment)
 		if err != nil {

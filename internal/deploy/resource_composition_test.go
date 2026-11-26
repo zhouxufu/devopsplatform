@@ -60,12 +60,15 @@ func TestResourceCompositionMultipleGroupsOwnAndConflicts(t *testing.T) {
 
 func TestEnvironmentNacosCatalogAndRuntimeResolution(t *testing.T) {
 	s, _, _ := deliveryFixture(t)
+	sizes := make(chan string, 8)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" || r.URL.Path != "/v1/cs/configs" || r.URL.Query().Get("search") != "blur" || r.URL.Query().Get("pageSize") != "20" {
+		size := r.URL.Query().Get("pageSize")
+		if r.Method != "GET" || r.URL.Path != "/v1/cs/configs" || r.URL.Query().Get("search") != "blur" || (size != "20" && size != "50" && size != "100") {
 			t.Errorf("unexpected request %s", r.URL)
 			w.WriteHeader(400)
 			return
 		}
+		sizes <- size
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"totalCount":1,"pageItems":[{"dataId":"bus.yml","group":"DEFAULT_GROUP","content":"SECRET_BODY","encryptedDataKey":"SECRET_KEY"}]}`))
 	}))
@@ -105,6 +108,19 @@ func TestEnvironmentNacosCatalogAndRuntimeResolution(t *testing.T) {
 	}
 	if json.Unmarshal(w.Body.Bytes(), &catalog) != nil || len(catalog.Items) != 1 {
 		t.Fatal(w.Body.String())
+	}
+	if <-sizes != "20" {
+		t.Fatal("catalog default mismatch")
+	}
+	for _, size := range []string{"50", "100"} {
+		w = call("GET", "/api/environments/test/nacos/configs?q=bus&page_size="+size, "", "", "")
+		if w.Code != 200 || <-sizes != size || strings.Contains(w.Body.String(), "SECRET") {
+			t.Fatal("catalog size/sanitization mismatch", w.Body.String())
+		}
+	}
+	w = call("GET", "/api/environments/test/nacos/configs?page_size=101", "", "", "")
+	if w.Code != 400 || len(sizes) != 0 {
+		t.Fatal("invalid size reached Nacos", w.Code)
 	}
 	if err := s.SaveApplicationResources("orders", ApplicationResources{CompositionVersion: 2, NacosConfigs: catalog.Items}); err != nil {
 		t.Fatal(err)

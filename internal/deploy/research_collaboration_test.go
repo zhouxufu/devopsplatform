@@ -97,6 +97,15 @@ func TestResearchCollaborationOwnedPaginationVisibilityAndSnapshot(t *testing.T)
 			t.Fatal("case-fold owner leak")
 		}
 	}
+	for _, size := range []int{50, 100} {
+		w = collaborationRequest(mux, "GET", fmt.Sprintf("/api/research/deliveries?page=2&page_size=%d", size), "owner", "")
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 200 || page.Total != 106 || len(page.Items) != min(size, 106-size) {
+			t.Fatal("actual research page size mismatch", size, w.Body.String())
+		}
+	}
 	path := fmt.Sprintf("/api/research/deliveries/delivery/%d", v.ID)
 	if w = collaborationRequest(mux, "GET", path, "stranger", ""); w.Code != 403 {
 		t.Fatal("foreign snapshot visible", w.Code)

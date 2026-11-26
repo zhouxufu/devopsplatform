@@ -23,6 +23,14 @@ func TestCodeRecoveryHandoffAndFrozenConfirmation(t *testing.T) {
 			json.NewEncoder(w).Encode([]any{map[string]any{"name": "test", "protected": protected.Load()}})
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/api/service-deployments/") {
+			child := "fixture-a"
+			if strings.HasSuffix(r.URL.Path, "other") {
+				child = "other"
+			}
+			json.NewEncoder(w).Encode(map[string]any{"id": "publication", "owner": "alice", "state": "running", "stage": "waiting_conflict", "code_id": child, "grant": map[string]any{"spec": map[string]any{"service": "orders", "environment": "test", "mode": "change"}}})
+			return
+		}
 		if r.Method == "GET" {
 			json.NewEncoder(w).Encode(map[string]any{"id": "fixture-a", "owner": "alice", "state": state.Load(), "revision": revision.Load(), "lease_until": lease.Load(), "scope_digest": "frozen", "preparation_run_id": 101, "request": map[string]any{"environment": "test"}, "repositories": []any{map[string]any{"service": "orders", "url": "https://user:SECRET@example.invalid/orders.git?token=PRIVATE", "connection_digest": "PRIVATE", "base_commit": sha, "target_commit": sha, "target_branch": "dev", "sources": []any{map[string]any{"branch": "fix", "commit": sha}}, "conflicts": []any{"Order.java"}}}})
 			return
@@ -117,4 +125,26 @@ func TestCodeRecoveryHandoffAndFrozenConfirmation(t *testing.T) {
 			t.Fatal("handoff disclosure", bad)
 		}
 	}
+	// A scoped app key may recover the exact child of its own publication.
+	tok.Applications = []string{"orders"}
+	tok.Scopes = append(tok.Scopes, "delivery:read", "delivery:write", "delivery:execute", "changes:read", "builds:trigger")
+	read := map[string]any{"preparation_id": "fixture-a", "environment": "test", "publication_task_id": "publication"}
+	scoped := docCall(t, s, tok, "get_code_conflict", read)
+	if mapValue(scoped)["can_resume"] != true {
+		t.Fatal(scoped)
+	}
+	args["publication_task_id"] = "other"
+	if _, _, _, err := s.Call(ctx, tok, "resume_code_preparation", args); err == nil {
+		t.Fatal("accepted unrelated parent")
+	}
+	args["publication_task_id"] = "publication"
+	scoped = docCall(t, s, tok, "resume_code_preparation", args)
+	if mapValue(mapValue(scoped)["preview"])["continues_publication"] != true {
+		t.Fatal("missing publication effect")
+	}
+	docConfirm(t, s, tok, scoped)
+	if writes.Load() != 2 {
+		t.Fatal("publication recovery failed")
+	}
+
 }

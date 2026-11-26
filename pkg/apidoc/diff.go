@@ -73,7 +73,8 @@ func collectFields(path string, before any, bp bool, after any, ap bool, c *Oper
 	}
 	b, bok := before.(map[string]any)
 	a, aok := after.(map[string]any)
-	if bp && ap && bok && aok && len(path) < 2048 && strings.Count(path, "/") < 64 {
+	bounded := len(path) < 2048 && strings.Count(path, "/") < 64
+	if (!bp || bok) && (!ap || aok) && (bok || aok) && (len(b) > 0 || len(a) > 0) && bounded {
 		keys := map[string]bool{}
 		for k := range b {
 			keys[k] = true
@@ -90,6 +91,27 @@ func collectFields(path string, before any, bp bool, after any, ap bool, c *Oper
 			bv, bp := b[k]
 			av, ap := a[k]
 			collectFields(path+"/"+pointerPart(k), bv, bp, av, ap, c)
+		}
+		return
+	}
+	ba, bArray := before.([]any)
+	aa, aArray := after.([]any)
+	if (!bp || bArray) && (!ap || aArray) && (bArray || aArray) && (len(ba) > 0 || len(aa) > 0) && bounded {
+		count := max(len(ba), len(aa))
+		for i := 0; i < count; i++ {
+			var bv, av any
+			bp, ap := i < len(ba), i < len(aa)
+			if bp {
+				bv = ba[i]
+			}
+			if ap {
+				av = aa[i]
+			}
+			collectFields(path+"/"+strconv.Itoa(i), bv, bp, av, ap, c)
+			if len(c.Fields) >= 100 && i+1 < count {
+				c.Truncated = true
+				break
+			}
 		}
 		return
 	}

@@ -14,21 +14,25 @@ import (
 // Both entry points bind the user's confirmation to these values. A future
 // artifact is identified by the original preparation's verified build receipt.
 type changeDeploymentGrant struct {
-	MarkReadyDraftDigest string          `json:"mark_ready_draft_digest,omitempty"`
-	Title                string          `json:"title"`
-	Request              DeliveryRequest `json:"request"`
-	SourceBranch         string          `json:"source_branch"`
-	SourceCommit         string          `json:"source_commit"`
-	TargetBranch         string          `json:"target_branch"`
-	TargetCommit         string          `json:"target_commit"`
-	GitIdentity          string          `json:"git_identity"`
-	ScopeDigest          string          `json:"scope_digest"`
-	TemplateDigest       string          `json:"template_digest"`
-	PreparationSteps     []DeliveryNode  `json:"preparation_steps"`
-	Steps                []DeliveryNode  `json:"release_steps"`
+	Batch                *publicationScope `json:"publication_scope,omitempty"`
+	MarkReadyDraftDigest string            `json:"mark_ready_draft_digest,omitempty"`
+	Title                string            `json:"title"`
+	Request              DeliveryRequest   `json:"request"`
+	SourceBranch         string            `json:"source_branch"`
+	SourceCommit         string            `json:"source_commit"`
+	TargetBranch         string            `json:"target_branch"`
+	TargetCommit         string            `json:"target_commit"`
+	GitIdentity          string            `json:"git_identity"`
+	ScopeDigest          string            `json:"scope_digest"`
+	TemplateDigest       string            `json:"template_digest"`
+	PreparationSteps     []DeliveryNode    `json:"preparation_steps"`
+	Steps                []DeliveryNode    `json:"release_steps"`
 }
 
 func (s *Store) previewServiceDeploymentRequest(r *http.Request, m *ReleaseManager, spec ServiceDeploymentSpec) (*ServiceDeploymentGrant, error) {
+	if spec.Delivery != nil {
+		return s.previewPublicationScope(r, m, spec)
+	}
 	// Older MCP clients always send build plus a branch. Resolve that input before
 	// presenting the grant, so a feature branch gets the same complete preview.
 	resolveBuildBranch := spec.Mode == "build" && spec.Branch != "" && spec.ArtifactID == 0 && spec.ChangeID == 0 && spec.PreparationID == 0
@@ -72,7 +76,16 @@ func (s *Store) previewServiceDeploymentRequest(r *http.Request, m *ReleaseManag
 		return nil, fmt.Errorf("整次变更发布仅适用于开发／测试环境")
 	}
 	c := s.GetChange(spec.ChangeID)
-	if c == nil || c.Service != spec.Service || c.Kind != "code" || (c.Status != ChangeReady && c.Status != ChangeDraft) || len(c.WorkItems) != 0 {
+	if c != nil && c.Service == spec.Service && c.Kind == "code" && len(c.WorkItems) > 0 {
+		req := DeliveryRequest{SourceType: "work_items", SelectedChangeIDs: []int64{c.ID}, Environment: spec.Environment, Reason: spec.Reason}
+		for _, w := range c.WorkItems {
+			req.WorkItemIDs = append(req.WorkItemIDs, w.ID)
+		}
+		slices.Sort(req.WorkItemIDs)
+		spec.Delivery = &req
+		return s.previewPublicationScope(r, m, spec)
+	}
+	if c == nil || c.Service != spec.Service || c.Kind != "code" || (c.Status != ChangeReady && c.Status != ChangeDraft) {
 		return nil, fmt.Errorf("需要当前应用的独立代码草稿或就绪变更；关联需求或 Bug 请从原工作项发布")
 	}
 	config, targetDigest, policy, e := s.serviceDeploymentTerms(spec)
@@ -244,6 +257,9 @@ func changeReleaseSteps(nodes []DeliveryNode, service string) ([]DeliveryNode, e
 	return steps, validateNodeDependencies(steps)
 }
 func (g *changeDeploymentGrant) matchesCandidate(p *CodePreparation, spec ServiceDeploymentSpec, prepID int64) bool {
+	if g.Batch != nil {
+		return p != nil && p.PreparationRunID == prepID && p.Request.Environment == spec.Environment && !p.Protected && candidateDigest(p) == g.Batch.CandidateDigest
+	}
 	if p == nil || p.PreparationRunID != prepID || p.Request.Environment != spec.Environment || p.Protected || len(p.Repositories) != 1 || len(p.Builds) != 1 || p.Builds[0].Service != spec.Service {
 		return false
 	}
@@ -258,10 +274,22 @@ func changeDeploymentClaim(spec ServiceDeploymentSpec) string {
 // An operator can still handle approval and verification on the original run.
 // Creating another final execution from that preparation must not race its grant.
 func checkChangeDeliveryOwner(tx *deployTx, req DeliveryRequest, p *DeliveryPlan) error {
-	if req.PreparationRunID == 0 || p.Scope == nil || p.Scope.Type != "changes" || len(p.Scope.Changes) != 1 || p.Scope.Changes[0].Kind != "code" {
+	if req.PreparationRunID == 0 || p.Scope == nil {
 		return nil
 	}
-	c := p.Scope.Changes[0]
+	if req.changeDeploymentID != "" {
+		if err := checkPreparationUnpublished(tx, req.PreparationRunID); err != nil {
+			return err
+		}
+	}
+	for _, c := range p.Scope.Changes {
+		if err := checkPublicationClaim(tx, req, c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func checkPublicationClaim(tx *deployTx, req DeliveryRequest, c Change) error {
 	key := changeDeploymentClaim(ServiceDeploymentSpec{Service: c.Service, Environment: req.Environment, ChangeID: c.ID})
 	var raw, id string
 	err := tx.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, key).Scan(&id)
@@ -293,68 +321,28 @@ func checkChangeDeliveryOwner(tx *deployTx, req DeliveryRequest, p *DeliveryPlan
 // Atomically claim this source/target pair across pages and MCP sessions.
 func (s *Store) createChangeDeployment(t *ServiceDeployment) error {
 	spec := t.Grant.Spec
-	key := changeDeploymentClaim(spec)
+	keys := []string{changeDeploymentClaim(spec)}
+	if b := t.Grant.Change.Batch; b != nil {
+		keys = nil
+		for _, c := range b.Changes {
+			keys = append(keys, changeDeploymentClaim(ServiceDeploymentSpec{Environment: spec.Environment, ChangeID: c.ID, Service: c.Service}))
+		}
+		slices.Sort(keys)
+	}
 	tx, e := s.db.Begin()
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback()
-	var previous string
-	err := tx.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, key).Scan(&previous)
-	switch {
-	case err == nil:
-		var raw string
-		var prior ServiceDeployment
-		if e = tx.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, "service_deployment:"+previous).Scan(&raw); e != nil {
-			return e
-		}
-		if e = json.Unmarshal([]byte(raw), &prior); e != nil {
-			return e
-		}
-		if prior.Owner != t.Owner && prior.State == "running" {
-			return fmt.Errorf("本次变更有正在进行的发布，请在原执行单查看进度")
-		}
-		same := prior.Owner == t.Owner && prior.Authority == t.Authority && prior.AuthorityKeyID == t.AuthorityKeyID && prior.Grant.Digest == t.Grant.Digest
-		if same && (prior.State == "running" || prior.State == "success") {
-			*t = prior
-			return nil
-		}
-		if prior.State == "running" || prior.LeaseUntil != 0 || prior.State == "blocked" && prior.DeliveryID != 0 {
-			return fmt.Errorf("已有发布任务 %s，请核对原执行结果", previous)
-		}
-		if prior.PreparationID != 0 && prior.State != "success" && spec.PreparationID != prior.PreparationID {
-			var status string
-			if e = tx.QueryRow(`SELECT status FROM delivery_runs WHERE id=?`, prior.PreparationID).Scan(&status); e != nil {
-				return e
-			}
-			if status != "canceled" && status != "rejected" {
-				return fmt.Errorf("请核对原准备单 #%d，不能另起流程", prior.PreparationID)
-			}
-		}
-		if prior.CodeID != "" && prior.State != "success" && spec.PreparationID == prior.PreparationID {
-			var data string
-			var p CodePreparation
-			if e = tx.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, "code_preparation:"+prior.CodeID).Scan(&data); e != nil {
-				return e
-			}
-			if json.Unmarshal([]byte(data), &p) != nil || p.State != "preview" {
-				return fmt.Errorf("原代码任务已有执行记录，请先核对")
-			}
-		}
-		updated, err := tx.Exec(`UPDATE deploy_meta SET value=? WHERE key=? AND value=?`, t.ID, key, previous)
+	for _, key := range keys {
+		prior, err := claimPublicationChange(tx, key, t)
 		if err != nil {
 			return err
 		}
-		n, err := updated.RowsAffected()
-		if err != nil || n != 1 {
-			return ErrRunConflict
+		if prior != nil {
+			*t = *prior
+			return nil
 		}
-	case errors.Is(err, sql.ErrNoRows):
-		if _, e = tx.Exec(`INSERT INTO deploy_meta(key,value) VALUES(?,?)`, key, t.ID); e != nil {
-			return fmt.Errorf("同范围发布已被提交，请查看原任务：%w", e)
-		}
-	default:
-		return err
 	}
 	if digest := t.Grant.Change.MarkReadyDraftDigest; digest != "" {
 		_, e = s.maintainChangeTx(tx, spec.ChangeID, changeMaintenanceRequest{Action: "ready", Service: spec.Service, Digest: digest, Reason: spec.Reason}, t.Owner, true)
@@ -372,6 +360,68 @@ func (s *Store) createChangeDeployment(t *ServiceDeployment) error {
 		return e
 	}
 	return tx.Commit()
+}
+
+func claimPublicationChange(tx *deployTx, key string, t *ServiceDeployment) (*ServiceDeployment, error) {
+	spec := t.Grant.Spec
+	var e error
+	var previous string
+	err := tx.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, key).Scan(&previous)
+	switch {
+	case err == nil:
+		var raw string
+		var prior ServiceDeployment
+		if e = tx.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, "service_deployment:"+previous).Scan(&raw); e != nil {
+			return nil, e
+		}
+		if e = json.Unmarshal([]byte(raw), &prior); e != nil {
+			return nil, e
+		}
+		if prior.Owner != t.Owner && prior.State == "running" {
+			return nil, fmt.Errorf("本次变更有正在进行的发布，请在原执行单查看进度")
+		}
+		same := prior.Owner == t.Owner && prior.Authority == t.Authority && prior.AuthorityKeyID == t.AuthorityKeyID && prior.Grant.Digest == t.Grant.Digest
+		if same && (prior.State == "running" || prior.State == "success") {
+			return &prior, nil
+		}
+		if prior.State == "running" || prior.LeaseUntil != 0 || prior.State == "blocked" && prior.DeliveryID != 0 {
+			return nil, fmt.Errorf("已有发布任务 %s，请核对原执行结果", previous)
+		}
+		if prior.PreparationID != 0 && prior.State != "success" && spec.PreparationID != prior.PreparationID {
+			var status string
+			if e = tx.QueryRow(`SELECT status FROM delivery_runs WHERE id=?`, prior.PreparationID).Scan(&status); e != nil {
+				return nil, e
+			}
+			if status != "canceled" && status != "rejected" {
+				return nil, fmt.Errorf("请核对原准备单 #%d，不能另起流程", prior.PreparationID)
+			}
+		}
+		if prior.CodeID != "" && prior.State != "success" && spec.PreparationID == prior.PreparationID {
+			var data string
+			var p CodePreparation
+			if e = tx.QueryRow(`SELECT value FROM deploy_meta WHERE key=?`, "code_preparation:"+prior.CodeID).Scan(&data); e != nil {
+				return nil, e
+			}
+			if json.Unmarshal([]byte(data), &p) != nil || p.State != "preview" {
+				return nil, fmt.Errorf("原代码任务已有执行记录，请先核对")
+			}
+		}
+		updated, err := tx.Exec(`UPDATE deploy_meta SET value=? WHERE key=? AND value=?`, t.ID, key, previous)
+		if err != nil {
+			return nil, err
+		}
+		n, err := updated.RowsAffected()
+		if err != nil || n != 1 {
+			return nil, ErrRunConflict
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		if _, e = tx.Exec(`INSERT INTO deploy_meta(key,value) VALUES(?,?)`, key, t.ID); e != nil {
+			return nil, fmt.Errorf("同范围发布已被提交，请查看原任务：%w", e)
+		}
+	default:
+		return nil, err
+	}
+	return nil, nil
 }
 
 func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *ServiceDeployment, pr *PipelineRunner, m *ReleaseManager) error {
@@ -400,15 +450,32 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 		return s.recoverChangeDispatch(t)
 	}
 	spec, g := t.Grant.Spec, t.Grant.Change
-	if t.ExpiresAt <= now {
+	if t.ExpiresAt > 0 && t.ExpiresAt <= now {
 		return block(fmt.Errorf("发布授权已过期，请核对原任务"))
 	}
-	config, dest, _, e := s.serviceDeploymentTerms(spec)
-	if e != nil {
-		return block(e)
-	}
-	if config != t.Grant.ConfigurationDigest || dest != t.Grant.TargetDigest {
-		return block(fmt.Errorf("应用构建配置、环境策略或部署目标与确认时不同"))
+	if g.Batch != nil {
+		for _, app := range g.Batch.Applications {
+			if app.Mode == "resource" {
+				continue
+			}
+			appSpec := spec
+			appSpec.Service = app.Service
+			config, dest, _, err := s.serviceDeploymentTerms(appSpec)
+			if err != nil {
+				return block(err)
+			}
+			if config != app.Config || dest != app.Destination {
+				return block(fmt.Errorf("应用 %s 配置或部署目标已变化", app.Service))
+			}
+		}
+	} else {
+		config, dest, _, e := s.serviceDeploymentTerms(spec)
+		if e != nil {
+			return block(e)
+		}
+		if config != t.Grant.ConfigurationDigest || dest != t.Grant.TargetDigest {
+			return block(fmt.Errorf("应用构建配置、环境策略或部署目标与确认时不同"))
+		}
 	}
 	draft, e := s.DraftDelivery(g.Request)
 	if e != nil {
@@ -438,14 +505,22 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 			if json.Unmarshal([]byte(r.Header.Get("X-Reviewer-Directory")), &enabled) != nil {
 				return fmt.Errorf("人员目录不可用")
 			}
-			prep, e := s.ResearchFlowPlan(req, nil, enabled, t.Owner)
+			var accounts map[string]string
+			if g.Batch != nil {
+				var err error
+				accounts, enabled, err = s.researchPeople(r.Context(), r)
+				if err != nil {
+					return err
+				}
+			}
+			prep, e := s.ResearchFlowPlan(req, accounts, enabled, t.Owner)
 			if e != nil {
 				return e
 			}
 			if digestJSON(prep.Nodes) != digestJSON(g.PreparationSteps) || researchScopeDigest(prep.Scope) != g.ScopeDigest {
 				return fmt.Errorf("准备范围或人员已变化")
 			}
-			run, e := s.CreateResearchFlow(req, nil, enabled, t.Owner)
+			run, e := s.CreateResearchFlow(req, accounts, enabled, t.Owner)
 			if e == nil {
 				t.PreparationID = run.ID
 			}
@@ -493,6 +568,8 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 				}
 				t.RunID = p.Builds[0].RunID
 				return report("running", p.State, p.Message)
+			case "conflict":
+				return report("running", "waiting_conflict", "请由 Agent 解决冲突；审核后通过原代码任务恢复："+p.ID)
 			case "ready":
 			default:
 				return block(fmt.Errorf("代码准备 %s：%s", p.State, p.Message))
@@ -502,7 +579,7 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 		// wins the revision race, accept only the receipt for this exact code node.
 		childID, nodeID := step.Detail, node.ID
 		return dispatch("prepare", prep.Revision, func() error {
-			_, err := s.advanceResearchFlowState(r.Context(), prep, t.Owner, pr)
+			_, err := s.advanceFrozenResearchFlow(r.Context(), prep, t.Owner, pr, g.Batch)
 			if errors.Is(err, ErrRunConflict) && childID != "" && (node.Kind == "code-prepare" || node.Kind == "code-verify") {
 				fresh := s.deliveryRunLedger(prep.ID)
 				if fresh != nil && fresh.Owner == t.Owner && fresh.Digest == prep.Digest {
@@ -531,6 +608,17 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 		t.BuiltCommit, t.BuiltArtifactDigest = b.Commit, b.ArtifactDigest
 		req := g.Request
 		req.PreparationRunID, req.CodePreparationID, req.Artifacts, req.Nodes = prep.ID, p.ID, map[string]int64{spec.Service: b.ArtifactID}, g.Steps
+		if g.Batch != nil {
+			req.Nodes = g.Request.Nodes
+			req.Artifacts = map[string]int64{}
+			for app, id := range g.Request.Artifacts {
+				req.Artifacts[app] = id
+			}
+			for _, build := range p.Builds {
+				req.Artifacts[build.Service] = build.ArtifactID
+			}
+			t.Artifacts = req.Artifacts
+		}
 		req.OrderConfirmed, req.CodeConfirmed = true, true
 		req.reviewerDirectory = r.Header.Get("X-Reviewer-Directory")
 		plan, secrets, err := s.ResolveDelivery(req, m)
@@ -540,7 +628,11 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 		if len(plan.Blockers) > 0 {
 			return block(fmt.Errorf("%s", strings.Join(plan.Blockers, "；")))
 		}
-		if len(plan.Services) != 1 || plan.Services[0].Service != spec.Service || plan.Services[0].Artifact.ID != b.ArtifactID || digestJSON(plan.Nodes) != digestJSON(g.Steps) {
+		if g.Batch != nil {
+			if publicationResourceDigest(plan) != g.Batch.ResourceDigest || !matchesPublicationArtifacts(plan, t.Artifacts) {
+				return block(fmt.Errorf("资源内容、执行顺序或制品与确认范围不一致"))
+			}
+		} else if len(plan.Services) != 1 || plan.Services[0].Service != spec.Service || plan.Services[0].Artifact.ID != b.ArtifactID || digestJSON(plan.Nodes) != digestJSON(g.Steps) {
 			return block(fmt.Errorf("最终发布计划与授权内容不一致"))
 		}
 		req.PreflightToken, _ = s.signDeliveryPreflight(req, plan, secrets, t.Owner)
@@ -554,12 +646,18 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 		})
 	}
 	run := s.deliveryRunLedger(t.DeliveryID)
-	if run == nil || run.Owner != t.Owner || run.Plan.PreparationRunID != prep.ID || len(run.Plan.Services) != 1 || run.Plan.Services[0].Artifact.ID != t.ArtifactID || digestJSON(run.Plan.Nodes) != digestJSON(g.Steps) {
+	if run == nil || run.Owner != t.Owner || run.Plan.PreparationRunID != prep.ID || (g.Batch == nil && digestJSON(run.Plan.Nodes) != digestJSON(g.Steps)) || (g.Batch != nil && (digestJSON(publicationNodes(run.Plan.Nodes, run.Plan.ArtifactSources)) != digestJSON(publicationNodes(g.Steps, g.Request.ArtifactSources)) || !matchesPublicationArtifacts(&run.Plan, t.Artifacts))) || (g.Batch == nil && (len(run.Plan.Services) != 1 || run.Plan.Services[0].Artifact.ID != t.ArtifactID)) {
 		return block(fmt.Errorf("发布执行单与本次制品不一致"))
 	}
 	for _, step := range run.Steps {
 		if step.Kind == "deploy" && step.ReleaseID > 0 {
 			t.ReleaseID = step.ReleaseID
+			if g.Batch != nil {
+				if t.Releases == nil {
+					t.Releases = map[string]int64{}
+				}
+				t.Releases[step.Service] = step.ReleaseID
+			}
 		}
 	}
 	if run.Status == "pending_approval" {
@@ -568,6 +666,15 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 	decision, message := deliveryControlDecision(s, run)
 	switch decision {
 	case "complete":
+		if g.Batch != nil {
+			for app, id := range t.Artifacts {
+				o := s.GetReleaseOrder(t.Releases[app])
+				if o == nil || o.Status != "success" || o.Environment != spec.Environment || o.Service != app || o.ArtifactID != id {
+					return block(fmt.Errorf("应用 %s 缺少本次发布回执", app))
+				}
+			}
+			return report("success", "complete", message)
+		}
 		order := s.GetReleaseOrder(t.ReleaseID)
 		if order == nil || order.Service != spec.Service || order.Environment != spec.Environment || order.ArtifactID != t.ArtifactID || order.Status != "success" {
 			return block(fmt.Errorf("缺少本次制品的发布回执"))
@@ -618,4 +725,16 @@ func (s *Store) recoverChangeDispatch(t *ServiceDeployment) error {
 		t.Message = "已找回原执行回执"
 	}
 	return s.saveServiceDeployment(t)
+}
+
+func matchesPublicationArtifacts(plan *DeliveryPlan, artifacts map[string]int64) bool {
+	if len(plan.Services) == 0 || len(plan.Services) != len(artifacts) {
+		return false
+	}
+	for _, app := range plan.Services {
+		if app.Artifact.ID <= 0 || artifacts[app.Service] != app.Artifact.ID {
+			return false
+		}
+	}
+	return true
 }

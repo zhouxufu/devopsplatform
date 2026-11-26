@@ -57,7 +57,7 @@ func platformTools() []Tool {
 		makeTool("list_release_versions", "查询版本范围和状态（跨应用，需全部应用授权）", "delivery:read", map[string]any{}),
 		makeTool("list_delivery_templates", "查询可配置流程编排模板与审核节点（跨应用）", "delivery:read", map[string]any{}),
 		makeTool("list_data_sync_tasks", "查询应用可复用的数据对比同步任务定义；不查询或同步业务数据", "changes:read", map[string]any{"service": str("应用标识")}, "service"),
-		makeTool("get_code_conflict", "读取本人原任务的冻结冲突上下文供本地Agent处理；不克隆、不合并、不构建", "builds:read", map[string]any{"preparation_id": str("原代码准备ID"), "environment": str("明确的任务环境")}, "preparation_id", "environment"),
+		makeTool("get_code_conflict", "读取本人原任务的冻结冲突上下文供本地Agent处理；不克隆、不合并、不构建", "builds:read", map[string]any{"preparation_id": str("原代码准备ID"), "environment": str("明确的任务环境"), "publication_task_id": str("冲突所属的整次发布任务ID")}, "preparation_id", "environment"),
 		makeTool("get_code_preparation", "查询本人代码合并、冲突、冻结提交和构建准备状态", "builds:read", map[string]any{"preparation_id": str("代码准备 ID")}, "preparation_id"),
 		makeTool("get_delivery_run", "查询交付单冻结范围、审核与执行进度；校验全部应用与环境", "delivery:read", map[string]any{"run_id": id, "environment": str("实际目标环境")}, "run_id", "environment"),
 		makeTool("get_platform_action", "读取 MCP 写操作确认状态；结果不确定时不得自动重试", "", map[string]any{"confirmation_id": str("预览返回的 ID")}, "confirmation_id"),

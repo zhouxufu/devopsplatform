@@ -122,7 +122,7 @@ func TestRealGradleSmartDocOutputAndFieldChanges(t *testing.T) {
 		for _, field := range change.Fields {
 			// smart-doc hashes schema names; a type change may replace the
 			// referenced object instead of retaining the same component path.
-			if strings.Contains(field.Before+field.After, `"amount"`) && strings.Contains(field.Before+field.After, `"type"`) {
+			if strings.Contains(field.Path, "/amount/type") || (strings.Contains(field.Before+field.After, `"amount"`) && strings.Contains(field.Before+field.After, `"type"`)) {
 				found = true
 			}
 		}
