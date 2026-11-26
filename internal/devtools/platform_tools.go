@@ -63,7 +63,7 @@ func platformTools() []Tool {
 		makeTool("get_platform_action", "读取 MCP 写操作确认状态；结果不确定时不得自动重试", "", map[string]any{"confirmation_id": str("预览返回的 ID")}, "confirmation_id"),
 	}
 	for _, t := range []Tool{
-		makeTool("maintain_change", "预览维护本人原编号变更：就绪代码仅修改title/summary保留ready，其他内容修改经冻结检查后退回draft；草稿可编辑/归档及调整归属。不执行", "changes:write", map[string]any{"service": str("原应用"), "change_id": id, "digest": str("get_change_maintenance返回的原摘要"), "action": map[string]any{"type": "string", "enum": []string{"edit", "archive"}}, "reason": str("修改或撤销原因"), "patch": changeMaintenancePatchSchema(), "work_item_ids": map[string]any{"type": "array", "minItems": 0, "maxItems": 100, "items": id}, "origin_work_item_id": id}, "service", "change_id", "digest", "action", "reason"),
+		makeTool("maintain_change", "预览维护本人原编号变更：就绪代码仅修改title/summary保留ready，其他内容修改经冻结检查后退回draft；独立代码草稿可用 ready 就绪，发布请直接用 deploy_service；草稿可编辑/归档及调整归属。不执行", "changes:write", map[string]any{"service": str("原应用"), "change_id": id, "digest": str("get_change_maintenance返回的原摘要"), "action": map[string]any{"type": "string", "enum": []string{"edit", "archive", "ready"}}, "reason": str("修改或撤销原因"), "patch": changeMaintenancePatchSchema(), "work_item_ids": map[string]any{"type": "array", "minItems": 0, "maxItems": 100, "items": id}, "origin_work_item_id": id}, "service", "change_id", "digest", "action", "reason"),
 		makeTool("report_changes", "预览登记开发变更草稿：代码、数据库表结构/数据 SQL、Nacos 等；可独立保存或关联工作项，不执行构建或发布", "changes:write", map[string]any{"service": str("应用稳定标识；未填写应用的变更使用此应用，禁止混入其他应用"), "work_item_id": id, "changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": changeDraftSchema()}}, "service", "changes"),
 		makeTool("attach_source_work_item", "预览关联来源需求或 Bug 引用，返回平台工作项 ID", "workitems:write", map[string]any{"connection": str("来源连接名"), "external_id": str("来源编号"), "kind": map[string]any{"type": "string", "enum": []string{"bug", "requirement"}}}, "connection", "external_id"),
 		makeTool("change_work_item_state", "预览 Bug 解决、激活、关闭、指派或评论；不立即回写", "workitems:write", map[string]any{"work_item_id": id, "action": str("resolve、activate、close、assignTo、comment"), "resolution": str("从 action-options 读取的来源解决方案，不自行猜测"), "resolved_build": str("解决版本"), "assigned_to": str("来源账号"), "duplicate_bug": str("重复 Bug 编号"), "comment": str("操作说明"), "keep_following": map[string]any{"type": "boolean"}}, "work_item_id", "action"),
@@ -264,10 +264,17 @@ func (s *ToolService) callPlatform(ctx context.Context, t *AccessToken, name str
 		if err != nil {
 			return nil, err
 		}
-		if err = globalWorkScope(t); err != nil {
+		state, err := get("/api/changes/"+id+"/maintenance", url.Values{"service": {service}})
+		if err != nil {
 			return nil, err
 		}
-		return get("/api/changes/"+id+"/maintenance", url.Values{"service": {service}})
+		if scopeErr := globalWorkScope(t); scopeErr != nil {
+			c := mapValue(mapValue(state)["change"])
+			if c["kind"] != "code" || c["service"] != service || c["owner"] != t.Owner || c["work_items"] != nil || c["delivery_ownership"] != nil {
+				return nil, scopeErr
+			}
+		}
+		return state, nil
 	case "get_change":
 		id, err := positiveID(args, "change_id")
 		if err != nil {

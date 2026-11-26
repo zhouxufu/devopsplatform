@@ -55,7 +55,7 @@ onBeforeUnmount(()=>{sequence++;clearTimeout(timer)})
         <p>#{{grant.spec.change_id}} · {{grant.change.title}}</p>
         <p class="text-sm break-all">{{grant.change.source_branch}} · {{grant.change.source_commit}} → {{grant.change.target_branch}} · {{grant.change.target_commit}}</p>
         <p class="text-sm">发布目标：{{grant.targets.join('、')||grant.target_type}}。仅发布本次构建的制品。</p>
-        <ol class="list-decimal pl-6 text-sm"><li v-for="n in [...grant.change.preparation_steps,...grant.change.release_steps]" :key="n.kind+':'+n.id">{{n.name}}<span v-if="n.approvers?.length"> · {{n.approvers.join('、')}}</span></li></ol>
+        <ol class="list-decimal pl-6 text-sm"><li v-if="grant.change.mark_ready_draft_digest">校验并将变更 #{{grant.spec.change_id}} 标为就绪</li><li v-for="n in [...grant.change.preparation_steps,...grant.change.release_steps]" :key="n.kind+':'+n.id">{{n.name}}<span v-if="n.approvers?.length"> · {{n.approvers.join('、')}}</span></li></ol>
         <div class="flex gap-2"><Button :disabled="busy" @click="confirm"><Spinner v-if="busy"/>确认并发布</Button><Button variant="ghost" :disabled="busy" @click="grant=null">返回</Button></div>
       </template>
     </template>

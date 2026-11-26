@@ -110,6 +110,12 @@ func (s *Store) resolveDeliveryScope(req DeliveryRequest, tpl *DeliveryTemplate)
 			if c == nil || seen[id] {
 				return nil, nil, fmt.Errorf("变更 #%d 不存在或重复", id)
 			}
+			if req.readyDraftDigest != "" {
+				if len(sourceIDs) != 1 || c.Status != ChangeDraft || digestJSON(c) != req.readyDraftDigest {
+					return nil, nil, fmt.Errorf("代码草稿已变化，请重新预览")
+				}
+				c.Status = ChangeReady // Project only in the preview. Confirmation rechecks the digest inside the transaction.
+			}
 			seen[id] = true
 			p.Changes = append(p.Changes, *c)
 		}

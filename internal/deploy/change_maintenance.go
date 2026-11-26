@@ -13,7 +13,7 @@ import (
 type changeMaintenanceRequest struct {
 	Service          string                     `json:"service"`
 	Digest           string                     `json:"digest"`
-	Action           string                     `json:"action"` // edit | archive (retain history)
+	Action           string                     `json:"action"` // edit | archive | ready
 	Change           *Change                    `json:"change,omitempty"`
 	WorkItemIDs      *[]int64                   `json:"work_item_ids,omitempty"`
 	OriginWorkItemID int64                      `json:"origin_work_item_id,omitempty"`
@@ -90,15 +90,26 @@ func (s *Store) maintenanceState(id int64, service, actor string) (map[string]an
 // A single transaction locks and rechecks the exact reviewed record, payload,
 // ownership and links. Preview performs identical validation then rolls back.
 func (s *Store) maintainChange(id int64, req changeMaintenanceRequest, actor string, save bool) (map[string]any, error) {
-	if req.Digest == "" || len(req.Reason) < 1 || len(req.Reason) > 2000 || (req.Action != "edit" && req.Action != "archive") {
-		return nil, fmt.Errorf("请提供原摘要、edit/archive动作和说明")
+	if req.Digest == "" || len(req.Reason) < 1 || len(req.Reason) > 2000 || (req.Action != "edit" && req.Action != "archive" && req.Action != "ready") {
+		return nil, fmt.Errorf("请提供原摘要、edit/archive/ready 动作和说明")
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`UPDATE changes SET updated_at=updated_at WHERE id=?`, id); err != nil {
+	out, err := s.maintainChangeTx(tx, id, req, actor, save)
+	if err != nil {
+		return nil, err
+	}
+	if save {
+		err = tx.Commit()
+	}
+	return out, err
+}
+
+func (s *Store) maintainChangeTx(tx *deployTx, id int64, req changeMaintenanceRequest, actor string, save bool) (map[string]any, error) {
+	if _, err := tx.Exec(`UPDATE changes SET updated_at=updated_at WHERE id=?`, id); err != nil {
 		return nil, err
 	}
 	current, err := loadMaintenanceChange(tx, id)
@@ -135,7 +146,19 @@ func (s *Store) maintainChange(id int64, req changeMaintenanceRequest, actor str
 	before := *current
 	next := *current
 	now := time.Now().Unix()
-	if req.Action == "archive" {
+	if req.Action == "ready" {
+		if next.Kind != "code" || len(next.WorkItems) != 0 || next.DeliveryOwnership != nil || !validPreparationBranch(next.Reference) || next.SQL != nil || next.Nacos != nil || next.Redis != nil {
+			return nil, fmt.Errorf("请选择本人带有有效源分支的独立代码草稿")
+		}
+		if req.Change != nil || req.Patch != nil || req.WorkItemIDs != nil || req.OriginWorkItemID != 0 {
+			return nil, fmt.Errorf("就绪不能同时修改变更内容或关联")
+		}
+		validated := next
+		if err = normalizeChange(&validated); err != nil {
+			return nil, err
+		}
+		next.Status = ChangeReady
+	} else if req.Action == "archive" {
 		if req.Change != nil || req.Patch != nil || req.WorkItemIDs != nil || req.OriginWorkItemID != 0 {
 			return nil, fmt.Errorf("归档不接受内容/关联替换")
 		}
@@ -278,7 +301,9 @@ func (s *Store) maintainChange(id int64, req changeMaintenanceRequest, actor str
 	// Execution payloads stay out of audit; code-description revisions retain
 	// their before/after text together with digests and the author reason.
 	effect := "draft_updated"
-	if descriptionOnly {
+	if req.Action == "ready" {
+		effect = "marked_ready"
+	} else if descriptionOnly {
 		effect = "ready_description_revised"
 	} else if before.Status == ChangeReady {
 		effect = "returned_to_draft"
@@ -301,11 +326,6 @@ func (s *Store) maintainChange(id int64, req changeMaintenanceRequest, actor str
 		}
 	}
 	out := map[string]any{"before": before, "after": after, "digest": digestJSON(after), "request": req, "no_execution": true, "saved": save, "effect": effect, "requires_ready_validation": before.Status == ChangeReady && after.Status == ChangeDraft}
-	if save {
-		if err = tx.Commit(); err != nil {
-			return nil, err
-		}
-	}
 	return out, nil
 }
 func registerChangeMaintenanceRoutes(mux *http.ServeMux, s *Store) {

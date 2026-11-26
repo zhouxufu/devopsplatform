@@ -74,7 +74,8 @@ type DeliveryRequest struct {
 	changeDeploymentID string
 	publication        *deliveryPublication
 	reviewerDirectory  string
-	previewDrafts      bool // Set only by the read-only preview route, never from JSON.
+	readyDraftDigest   string // Internal one-change deployment preview. Never accepted from JSON.
+	previewDrafts      bool   // Set only by the read-only preview route, never from JSON.
 }
 type DeliveryService struct {
 	Service           string             `json:"service"`

@@ -14,17 +14,18 @@ import (
 // Both entry points bind the user's confirmation to these values. A future
 // artifact is identified by the original preparation's verified build receipt.
 type changeDeploymentGrant struct {
-	Title            string          `json:"title"`
-	Request          DeliveryRequest `json:"request"`
-	SourceBranch     string          `json:"source_branch"`
-	SourceCommit     string          `json:"source_commit"`
-	TargetBranch     string          `json:"target_branch"`
-	TargetCommit     string          `json:"target_commit"`
-	GitIdentity      string          `json:"git_identity"`
-	ScopeDigest      string          `json:"scope_digest"`
-	TemplateDigest   string          `json:"template_digest"`
-	PreparationSteps []DeliveryNode  `json:"preparation_steps"`
-	Steps            []DeliveryNode  `json:"release_steps"`
+	MarkReadyDraftDigest string          `json:"mark_ready_draft_digest,omitempty"`
+	Title                string          `json:"title"`
+	Request              DeliveryRequest `json:"request"`
+	SourceBranch         string          `json:"source_branch"`
+	SourceCommit         string          `json:"source_commit"`
+	TargetBranch         string          `json:"target_branch"`
+	TargetCommit         string          `json:"target_commit"`
+	GitIdentity          string          `json:"git_identity"`
+	ScopeDigest          string          `json:"scope_digest"`
+	TemplateDigest       string          `json:"template_digest"`
+	PreparationSteps     []DeliveryNode  `json:"preparation_steps"`
+	Steps                []DeliveryNode  `json:"release_steps"`
 }
 
 func (s *Store) previewServiceDeploymentRequest(r *http.Request, m *ReleaseManager, spec ServiceDeploymentSpec) (*ServiceDeploymentGrant, error) {
@@ -71,8 +72,8 @@ func (s *Store) previewServiceDeploymentRequest(r *http.Request, m *ReleaseManag
 		return nil, fmt.Errorf("整次变更发布仅适用于开发／测试环境")
 	}
 	c := s.GetChange(spec.ChangeID)
-	if c == nil || c.Service != spec.Service || c.Kind != "code" || c.Status != ChangeReady || len(c.WorkItems) != 0 {
-		return nil, fmt.Errorf("需要当前应用已就绪的独立代码变更；关联需求或 Bug 请从原工作项发布")
+	if c == nil || c.Service != spec.Service || c.Kind != "code" || (c.Status != ChangeReady && c.Status != ChangeDraft) || len(c.WorkItems) != 0 {
+		return nil, fmt.Errorf("需要当前应用的独立代码草稿或就绪变更；关联需求或 Bug 请从原工作项发布")
 	}
 	config, targetDigest, policy, e := s.serviceDeploymentTerms(spec)
 	if e != nil {
@@ -105,7 +106,17 @@ func (s *Store) previewServiceDeploymentRequest(r *http.Request, m *ReleaseManag
 		}
 		req = *old.Plan.PreparationRequest
 	}
-	draft, e := s.DraftDelivery(req)
+	previewReq := req
+	if c.Status == ChangeDraft {
+		if old != nil {
+			return nil, fmt.Errorf("变更已回到草稿，请先核对原准备单")
+		}
+		previewReq.readyDraftDigest = digestJSON(c)
+		if _, e = s.maintainChange(c.ID, changeMaintenanceRequest{Action: "ready", Service: c.Service, Digest: previewReq.readyDraftDigest, Reason: spec.Reason}, deliveryActor(r), false); e != nil {
+			return nil, e
+		}
+	}
+	draft, e := s.DraftDelivery(previewReq)
 	if e != nil {
 		return nil, e
 	}
@@ -117,7 +128,7 @@ func (s *Store) previewServiceDeploymentRequest(r *http.Request, m *ReleaseManag
 		return nil, fmt.Errorf("当前发布人员目录不可用")
 	}
 	// Independent changes have no upstream work-item identities to resolve.
-	prep, e := s.ResearchFlowPlan(req, nil, enabled, deliveryActor(r))
+	prep, e := s.ResearchFlowPlan(previewReq, nil, enabled, deliveryActor(r))
 	if e != nil {
 		return nil, e
 	}
@@ -150,7 +161,7 @@ func (s *Store) previewServiceDeploymentRequest(r *http.Request, m *ReleaseManag
 	if e != nil {
 		return nil, e
 	}
-	g := &changeDeploymentGrant{Title: c.Title, Request: req, SourceBranch: c.Reference, TargetBranch: cp.TargetBranch, GitIdentity: preparationGitIdentity(repository, conn), ScopeDigest: researchScopeDigest(prep.Scope), TemplateDigest: digestJSON(draft.Template), PreparationSteps: prep.Nodes, Steps: steps}
+	g := &changeDeploymentGrant{MarkReadyDraftDigest: previewReq.readyDraftDigest, Title: c.Title, Request: req, SourceBranch: c.Reference, TargetBranch: cp.TargetBranch, GitIdentity: preparationGitIdentity(repository, conn), ScopeDigest: researchScopeDigest(prep.Scope), TemplateDigest: digestJSON(draft.Template), PreparationSteps: prep.Nodes, Steps: steps}
 	for _, ref := range refs.Branches {
 		if ref.Name == g.SourceBranch {
 			g.SourceCommit = ref.Commit
@@ -344,6 +355,12 @@ func (s *Store) createChangeDeployment(t *ServiceDeployment) error {
 		}
 	default:
 		return err
+	}
+	if digest := t.Grant.Change.MarkReadyDraftDigest; digest != "" {
+		_, e = s.maintainChangeTx(tx, spec.ChangeID, changeMaintenanceRequest{Action: "ready", Service: spec.Service, Digest: digest, Reason: spec.Reason}, t.Owner, true)
+		if e != nil {
+			return e
+		}
 	}
 	t.Revision = 1
 	t.UpdatedAt = time.Now().Unix()

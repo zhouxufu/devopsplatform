@@ -70,9 +70,7 @@ func TestMaintainReadyCodeMCPPreviewConfirm(t *testing.T) {
 	if err = st.CreateChange(change); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = st.SetChangeReady(change.ID, true); err != nil {
-		t.Fatal(err)
-	}
+
 	hub := deploy.NewLogHub()
 	up := httptest.NewServer(deploy.Routes(st, deploy.NewBuilder(st, t.TempDir(), hub), hub, "", deploy.NewStepLib(t.TempDir())))
 	defer up.Close()
@@ -80,10 +78,20 @@ func TestMaintainReadyCodeMCPPreviewConfirm(t *testing.T) {
 	svc := NewToolService(Upstreams{Deploy: up.URL})
 	svc.actions = store
 	token := workflowToken(t, store)
+	allApps := token.Applications
+	token.Applications = []string{"orders"}
 	state := mapValue(docCall(t, svc, token, "get_change_maintenance", map[string]any{"service": "orders", "change_id": change.ID}))
+	ready := docCall(t, svc, token, "maintain_change", map[string]any{"service": "orders", "change_id": change.ID, "digest": state["digest"], "action": "ready", "reason": "validate independent code"})
+	if st.GetChange(change.ID).Status != deploy.ChangeDraft {
+		t.Fatal("preview marked ready")
+	}
+	docConfirm(t, svc, token, ready)
+	docConfirm(t, svc, token, ready)
+	state = mapValue(docCall(t, svc, token, "get_change_maintenance", map[string]any{"service": "orders", "change_id": change.ID}))
 	if mapValue(state["maintenance"])["ready_code_description_keeps_ready"] != true {
 		t.Fatal(state)
 	}
+	token.Applications = allApps
 	args := map[string]any{"service": "orders", "change_id": change.ID, "digest": state["digest"], "action": "edit", "reason": "verified description correction", "patch": map[string]any{"summary": "corrected explanation"}}
 	preview := docCall(t, svc, token, "maintain_change", args)
 	if st.GetChange(change.ID).Summary != "original explanation" {

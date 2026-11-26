@@ -131,7 +131,7 @@ func TestIndependentChangeMCPReturnsOriginalInsteadOfAnotherConfirmation(t *test
 				result = map[string]any{"id": id, "state": "running"}
 			}
 		case "/api/service-deployments/preview":
-			result = map[string]any{"spec": spec, "digest": "frozen"}
+			result = map[string]any{"spec": spec, "digest": "frozen", "change": map[string]any{"mark_ready_draft_digest": "fixture-digest"}}
 		case "/api/service-deployments":
 			creates.Add(1)
 			result = map[string]any{"id": id, "state": "running"}
@@ -154,6 +154,17 @@ func TestIndependentChangeMCPReturnsOriginalInsteadOfAnotherConfirmation(t *test
 		t.Fatal("missing preparation authority accepted")
 	}
 	tok.Scopes = append(tok.Scopes, "delivery:prepare")
+	if _, _, _, err := svc.Call(context.Background(), tok, "deploy_service", spec); err == nil {
+		t.Fatal("draft readiness without changes:write")
+	}
+	tok.Scopes = append(tok.Scopes, "changes:write")
+	stale := docCall(t, svc, tok, "deploy_service", spec)
+	tok.Scopes = tok.Scopes[:len(tok.Scopes)-1]
+	_, _, _, err := svc.Call(context.Background(), tok, "confirm_platform_action", map[string]any{"confirmation_id": mapValue(stale)["confirmation_id"], "confirm": true, "reason": "confirmed"})
+	if err == nil || creates.Load() != 0 {
+		t.Fatal("removed readiness permission did not stop confirmation")
+	}
+	tok.Scopes = append(tok.Scopes, "changes:write")
 	preview := docCall(t, svc, tok, "deploy_service", spec)
 	docConfirm(t, svc, tok, preview)
 	again := mapValue(docCall(t, svc, tok, "deploy_service", spec))

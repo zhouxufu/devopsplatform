@@ -11,7 +11,7 @@ import (
 )
 
 func TestChangeDeploymentOneConfirmation(t *testing.T) {
-	for _, authority := range []string{"page", "mcp", "drift"} {
+	for _, authority := range []string{"page", "mcp", "drift", "draft"} {
 		t.Run(authority, func(t *testing.T) {
 			s, m, pr, git, work, bare, _ := serviceBuildFixture(t, true)
 			git("-C", work, "checkout", "-b", "feature/commute")
@@ -25,8 +25,10 @@ func TestChangeDeploymentOneConfirmation(t *testing.T) {
 			if e := s.CreateChange(c); e != nil {
 				t.Fatal(e)
 			}
-			if _, e := s.SetChangeReady(c.ID, true); e != nil {
-				t.Fatal(e)
+			if authority != "draft" {
+				if _, e := s.SetChangeReady(c.ID, true); e != nil {
+					t.Fatal(e)
+				}
 			}
 			tpl := &DeliveryTemplate{Name: "Development delivery", Mode: "version", Owner: "alice", Preparation: []DeliveryNode{{ID: "scope", Kind: "manual", Name: "范围", Instructions: "核对范围", AssigneeSource: "change_submitters", ApprovalMode: "all"}, {ID: "code", Kind: "code-prepare", Name: "合并构建", ApplicationScope: "delivery", DefaultCodePolicy: &CodePolicy{Mode: "integration", TargetBranch: "shared-test"}}}, Nodes: []DeliveryNode{{ID: "deploy", Kind: "deploy", Name: "部署"}}}
 			if e := s.SaveDeliveryTemplate(tpl); e != nil {
@@ -45,7 +47,7 @@ func TestChangeDeploymentOneConfirmation(t *testing.T) {
 			r.Header.Set("X-User", "alice")
 			r.Header.Set("X-Reviewer-Directory", `["alice"]`)
 			r.Header.Set("X-Work-Loop-Authority", "page")
-			if authority == "mcp" {
+			if authority == "mcp" || authority == "draft" {
 				r.Header.Set("X-Work-Loop-Authority", "mcp")
 				r.Header.Set("X-Work-Loop-Key-ID", "fixture")
 			}
@@ -78,14 +80,40 @@ func TestChangeDeploymentOneConfirmation(t *testing.T) {
 			if grant.Spec.ChangeID != c.ID || grant.Spec.PreparationID != spec.PreparationID {
 				t.Fatal("original independent scope not recovered", grant.Spec)
 			}
+			if authority == "draft" {
+				if grant.Change.MarkReadyDraftDigest == "" || s.GetChange(c.ID).Status != ChangeDraft {
+					t.Fatal("preview did not freeze original draft")
+				}
+				other := r.Clone(r.Context())
+				other.Header.Set("X-User", "bob")
+				if err := loopCall(mux, other, "/api/service-deployments/preview", spec, &ServiceDeploymentGrant{}); err == nil {
+					t.Fatal("accepted foreign draft")
+				}
+			}
 			id := strings.Repeat("c", 32)
 			var task ServiceDeployment
 			submit := map[string]any{"id": id, "spec": spec, "expected_digest": grant.Digest}
+			if authority == "draft" {
+				c.Summary = "updated after preview"
+				if err := s.UpdateChange(c); err != nil {
+					t.Fatal(err)
+				}
+				if err := loopCall(mux, r, "/api/service-deployments", submit, &task); err == nil || s.GetChange(c.ID).Status != ChangeDraft {
+					t.Fatal("stale confirmation promoted draft")
+				}
+				if err := loopCall(mux, r, "/api/service-deployments/preview", spec, &grant); err != nil {
+					t.Fatal(err)
+				}
+				submit["expected_digest"] = grant.Digest
+			}
 			if e := loopCall(mux, r, "/api/service-deployments", submit, &task); e != nil {
 				t.Fatal(e)
 			}
 			if e := loopCall(mux, r, "/api/service-deployments", submit, &task); e != nil {
 				t.Fatal("lost submit receipt", e)
+			}
+			if s.GetChange(c.ID).Status != ChangeReady {
+				t.Fatal("original change not ready after confirmation")
 			}
 			if authority == "drift" {
 				git("-C", work, "push", bare, "HEAD:shared-test")

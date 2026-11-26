@@ -129,7 +129,7 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 			return nil, err
 		}
 	case "maintain_change":
-		if err := globalWorkScope(t); err != nil {
+		if err := globalWorkScope(t); err != nil && stringArg(args, "action") != "ready" {
 			return nil, err
 		}
 		cid, err := positiveID(args, "change_id")
@@ -501,7 +501,7 @@ func (s *ToolService) confirmAction(ctx context.Context, t *AccessToken, args ma
 		}
 	}
 	if a.Tool == "deploy_service" {
-		if err := serviceDeploymentAccess(t, mapValue(a.Body["spec"]), true); err != nil {
+		if err := deploymentGrantAccess(t, a.Preview); err != nil {
 			s.actions.finishAction(id, "stale", nil, err)
 			return nil, err
 		}
@@ -530,7 +530,7 @@ func (s *ToolService) confirmAction(ctx context.Context, t *AccessToken, args ma
 		}
 	}
 	if a.Tool == "maintain_change" {
-		if err := globalWorkScope(t); err != nil {
+		if err := globalWorkScope(t); err != nil && stringArg(a.Body, "action") != "ready" {
 			s.actions.finishAction(id, "stale", nil, err)
 			return nil, err
 		}

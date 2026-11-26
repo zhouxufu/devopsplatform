@@ -14,7 +14,7 @@ func serviceDeploymentTools() []Tool {
 	props["change_id"] = map[string]any{"type": "integer", "minimum": 1, "description": "独立代码变更 ID；使用 change 模式，平台从变更解析功能分支"}
 	props["preparation_id"] = map[string]any{"type": "integer", "minimum": 1, "description": "已有准备单时传原编号，接续该单"}
 	return []Tool{
-		{Name: "deploy_service", Title: "一次确认部署服务", Description: "单应用发布首选此工具；省略 mode 时按变更编号、制品编号或分支自动选择。预览已有制品发布或构建并发布。展示应用、环境、冻结提交/制品及目标后，只确认一次 confirm_platform_action；后台自动构建、发布并核对原结果，不再逐步确认。需求/Bug已有 work_loop 授权时继续原任务。仅非受保护开发/测试，范围变化停止；独立代码变更走 mode=change + change_id，包含功能分支合入公共分支、构建并仅发布本次制品；已有准备单附 preparation_id。不得拆成逐步确认。", Scope: "delivery:execute", InputSchema: objectSchema(props, "service", "environment", "reason"), Annotations: map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false}},
+		{Name: "deploy_service", Title: "一次确认部署服务", Description: "单应用发布首选此工具；省略 mode 时按变更编号、制品编号或分支自动选择。预览已有制品发布或构建并发布。展示应用、环境、冻结提交/制品及目标后，只确认一次 confirm_platform_action；后台自动构建、发布并核对原结果，不再逐步确认。需求/Bug已有 work_loop 授权时继续原任务。仅非受保护开发/测试，范围变化停止；独立代码变更走 mode=change + change_id，本人独立草稿在同一次确认中校验就绪、合入公共分支、构建并仅发布本次制品，无需工作项编号或网页登录；已有准备单附 preparation_id。不得拆成逐步确认。", Scope: "delivery:execute", InputSchema: objectSchema(props, "service", "environment", "reason"), Annotations: map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false}},
 		{Name: "get_service_deployment", Title: "查询原服务部署任务", Description: "只读查询原任务的阶段、编号和阻塞原因。发布失败时用 release_id 调用 get_release_diagnostics；构建失败时用 run_id 调用 get_build_log。", Scope: "delivery:read", InputSchema: objectSchema(map[string]any{"task_id": str("原任务ID"), "service": str("按变更找回时的应用"), "environment": str("按变更找回时的环境"), "change_id": map[string]any{"type": "integer", "minimum": 1}}), Annotations: readonly("查询原服务部署任务")},
 		{Name: "advance_service_deployment", Title: "继续已授权服务部署", Description: "在原任务冻结授权内推进或核对，不重新询问用户确认；后台通常自动调用。范围变化/授权失效停止，不重放未知执行。", Scope: "delivery:execute", InputSchema: objectSchema(map[string]any{"task_id": str("原任务ID"), "revision": map[string]any{"type": "integer", "minimum": 1}}, "task_id", "revision"), Annotations: map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false}},
 	}
@@ -43,6 +43,12 @@ func serviceDeploymentAccess(t *AccessToken, spec map[string]any, write bool) er
 	}
 	return nil
 }
+func deploymentGrantAccess(t *AccessToken, grant map[string]any) error {
+	if stringArg(mapValue(grant["change"]), "mark_ready_draft_digest") != "" && !t.HasScope("changes:write") {
+		return fmt.Errorf("独立草稿就绪需要 changes:write 权限")
+	}
+	return serviceDeploymentAccess(t, mapValue(grant["spec"]), true)
+}
 func (s *ToolService) prepareServiceDeployment(ctx context.Context, t *AccessToken, args map[string]any, a *PlatformAction) error {
 	if e := serviceDeploymentAccess(t, args, true); e != nil {
 		return e
@@ -53,7 +59,7 @@ func (s *ToolService) prepareServiceDeployment(ctx context.Context, t *AccessTok
 	}
 	grant := mapValue(v)
 	spec := mapValue(grant["spec"])
-	if err := serviceDeploymentAccess(t, spec, true); err != nil {
+	if err := deploymentGrantAccess(t, grant); err != nil {
 		return err
 	}
 	if stringArg(spec, "service") != stringArg(args, "service") || stringArg(spec, "environment") != stringArg(args, "environment") || stringArg(grant, "digest") == "" {
