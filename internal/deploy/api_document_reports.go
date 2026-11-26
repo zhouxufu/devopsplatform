@@ -21,27 +21,29 @@ import (
 )
 
 type DocumentReport struct {
-	Number        int64                `json:"number"`
-	ID            string               `json:"id"`
-	ApplicationID string               `json:"application_id"`
-	Service       string               `json:"service"`
-	Environment   string               `json:"environment"`
-	Protocol      string               `json:"protocol"`
-	Actor         string               `json:"actor"`
-	ActorName     string               `json:"actor_name,omitempty"`
-	Source        string               `json:"source"`
-	State         string               `json:"state"`
-	CreatedAt     int64                `json:"created_at"`
-	UpdatedAt     int64                `json:"updated_at"`
-	ExpiresAt     int64                `json:"expires_at,omitempty"`
-	SnapshotID    int64                `json:"snapshot_id"`
-	BaselineID    int64                `json:"baseline_id"`
-	CurrentID     int64                `json:"current_id"`
-	Changes       apidoc.ChangeSummary `json:"changes"`
-	Error         string               `json:"error,omitempty"`
-	RunID         int64                `json:"run_id,omitempty"`
-	Commit        string               `json:"commit,omitempty"`
-	RequestDigest string               `json:"-"`
+	Association      *DocumentReportLinks `json:"association,omitempty"`
+	AssociationError string               `json:"association_error,omitempty"`
+	Number           int64                `json:"number"`
+	ID               string               `json:"id"`
+	ApplicationID    string               `json:"application_id"`
+	Service          string               `json:"service"`
+	Environment      string               `json:"environment"`
+	Protocol         string               `json:"protocol"`
+	Actor            string               `json:"actor"`
+	ActorName        string               `json:"actor_name,omitempty"`
+	Source           string               `json:"source"`
+	State            string               `json:"state"`
+	CreatedAt        int64                `json:"created_at"`
+	UpdatedAt        int64                `json:"updated_at"`
+	ExpiresAt        int64                `json:"expires_at,omitempty"`
+	SnapshotID       int64                `json:"snapshot_id"`
+	BaselineID       int64                `json:"baseline_id"`
+	CurrentID        int64                `json:"current_id"`
+	Changes          apidoc.ChangeSummary `json:"changes"`
+	Error            string               `json:"error,omitempty"`
+	RunID            int64                `json:"run_id,omitempty"`
+	Commit           string               `json:"commit,omitempty"`
+	RequestDigest    string               `json:"-"`
 }
 
 const reportColumns = `id,application_id,service,environment,protocol,actor,source,state,created_at,updated_at,expires_at,snapshot_id,baseline_id,summary,error,run_id,commit_ref,request_digest`
@@ -143,6 +145,12 @@ func (s *Store) insertDocumentReport(v DocumentReport) error {
 	return e
 }
 func (s *Store) publicDocumentReport(v DocumentReport) DocumentReport {
+	links, e := scanReportLinks(s.db.QueryRow(reportLinksSelect, v.ID))
+	if e != nil {
+		v.AssociationError = "需求关联读取失败，请重试"
+	} else {
+		v.Association = &links
+	}
 	if v.State == "preview" && v.ExpiresAt <= time.Now().Unix() {
 		v.State = "expired"
 	}
@@ -154,7 +162,7 @@ func (s *Store) publicDocumentReport(v DocumentReport) DocumentReport {
 }
 
 // The receipt is committed with the immutable snapshot, including no-op uploads.
-func finishDocumentReport(tx *deployTx, id string, snapshot, baseline int64, state string, summary apidoc.ChangeSummary) error {
+func finishDocumentReport(tx *deployTx, id string, snapshot, baseline int64, state string, summary apidoc.ChangeSummary, context ...*DocumentChangeContext) error {
 	if id == "" {
 		return nil
 	}
@@ -166,6 +174,9 @@ func finishDocumentReport(tx *deployTx, id string, snapshot, baseline int64, sta
 	n, e := r.RowsAffected()
 	if e == nil && n != 1 {
 		return fmt.Errorf("上报记录已变化，请核对原回执")
+	}
+	if e == nil && len(context) > 0 {
+		return recordAutomaticReportLinks(tx, id, context[0])
 	}
 	return e
 }
@@ -185,7 +196,7 @@ func finishDuplicateDocumentReport(tx *deployTx, sv *Service, snap APIDocumentSn
 	if id != baseline {
 		state = "historical"
 	}
-	if e = finishDocumentReport(tx, snap.ReportID, id, baseline, state, diff.Summary); e != nil {
+	if e = finishDocumentReport(tx, snap.ReportID, id, baseline, state, diff.Summary, snap.ChangeContext); e != nil {
 		return 0, e
 	}
 	if e = tx.Commit(); e != nil {
@@ -356,6 +367,41 @@ func (s *Store) documentReportHTTP(next http.HandlerFunc, preview bool) http.Han
 			}
 		}
 		v, err = s.documentReport(id)
+		if recorder.Code < 400 && preview {
+			var submitted struct {
+				Context *DocumentChangeContext `json:"change_context"`
+			}
+			if json.Unmarshal(raw, &submitted) == nil && submitted.Context != nil {
+				// Preview may reuse an older snapshot's lineage in its response.
+				// Link this attempt only to its own explicitly submitted context.
+				candidateRaw := documentRaw
+				if candidate := body["candidate"]; candidate != nil {
+					candidateRaw, _ = json.Marshal(candidate)
+				}
+				resolved, e := s.resolveDocumentChanges(submitted.Context, candidateRaw)
+				if e != nil {
+					_, _ = s.db.Exec(`UPDATE api_document_reports SET state='failed',error='需求关联已变化，请重新预览',updated_at=? WHERE id=? AND state='preview'`, time.Now().Unix(), id)
+					http.Error(w, `{"error":"需求关联已变化，请重新预览"}`, 409)
+					return
+				}
+				tx, e := s.db.Begin()
+				if e != nil {
+					http.Error(w, `{"error":"关联记录保存失败"}`, 500)
+					return
+				}
+				e = recordAutomaticReportLinks(tx, id, resolved)
+				if e == nil {
+					e = tx.Commit()
+				} else {
+					tx.Rollback()
+				}
+				if e != nil {
+					_, _ = s.db.Exec(`UPDATE api_document_reports SET state='uncertain',error='关联记录保存结果待核对，文档尚未保存',updated_at=? WHERE id=? AND state='preview'`, time.Now().Unix(), id)
+					http.Error(w, `{"error":"关联记录保存失败，请核对原上报记录"}`, 500)
+					return
+				}
+			}
+		}
 		if err != nil {
 			http.Error(w, `{"error":"回执读取失败，请按原上报编号核对"}`, 500)
 			return
@@ -368,6 +414,7 @@ func (s *Store) documentReportHTTP(next http.HandlerFunc, preview bool) http.Han
 }
 
 func registerDocumentReportRoutes(mux *http.ServeMux, s *Store, wj func(http.ResponseWriter, any), fail func(http.ResponseWriter, int, any)) {
+	registerDocumentReportLinkRoutes(mux, s, wj, fail)
 	mux.HandleFunc("GET /api/api-document-reports", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		page, _ := strconv.Atoi(q.Get("page"))

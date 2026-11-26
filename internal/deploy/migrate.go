@@ -56,6 +56,7 @@ var deployMigrationTables = func() []deployMigrationTable {
 		migrationTable("api_document_maintainer_maps", "snapshot_id,document", "snapshot_id"),
 		migrationTable("api_document_change_contexts", "snapshot_id,document", "snapshot_id"),
 		migrationTable("api_document_reports", reportSelectColumns, "id"),
+		migrationTable("api_document_report_links", "report_id,revision,document,source,actor,updated_at", "report_id"),
 		migrationTable("api_document_operation_updates", "snapshot_id,document", "snapshot_id"),
 		migrationTable("api_document_lineage", "snapshot_id,document", "snapshot_id"),
 		migrationTable("api_document_work_item_events", "work_item_id,snapshot_id,document", "work_item_id,snapshot_id"),

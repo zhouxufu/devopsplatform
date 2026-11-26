@@ -205,7 +205,7 @@ func (s *Store) recordAPIDocumentContent(sv *Service, snap APIDocumentSnapshot, 
 	if e = recordOperationUpdates(tx, id, baseline, newOperations, diff); e != nil {
 		return 0, e
 	}
-	if e = finishDocumentReport(tx, snap.ReportID, id, baseline, "saved", diff.Summary); e != nil {
+	if e = finishDocumentReport(tx, snap.ReportID, id, baseline, "saved", diff.Summary, snap.ChangeContext); e != nil {
 		return 0, e
 	}
 	if e = tx.Commit(); e != nil {

@@ -1,5 +1,5 @@
 <script setup>
-import {ref,computed,onMounted,onBeforeUnmount,watch} from 'vue'
+import {ref,computed,onMounted,onBeforeUnmount,watch,provide} from 'vue'
 import {useRoute,useRouter} from 'vue-router'
 import {createViewNavigation} from '../shared/viewHistory.js'
 import PageSurface from '../shared/components/PageSurface.vue'
@@ -8,26 +8,43 @@ import OptionPicker from '../shared/components/OptionPicker.vue'
 import DateRangeFilter from '../shared/components/DateRangeFilter.vue'
 import DataTable from '../shared/components/DataTable.vue'
 import HelpTip from '../shared/components/HelpTip.vue'
+import WorkItemPicker from '../deploy/components/WorkItemPicker.vue'
+import {toast} from '../shared/composables/toast.js'
 import {Badge,Button,Input,Checkbox,Field,FieldLabel,Spinner,Accordion,AccordionItem,AccordionTrigger,AccordionContent} from '../shared/shadcn-ui.js'
 import {reportStates,reportSources,reportRelation,reportTime,documentDestination,openDocumentWorkspace} from './reportModel.js'
 const route=useRoute(),router=useRouter(),navigateView=createViewNavigation(router)
 const service=ref(String(route.query.service||'')),environment=ref(String(route.query.environment||'')),actor=ref(String(route.query.actor||'')),source=ref(String(route.query.source||'')),state=ref(String(route.query.state||'')),protocol=ref(String(route.query.protocol||'')),mine=ref(route.query.mine==='1'),start=ref(String(route.query.start||'')),end=ref(String(route.query.end||'')),page=ref(Number(route.query.page)||1)
 const me=ref(null),services=ref([]),environments=ref([]),rows=ref([]),total=ref(0),loading=ref(false),error=ref(''),detail=ref(null),detailLoading=ref(false),detailError=ref(''),selectedID=ref(String(route.query.report||'')),changeKind=ref(''),changeSearch=ref(''),cancelBusy=ref(false)
 let epoch=0,detailEpoch=0,controller
-const columns=[{id:'time',label:'上报时间',size:190,required:true},{id:'target',label:'应用 / 环境',size:180,required:true},{id:'actor',label:'上报人 / 来源',size:155},{id:'result',label:'上报结果',size:180,required:true},{id:'relation',label:'当前关系',size:180},{id:'changes',label:'接口变化',size:160},{id:'actions',label:'操作',size:90,required:true,pin:'right'}]
+const columns=[{id:'time',label:'上报时间',size:190,required:true},{id:'target',label:'应用 / 环境',size:180,required:true},{id:'actor',label:'上报人 / 来源',size:155},{id:'result',label:'上报结果',size:180,required:true},{id:'relation',label:'当前关系',size:180},{id:'workItems',label:'关联需求 / Bug',size:230},{id:'changes',label:'接口变化',size:160},{id:'actions',label:'操作',size:90,required:true,pin:'right'}]
 const changeColumns=[{id:'kind',label:'变化',size:90},{id:'operation',label:'功能 / 接口',size:360,flex:true},{id:'fields',label:'字段变化',size:350},{id:'actions',label:'操作',size:115}]
 const differences=computed(()=>(detail.value?.comparison?.changes||[]).filter(v=>(!changeKind.value||v.kind===changeKind.value)&&(!changeSearch.value||`${v.summary} ${v.method} ${v.path}`.toLowerCase().includes(changeSearch.value.toLowerCase()))))
 const report=computed(()=>detail.value?.report)
+const selectingLinks=ref(false),linksBusy=ref(false),linksError=ref(''),linksServer=ref(null),linksDraft=ref(null),linksRevision=ref(0)
+const canLink=computed(()=>report.value&&!report.value.association_error&&(me.value?.role==='admin'||me.value?.username===report.value.actor))
+provide('api',request)
+function editLinks(){linksServer.value=null;linksError.value='';linksRevision.value=report.value.association?.revision||0;linksDraft.value=[...(report.value.association?.items||[])];selectingLinks.value=true}
+function chooseLinks(items){linksDraft.value=items;selectingLinks.value=false;saveLinks()}
+async function saveLinks(){if(linksBusy.value||!report.value||!canLink.value)return;const id=report.value.id;linksBusy.value=true;linksError.value='';try{const association=await request('api/api-document-reports/'+id+'/work-items',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:linksRevision.value,work_item_ids:linksDraft.value.map(w=>w.id)})});if(report.value?.id!==id)return;report.value.association=association;const row=rows.value.find(w=>w.id===id);if(row)row.association=association;linksDraft.value=null;toast('需求 / Bug 关联已保存','success')}catch(e){linksError.value=e.message+'；本次选择已保留。';if(e.status===409){try{const current=await request('api/api-document-reports/'+id);if(report.value?.id===id)linksServer.value=current.report.association}catch{}}}finally{linksBusy.value=false}}
+function mergeLinkSelections(){if(!linksServer.value)return;linksDraft.value=[...new Map([...linksServer.value.items,...linksDraft.value].map(w=>[w.id,w])).values()];linksRevision.value=linksServer.value.revision;report.value.association=linksServer.value;linksServer.value=null;linksError.value='已合并双方选择，请核对后保存。'}
+function useServerLinks(){if(!linksServer.value)return;report.value.association=linksServer.value;linksDraft.value=null;linksServer.value=null;linksError.value=''}
+const removeLinkGuard=router.beforeEach(to=>{if((linksBusy.value||linksDraft.value!==null||selectingLinks.value)&&(to.path!=='/reports'||String(to.query.report||'')!==selectedID.value)){toast('关联尚未保存，请先保存或取消编辑','warning');return false}return true})
+onBeforeUnmount(removeLinkGuard)
+function viewWorkItem(item){const hash='#/work/'+item.id;if(window.parent!==window)window.parent.postMessage({type:'workspace.open',plugin:'research',hash},location.origin);else window.open('/api/plugins/research/ui'+hash,'_blank','noopener')}
+watch(()=>report.value?.id,()=>{if(!linksBusy.value){linksDraft.value=null;linksError.value='';selectingLinks.value=false}})
+watch([linksDraft,linksBusy,selectingLinks],()=>{if(window.parent!==window)window.parent.postMessage({type:'workspace.dirty',dirty:linksDraft.value!==null,busy:linksBusy.value||selectingLinks.value},location.origin)})
+
 const appName=value=>services.value.find(s=>s.name===value)?.display_name||value
 const envName=value=>environments.value.find(e=>e.name===value)?.display_name||value||'未区分环境'
 const kindName=value=>({added:'新增',modified:'修改',removed:'删除'})[value]||value
 function query(){return {...(selectedID.value&&report.value?{detail_service:report.value.service,detail_environment:report.value.environment,detail_protocol:report.value.protocol}:{}),service:service.value,environment:environment.value,actor:actor.value,source:source.value,state:state.value,protocol:protocol.value,mine:mine.value?'1':'',start:start.value,end:end.value,page:String(page.value),...(selectedID.value?{report:selectedID.value}:{})}}
 function remember(mode='replace'){const navigation=navigateView({path:'/reports',query:Object.fromEntries(Object.entries(query()).filter(([,v])=>v!==''))},mode==='push');if(window.parent!==window)window.parent.postMessage({type:'workspace.label',label:report.value&&selectedID.value?'上报记录 · '+appName(report.value.service)+' · '+envName(report.value.environment)+' · R'+report.value.number:'上报记录'},location.origin);return navigation}
-async function request(url,options){const r=await fetch(url,options);const v=await r.json();if(!r.ok)throw Error(r.status===401?'登录已过期，请重新登录后重试':v.error||'读取失败');return v}
+async function request(url,options){const r=await fetch(url,options);const v=await r.json();if(!r.ok){const e=Error(r.status===401?'登录已过期，请重新登录后重试':v.error||'读取失败');e.status=r.status;throw e}return v}
 async function load(reset=false,sync=true){if(reset)page.value=1;if(sync)remember();controller?.abort();controller=new AbortController();const seq=++epoch;loading.value=true;error.value='';const q=new URLSearchParams(Object.fromEntries(Object.entries(query()).filter(([k,v])=>v!==''&&!['report','start','end','detail_service','detail_environment','detail_protocol'].includes(k))));for(const [k,v] of [['start',start.value],['end',end.value]])if(v)q.set(k,String(Math.floor(new Date(v).getTime()/1000)));try{const v=await request('api/api-document-reports?'+q,{signal:controller.signal});if(seq!==epoch)return;rows.value=v.items;total.value=v.total}catch(e){if(seq===epoch&&e.name!=='AbortError')error.value=e.message}finally{if(seq===epoch)loading.value=false}}
-async function open(id,push=true){const changed=selectedID.value!==id,seq=++detailEpoch;detail.value=null;selectedID.value=id;detailLoading.value=true;detailError.value='';changeKind.value='';changeSearch.value='';try{await remember(push&&changed?'push':'replace');if(seq!==detailEpoch)return;const v=await request('api/api-document-reports/'+encodeURIComponent(id));if(seq===detailEpoch){detail.value=v;remember()}}catch(e){if(seq===detailEpoch)detailError.value=e.message}finally{if(seq===detailEpoch)detailLoading.value=false}}
+async function open(id,push=true){if(linksBusy.value||linksDraft.value!==null){toast('请先保存或取消关联编辑','warning');return}const changed=selectedID.value!==id,seq=++detailEpoch;detail.value=null;selectedID.value=id;detailLoading.value=true;detailError.value='';changeKind.value='';changeSearch.value='';try{await remember(push&&changed?'push':'replace');if(seq!==detailEpoch)return;const v=await request('api/api-document-reports/'+encodeURIComponent(id));if(seq===detailEpoch){detail.value=v;remember()}}catch(e){if(seq===detailEpoch)detailError.value=e.message}finally{if(seq===detailEpoch)detailLoading.value=false}}
 
 function back(useHistory=true){
+ if(linksBusy.value||linksDraft.value!==null){toast('请先保存或取消关联编辑','warning');return}
  if(useHistory){const previous=router.options.history.state.back;if(typeof previous==='string'){const u=new URL(previous,location.origin);if(u.pathname==='/reports'&&!u.searchParams.has('report')){router.back();return}}}
  detailEpoch++;selectedID.value='';detail.value=null;detailError.value='';detailLoading.value=false;remember()
 }
@@ -46,7 +63,7 @@ onBeforeUnmount(()=>{epoch++;detailEpoch++;controller?.abort()})
 </script>
 <template>
  <main class="min-h-screen bg-background text-foreground"><PageSurface width="full" density="compact">
-  <PageHeader title="上报记录"><template #actions><Button v-if="selectedID" variant="outline" @click="back">返回上报记录</Button><Button variant="outline" :disabled="loading||detailLoading" @click="selectedID?open(selectedID):load()"><Spinner v-if="loading||detailLoading"/>刷新</Button></template></PageHeader>
+  <PageHeader title="上报记录"><template #actions><Button v-if="selectedID" variant="outline" @click="back">返回上报记录</Button><Button variant="outline" :disabled="loading||detailLoading||linksBusy||linksDraft!==null" @click="selectedID?open(selectedID):load()"><Spinner v-if="loading||detailLoading"/>刷新</Button></template></PageHeader>
   <section v-show="!selectedID" class="space-y-4">
    <div class="flex flex-wrap items-end gap-3">
     <Field class="w-44"><FieldLabel>应用</FieldLabel><OptionPicker v-model="service" :options="services.map(s=>({value:s.name,label:s.display_name||s.name}))" all-label="全部应用"/></Field>
@@ -65,6 +82,7 @@ onBeforeUnmount(()=>{epoch++;detailEpoch++;controller?.abort()})
     <template #cell-actor="{record}">{{record.actor_name||record.actor||'未记录'}}<div class="text-xs text-muted-foreground">{{reportSources[record.source]||record.source}}</div></template>
     <template #cell-result="{record}"><Badge :variant="record.state==='failed'?'destructive':'secondary'">{{reportStates[record.state]||record.state}}</Badge><span v-if="record.snapshot_id"> · #{{record.snapshot_id}}</span></template>
     <template #cell-relation="{record}">{{reportRelation(record)}}</template>
+    <template #cell-workItems="{record}"><span v-if="record.association_error" class="text-destructive">关联读取失败</span><span v-else-if="!record.association?.items?.length" class="text-muted-foreground">未关联</span><div v-for="item in (record.association?.items||[]).slice(0,2)" :key="item.id"><Button variant="link" class="h-auto whitespace-normal px-0 text-left" @click="viewWorkItem(item)">{{item.kind==='bug'?'Bug':'需求'}} #{{item.external_id||item.id}} · {{item.title}}</Button></div><Button v-if="record.association?.items?.length>2" variant="link" @click="open(record.id)">查看全部 {{record.association.items.length}} 项</Button></template>
     <template #cell-changes="{record}"><span v-if="['saved','historical','unchanged'].includes(record.state)">新增 {{record.changes.added||0}} · 修改 {{record.changes.modified||0}} · 删除 {{record.changes.removed||0}}</span><span v-else>—</span></template>
     <template #cell-actions="{record}"><Button variant="link" :disabled="loading" @click="open(record.id)">查看</Button></template>
     <template #empty><p class="p-6 text-center text-muted-foreground">暂无匹配的上报记录</p></template>
@@ -77,8 +95,13 @@ onBeforeUnmount(()=>{epoch++;detailEpoch++;controller?.abort()})
     <div class="flex flex-wrap items-center gap-3"><Badge :variant="report.state==='failed'?'destructive':'secondary'">{{reportStates[report.state]}}</Badge><span>{{appName(report.service)}} / {{envName(report.environment)}} · {{report.protocol}}</span><span>{{reportRelation(report)}}</span></div>
     <div class="text-sm text-muted-foreground">{{reportTime(report.created_at)}} · {{report.actor_name||report.actor||'上报人未记录'}} · {{reportSources[report.source]}} · 上报记录 R{{report.number||report.id}}</div>
     <p v-if="report.error" role="status">{{report.error}}</p>
-    <div class="flex flex-wrap gap-2"><Button v-if="report.snapshot_id" variant="outline" @click="openDocumentWorkspace(documentDestination(report))">查看对应文档 #{{report.snapshot_id}}</Button><Button v-if="report.current_id" variant="outline" @click="openDocumentWorkspace(documentDestination(report,{current:true}))">查看当前文档 #{{report.current_id}}</Button><Button v-if="report.state==='preview'&&report.actor===me?.username" variant="outline" :disabled="cancelBusy" @click="cancel"><Spinner v-if="cancelBusy"/>取消本人预览</Button></div>
+    <div class="flex flex-wrap gap-2"><Button v-if="report.snapshot_id" variant="outline" @click="openDocumentWorkspace(documentDestination(report))">查看对应文档 #{{report.snapshot_id}}</Button><Button v-if="report.current_id" variant="outline" @click="openDocumentWorkspace(documentDestination(report,{current:true}))">查看当前文档 #{{report.current_id}}</Button><Button v-if="report.state==='preview'&&report.actor===me?.username" variant="outline" :disabled="cancelBusy||linksBusy||linksDraft!==null" @click="cancel"><Spinner v-if="cancelBusy"/>取消本人预览</Button></div>
     <div class="text-sm text-muted-foreground">文档范围：{{report.source==='edit'?'按原基线保存的文档修订':'完整文档上报'}} · 来源 Commit：{{report.commit||'未关联'}}<span v-if="report.run_id"> · 构建记录 #{{report.run_id}}</span> · 运行版本一致性未核验</div>
+    <section class="space-y-3" aria-label="本次上报关联需求或Bug"><div class="flex flex-wrap items-center gap-2"><h3 class="text-sm font-medium">关联需求 / Bug</h3><Badge v-if="report.association?.source" variant="outline">{{report.association.source==='reported'?'随本次上报关联':'手动关联'}}</Badge><HelpTip text="仅记录这次上报对应的需求或Bug，不需要审批，也不修改文档版本、字段历史来源或需求状态。"/><Button v-if="canLink&&linksDraft===null" variant="outline" size="sm" @click="editLinks">{{report.association?.items?.length?'修改关联':'关联需求 / Bug'}}</Button></div>
+     <p v-if="report.association_error" role="alert" class="text-destructive">{{report.association_error}}</p>
+     <div v-if="linksDraft===null" class="flex flex-wrap gap-2"><span v-if="!report.association?.items?.length" class="text-sm text-muted-foreground">本次上报未携带需求编号，可在这里补充关联。</span><Button v-for="item in report.association?.items||[]" :key="item.id" variant="link" class="h-auto whitespace-normal px-0 text-left" @click="viewWorkItem(item)">{{item.kind==='bug'?'Bug':'需求'}} #{{item.external_id||item.id}} · {{item.title}}</Button></div>
+     <div v-else class="space-y-3"><div class="flex flex-wrap gap-2"><Badge v-for="item in linksDraft" :key="item.id" variant="outline">{{item.kind==='bug'?'Bug':'需求'}} #{{item.external_id||item.id}} · {{item.title}}</Badge><span v-if="!linksDraft.length" class="text-sm text-muted-foreground">未选择关联项，保存将清空本记录的关联。</span></div><p v-if="linksError" role="alert" class="text-destructive">{{linksError}}</p><div v-if="linksServer" class="space-y-2 text-sm"><p>服务器当前关联：{{linksServer.items.map(w=>'#'+(w.external_id||w.id)+' '+w.title).join('、')||'未关联'}}</p><Button variant="outline" @click="mergeLinkSelections">合并双方选择</Button><Button variant="ghost" @click="useServerLinks">采用服务器关联</Button></div><div class="flex flex-wrap gap-2"><Button variant="outline" :disabled="linksBusy" @click="selectingLinks=true">重新选择</Button><Button :disabled="linksBusy" @click="saveLinks"><Spinner v-if="linksBusy"/>保存关联</Button><Button variant="ghost" :disabled="linksBusy" @click="linksDraft=null;linksError=''">取消编辑</Button></div></div>
+    </section>
     <template v-if="detail.comparison">
      <div class="flex flex-wrap items-center gap-3"><span>本次变化 · {{report.baseline_id?'#'+report.baseline_id:'首次空基线'}} → #{{report.snapshot_id}}</span><OptionPicker v-model="changeKind" class="w-36" :options="[{value:'added',label:'新增'},{value:'modified',label:'修改'},{value:'removed',label:'删除'}]" all-label="全部变化"/><Input v-model="changeSearch" class="max-w-sm" placeholder="搜索本次变化的功能或路径"/></div>
      <p v-if="detail.comparison.truncated" role="status">变化清单超过展示上限，请查看对应文档核对完整定义。</p>
@@ -92,5 +115,6 @@ onBeforeUnmount(()=>{epoch++;detailEpoch++;controller?.abort()})
     </template>
    </template>
   </section>
+ <WorkItemPicker :show="selectingLinks" purpose="document-report" :ids="(linksDraft||[]).map(w=>w.id)" :seed="linksDraft||[]" :me="me||{}" :environments="environments" @close="selectingLinks=false" @confirm="chooseLinks"/>
  </PageSurface></main>
 </template>
