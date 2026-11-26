@@ -11,7 +11,6 @@ import DateRangeFilter from '../shared/components/DateRangeFilter.vue'
 import DataTable from '../shared/components/DataTable.vue'
 import HelpTip from '../shared/components/HelpTip.vue'
 import WorkItemPicker from '../deploy/components/WorkItemPicker.vue'
-import FieldDiffDetails from './FieldDiffDetails.vue'
 import {toast} from '../shared/composables/toast.js'
 import {Badge,Button,Input,InputGroup,InputGroupInput,InputGroupAddon,InputGroupButton,Checkbox,Field,FieldGroup,FieldLabel,Popover,PopoverTrigger,PopoverContent,Spinner} from '../shared/shadcn-ui.js'
 import {FilterIcon,XIcon} from '@lucide/vue'
@@ -22,7 +21,7 @@ const me=ref(null),services=ref([]),environments=ref([]),rows=ref([]),total=ref(
 let epoch=0,detailEpoch=0,controller
 const columns=[{id:'time',label:'上报时间 / 编号',size:155,minSize:145,required:true},{id:'target',label:'应用 / 环境',size:135,minSize:115,required:true},{id:'actor',label:'上报人 / 来源',size:125,minSize:100},{id:'result',label:'上报结果 / 当前关系',size:170,minSize:150,required:true},{id:'workItems',label:'关联需求 / Bug',size:220,minSize:180,flex:true},{id:'changes',label:'接口变化',size:165,minSize:145},{id:'actions',label:'操作',size:60,minSize:60,required:true,pin:'right'}]
 const filterCount=computed(()=>Number(!!protocol.value)+Number(!!source.value)+Number(!!(start.value||end.value)))
-const changeColumns=[{id:'kind',label:'变化',size:90},{id:'operation',label:'功能 / 接口',size:360,flex:true},{id:'fields',label:'字段变化',size:170},{id:'actions',label:'操作',size:115}]
+const changeColumns=[{id:'kind',label:'变化',size:90},{id:'operation',label:'功能 / 接口',size:360,flex:true},{id:'actions',label:'操作',size:115}]
 const differences=computed(()=>detail.value?.comparison?.changes||[])
 const changePage=ref(1),changePageSize=ref(20)
 const changePages=computed(()=>Math.max(1,Math.ceil(differences.value.length/changePageSize.value)))
@@ -124,7 +123,6 @@ onBeforeUnmount(()=>{epoch++;detailEpoch++;controller?.abort()})
      <DataTable :rows="pagedDifferences" :columns="changeColumns" :max-height="0" row-key="id" table-key="api-report-changes">
       <template #cell-kind="{record}"><Badge variant="outline">{{kindName(record.kind)}}</Badge></template>
       <template #cell-operation="{record}">{{record.summary||record.path}}<div class="break-all font-mono text-xs text-muted-foreground">{{record.method}} {{record.path}}</div></template>
-      <template #cell-fields="{record}"><span>{{record.fields?.length||0}} 处定义差异</span><div class="text-xs text-muted-foreground">展开右侧行详情查看字段</div></template><template #expanded="{record}"><FieldDiffDetails :record="record"/></template>
       <template #cell-actions="{record}"><Button variant="link" @click="viewOperation(record)">{{record.kind==='removed'?'查看删除前定义':'查看接口'}}</Button></template>
       <template #empty><p class="p-6 text-center text-muted-foreground">本次接口定义没有变化</p></template>
      </DataTable>
