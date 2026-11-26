@@ -46,7 +46,7 @@ func validBugAction(a string) bool {
 	return false
 }
 func (s *ToolService) actionBaseline(ctx context.Context, t *AccessToken, a *PlatformAction) (string, error) {
-	if a.Tool == "deploy_service" {
+	if a.Tool == "deploy_service" || a.Tool == "publish_delivery" && a.Path == "/api/service-deployments" {
 		v, e := s.platformRequest(ctx, t, "POST", "/api/service-deployments/preview", nil, a.Body["spec"])
 		if e != nil {
 			return "", e
@@ -356,6 +356,11 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 	default:
 		return nil, fmt.Errorf("不支持的写操作")
 	}
+	if a.Path == "/api/service-deployments" {
+		if id := stringArg(a.Preview, "original_task_id"); id != "" {
+			return s.callServiceDeployment(ctx, t, "get_service_deployment", map[string]any{"task_id": id})
+		}
+	}
 	if a.Baseline == "" {
 		var e error
 		a.Baseline, e = s.actionBaseline(ctx, t, &a)
@@ -500,14 +505,20 @@ func (s *ToolService) confirmAction(ctx context.Context, t *AccessToken, args ma
 			return nil, err
 		}
 	}
-	if a.Tool == "deploy_service" {
+	if a.Tool == "deploy_service" || a.Tool == "publish_delivery" && a.Path == "/api/service-deployments" {
 		if err := deploymentGrantAccess(t, a.Preview); err != nil {
 			s.actions.finishAction(id, "stale", nil, err)
 			return nil, err
 		}
 	}
 	if strings.HasPrefix(a.Scope, "delivery:") && a.Tool != "deploy_service" {
-		if err := s.deliveryEnvironment(ctx, t, a.Query.Get("environment")); err != nil {
+		var accessErr error
+		if a.Tool == "resume_code_preparation" {
+			accessErr = s.publicationRecoveryAccess(ctx, t, stringArg(a.Preview, "publication_task_id"), stringArg(mapValue(a.Preview["code_preparation"]), "id"), a.Query.Get("environment"))
+		} else {
+			accessErr = s.deliveryEnvironment(ctx, t, a.Query.Get("environment"))
+		}
+		if err := accessErr; err != nil {
 			s.actions.finishAction(id, "stale", nil, err)
 			return nil, err
 		}

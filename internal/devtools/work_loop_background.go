@@ -108,7 +108,7 @@ func (s *ToolService) registerWorkLoopBackground(mux *http.ServeMux) {
 			case "/api/delivery/publications":
 				e = publicationAccess(token, stringArg(task, "environment"))
 			case "/api/service-deployments":
-				e = serviceDeploymentAccess(token, spec, true)
+				e = deploymentGrantAccess(token, mapValue(task["grant"]))
 			default:
 				e = workLoopAccess(token, spec, true)
 			}
