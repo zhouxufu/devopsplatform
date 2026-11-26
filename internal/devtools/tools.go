@@ -217,7 +217,7 @@ func (s *ToolService) Call(ctx context.Context, token *AccessToken, name string,
 			return value, service, environment, e
 		}
 		if strings.HasPrefix(tool.Scope, "apitests:") {
-			return testingOutput(cloneJSON(value)), service, environment, e
+			return testingOutput(name, cloneJSON(value)), service, environment, e
 		}
 		return scrubAny(cloneJSON(value)), service, environment, e
 	}

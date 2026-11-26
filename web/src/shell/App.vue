@@ -139,7 +139,7 @@ const showTimeContext=computed(()=>{
 const contextFields=computed(()=>activeWorkspace.value?.contextFields||{service:showContext.value,environment:showContext.value})
 
 const globalSearchOpen = ref(false)
-const { register: registerShortcut } = useGlobalShortcuts()
+const { register: registerShortcut, handleKeyDown: handleShortcut } = useGlobalShortcuts()
 
 const appMenuGroups = computed(() => {
   if (!showContext.value) return []
@@ -180,13 +180,27 @@ function handleHeaderTabChange(value) {
   switchWs(Number(value))
 }
 
-function handleGlobalSearch(item) {
-  if (item.type === 'app') {
-    st.gSvc = item.value
+const logSearchPlugin = computed(() => st.plugins.find(plugin => plugin.name === 'logs'))
+function supportsSearchFilter(field) {
+  const workspace = activeWorkspace.value
+  const path = workspace?.hash.split('?')[0]
+  if (workspace?.plugin.name === 'logs') return hasInlineLogContext(workspace) || path === '#/live'
+  if (workspace?.plugin.name === 'monitor') {
+    return ['#/', '#/api', '#/jvm', '#/trace', '#/arthas'].includes(path) ||
+      (field === 'environment' && ['#/machines', '#/alerts', '#/rules'].includes(path))
+  }
+  return false
+}
+const searchActions = computed(() => Object.fromEntries(['service', 'environment'].map(field => [
+  field, supportsSearchFilter(field) ? '筛选当前页' : logSearchPlugin.value ? '查看日志' : ''
+])))
+function handleGlobalSearch({type, value}) {
+  if (supportsSearchFilter(type)) {
+    if (type === 'service') st.gSvc = value
+    else st.gEnv = value
     ctxSync()
-  } else if (item.type === 'env') {
-    st.gEnv = item.value
-    environmentChanged()
+  } else if (logSearchPlugin.value) {
+    openTarget(logSearchPlugin.value, '#/search', {context: windowContext({[type]: value})})
   }
 }
 
@@ -205,7 +219,10 @@ function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
   el.addEventListener('load', () => {
     const readRoute=()=>{try{const target=st.workspaces.find(w=>w.id===ws.id);if(target)target.hash=runtimeWorkspaceHash(el.contentWindow.location.hash,p.name);rememberWindows()}catch{}}
     readRoute()
-    try{el.contentWindow.addEventListener('hashchange',readRoute)}catch{}
+    try{
+      el.contentWindow.addEventListener('hashchange',readRoute)
+      el.contentWindow.addEventListener('keydown',handleShortcut)
+    }catch{}
     if(st.me.auth_enabled)getJSON('/api/me')
     ctxSync([ws])
     try { el.contentWindow.postMessage(themeSyncPayload(), location.origin) } catch {}
@@ -534,8 +551,7 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
     v-model="globalSearchOpen"
     :applications="st.services"
     :environments="st.environments"
-    :current-app="st.gSvc"
-    :current-env="st.gEnv"
+    :actions="searchActions"
     @select="handleGlobalSearch"
   />
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"logplatform/pkg/apitest"
 	"net/url"
+	"strings"
 )
 
 func testingTools() []Tool {
@@ -377,6 +378,9 @@ func (s *ToolService) prepareTestingAction(ctx context.Context, t *AccessToken, 
 			if err := apitest.ValidateReferences(request); err != nil {
 				return err
 			}
+			if err := apitest.ValidateStepReferences(request, nil); err != nil {
+				return err
+			}
 			body["request"] = request
 		}
 	}
@@ -408,9 +412,46 @@ func (s *ToolService) prepareTestingAction(ctx context.Context, t *AccessToken, 
 	return nil
 }
 
-// Preserve structural auth configuration (JSON pointers, variable names and
-// enums), while keeping normal recursive redaction for actual result payloads.
-func testingOutput(value any) any {
+func scrubTestDefinitionRequest(request map[string]any) map[string]any {
+	safe := mapValue(scrubAny(cloneJSON(request)))
+	for key, value := range mapValue(request["headers"]) {
+		if text, ok := value.(string); ok && apitest.IsCredentialReference(text) {
+			mapValue(safe["headers"])[key] = text
+		}
+	}
+	path, query, found := strings.Cut(stringArg(request, "path"), "?")
+	if found {
+		parts := strings.Split(query, "&")
+		for index, part := range parts {
+			key, value, _ := strings.Cut(part, "=")
+			decodedKey, err := url.QueryUnescape(key)
+			if err == nil && apitest.IsCredentialReference(value) {
+				parts[index] = scrubString(key) + "=" + value
+			} else if sensitiveOutputKey(decodedKey) {
+				parts[index] = scrubString(key) + "=[REDACTED]"
+			} else {
+				parts[index] = scrubString(part)
+			}
+		}
+		safe["path"] = scrubString(path) + "?" + strings.Join(parts, "&")
+	}
+	return safe
+}
+
+func restoreTestDefinitionTemplates(original, safe map[string]any) {
+	if request := mapValue(original["request"]); request != nil {
+		safe["request"] = scrubTestDefinitionRequest(request)
+	}
+	steps, _ := original["steps"].([]any)
+	safeSteps, _ := safe["steps"].([]any)
+	for index, step := range steps {
+		if request := mapValue(mapValue(step)["request"]); request != nil {
+			mapValue(safeSteps[index])["request"] = scrubTestDefinitionRequest(request)
+		}
+	}
+}
+
+func testingOutput(tool string, value any) any {
 	v := mapValue(value)
 	if v == nil {
 		return scrubAny(value)
@@ -423,7 +464,20 @@ func testingOutput(value any) any {
 		request = v["request"]
 		delete(v, "request")
 	}
-	safe := scrubAny(v)
+	safe := scrubAny(cloneJSON(v))
+	if tool == "get_api_test_case" || tool == "validate_api_test_case" {
+		restoreTestDefinitionTemplates(mapValue(v["case"]), mapValue(mapValue(safe)["case"]))
+	}
+	if tool == "save_api_test_case" && stringArg(v, "state") == "preview" {
+		restoreTestDefinitionTemplates(mapValue(v["request"]), mapValue(mapValue(safe)["request"]))
+		preview, safePreview := mapValue(v["preview"]), mapValue(mapValue(safe)["preview"])
+		restoreTestDefinitionTemplates(mapValue(preview["after"]), mapValue(safePreview["after"]))
+		before, safeBefore := mapValue(preview["before"]), mapValue(safePreview["before"])
+		if before["case"] != nil {
+			before, safeBefore = mapValue(before["case"]), mapValue(safeBefore["case"])
+		}
+		restoreTestDefinitionTemplates(before, safeBefore)
+	}
 	if preserve {
 		mapValue(safe)["request"] = request
 	}

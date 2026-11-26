@@ -113,6 +113,8 @@ type Result struct {
 var variable = regexp.MustCompile(`\{\{var\.([A-Za-z_][A-Za-z0-9_]*)\}\}`)
 var sensitive = regexp.MustCompile(`(?i)(authorization|cookie|password|passwd|secret|token|api[-_]?key)`)
 
+const MaxCaseSteps = 20
+
 func SecretKey(k string) bool { return sensitive.MatchString(k) }
 func Validate(r *Request) error {
 	if r.Mode == "dubbo" {

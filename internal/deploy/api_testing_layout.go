@@ -7,6 +7,8 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+
+	"logplatform/pkg/apitest"
 )
 
 type apiTestPoint struct {
@@ -94,7 +96,7 @@ func registerAPITestLayoutRoutes(mux *http.ServeMux, st *Store, wj func(http.Res
 			wj(w, map[string]any{"error": "画布布局已变化，请保留本地布局并重新读取", "current": current})
 			return
 		}
-		if next.Zoom < .4 || next.Zoom > 1.6 || !validTestPoint(next.Pan) || len(next.Positions) > 10 {
+		if next.Zoom < .4 || next.Zoom > 1.6 || !validTestPoint(next.Pan) || len(next.Positions) > apitest.MaxCaseSteps {
 			fail(w, 400, "布局范围无效")
 			return
 		}

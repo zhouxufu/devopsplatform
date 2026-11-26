@@ -75,6 +75,16 @@ func TestResponseExtractionsBeforeRedactionAndAtomicFailure(t *testing.T) {
 	}
 }
 
+func TestFiniteNumberTextExtraction(t *testing.T) {
+	extraction := Extraction{Source: "json", Path: "/fee", Name: "fee", Format: "finite_number_text"}
+	for input, want := range map[string]string{`1e3`: "1000", `"12.50"`: "12.50", `null`: "", `"unavailable"`: "", `"Infinity"`: "", `true`: ""} {
+		value, failure := extractionValue(extraction, Result{Body: `{"fee":` + input + `}`})
+		if want == "" && failure == "" || want != "" && (value != want || failure != "") {
+			t.Fatalf("unexpected conversion for %s", input)
+		}
+	}
+}
+
 func TestExtractionValidationAndSSEProgress(t *testing.T) {
 	for _, raw := range []string{`{"v":null}`, `{"v":[]}`, `{"v":{}}`, `{"v":""}`, `{"v":"` + strings.Repeat("a", 8193) + `"}`, `not json`} {
 		if _, message := decodeScalar(raw, "/v"); message == "" {

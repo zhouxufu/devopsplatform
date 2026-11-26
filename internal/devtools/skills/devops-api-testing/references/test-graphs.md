@@ -8,7 +8,10 @@
 - `kind` 为 `http`（省略亦可）、`condition`、`parallel`、`join`。HTTP/SSE共享请求节点：`request.mode` 为 `http/sse`，`request.path` 必须是相对路径，认证来自环境。响应断言和提取保存在接口节点内。
 - 条件含 `variable/operator/expected`。变量为 `step.NAME/data.NAME/case.NAME`；判断为 `equals/not_equals/greater/less/exists`；`expected:{type,value}` 的type支持string/number/boolean/null，value总是字符串，布尔值写 `"true"/"false"`。大小比较使用number；字符串和数字不隐式互转，保留大整数精度。exists判断存在且非null，不代表字符串非空。
 - 条件的两条边分别带字符串 `branch:"true"` 与 `branch:"false"`，不是JSON布尔值。parallel分出2–4条边；join接收至少两条输入，等待所有活动前驱完成后继续。HTTP和join最多一个后继，多输入通过join连接。
-- 图须有唯一入口、唯一终点、全部节点接入且无环。当前每用例最多10节点、30边，并发1–4；控制节点也计入节点配额。无循环、脚本、自动重试或任意失败恢复分支。
+- 图须有唯一入口、唯一终点、全部节点接入且无环。当前每用例最多20节点、30边，并发1–4；控制节点也计入节点配额。单次执行的全部参数组与用例合计最多100步。
+- 登录或分享请求先提取响应字段，后续请求可用 `Authorization: Bearer {{step.loginToken}}` 或 `?shareToken={{step.shareToken}}`。上游节点须在消费路径上保证产生该变量。环境登录配置仍使用 `{{var.NAME}}`。普通分页、业务字段和 `User-Agent` 可直接填写。
+- 动态 UUID 在数据组中声明，例如 `{"name":"分享流程","values":{"shareId":{"type":"uuid","value":""}}}`。请求引用 `{{data.shareId}}`。每次执行的每组每列独立生成，同一组内所有节点共享其值。
+- 数值提取可指定 `{"source":"json","name":"fee","path":"/data/fee","format":"finite_number_text"}`。它校验有限数值或数值文本并输出文本，适用于后续请求要求字符串的金额字段。
 - HTTP返回字段先通过 `extractions:[{name,source:"json",path:"/data/id"}]` 定义输出，再在请求中用 `{{step.NAME}}` 引用。`source:"header"` 用响应头名；SSE提取还需事件选择器。条件引用输出写 `step.NAME`，不加模板括号。
 - `{{data.NAME}}` 来自 `data_rows[].values` 的类型化单元格；`{{var.NAME}}` 来自受保护环境变量；`{{case.NAME}}` 仅来自显式测试集映射，不能在单用例执行时假设已绑定。提取变量名在用例内唯一；不能读并行兄弟或只在另一条件路径产生的变量。汇合后仅可读取所有相应活动路径上可保证得到的输出。
 - 节点必须满足请求断言及输出提取才能向后发布变量。请求或断言失败会停止调度后继；已经发出的并行请求逐个记录实际结果。条件不能用失败请求的未发布输出来绕过停止策略。

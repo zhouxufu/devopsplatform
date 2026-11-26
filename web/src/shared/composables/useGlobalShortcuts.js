@@ -35,5 +35,5 @@ export function useGlobalShortcuts() {
     window.removeEventListener('keydown', handleKeyDown)
   })
 
-  return { register, unregister }
+  return { register, unregister, handleKeyDown }
 }

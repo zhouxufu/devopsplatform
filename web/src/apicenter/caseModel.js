@@ -1,4 +1,5 @@
 import {randomUUID} from '../shared/uuid.js'
+export const maxCaseSteps = 20
 import {validateDataRows} from './collectionModel.js'
 import {validateGraph} from './testFlowModel.js'
 import {emptyRequest} from './testingModel.js'
@@ -11,14 +12,14 @@ export function caseDraft(value){
 }
 export function casePayload(draft){
  if(!draft.name.trim())throw Object.assign(Error('请填写用例名称'),{field:'name'})
- if(!draft.steps.length||draft.steps.length>10)throw Error('用例需要 1–10 个步骤')
+ if(!draft.steps.length||draft.steps.length>maxCaseSteps)throw Error(`用例需要 1–${maxCaseSteps} 个步骤`)
  const available=new Set()
  const steps=draft.steps.map((step,i)=>{
   if(!step.name.trim())throw Object.assign(Error('请填写步骤 '+(i+1)+' 的名称'),{stepIndex:i,field:'name'})
   try{
    if(step.kind&&!['http','dubbo'].includes(step.kind))return {id:step.id,target_key:step.target_key||'',kind:step.kind,name:step.name,action:step.action,expected:step.expected,request:{},extractions:[],...(step.kind==='condition'?{condition:step.condition}: {})}
    if(draft.scope==='scenario'&&!step.service)throw Object.assign(Error('请选择调用应用'),{field:'service'})
-   const request=composeEditorRequest(step),extractions=(step.extractions||[]).map(e=>({name:e.name.trim(),source:e.source,path:e.path,...(e.source==='sse'?{event:e.event||'',select:e.select||'last'}:{})}))
+   const request=composeEditorRequest(step),extractions=(step.extractions||[]).map(e=>({name:e.name.trim(),source:e.source,path:e.path,...(e.format?{format:e.format}:{}),...(e.source==='sse'?{event:e.event||'',select:e.select||'last'}:{})}))
    const fields=[['path',request.path],['body',request.body],...(request.form||[]).map(f=>['body',f.value]),...Object.values(request.headers).map(v=>['headers',v]),...request.assertions.flatMap(a=>[['checks',a.path],['checks',a.expected]])]
    for(const [field,value] of fields){const text=String(value||'');if(text.replace(/\{\{step\.([A-Za-z_][A-Za-z0-9_]{0,63})\}\}/g,'').includes('{{step.'))throw Object.assign(Error('步骤变量格式无效'),{field});for(const m of text.matchAll(/\{\{step\.([A-Za-z_][A-Za-z0-9_]{0,63})\}\}/g))if(!draft.graph&&!available.has(m[1]))throw Object.assign(Error('变量 '+m[1]+' 尚未由前面的步骤提取'),{field})}
    if(extractions.length>10)throw Error('每步最多提取 10 个变量')

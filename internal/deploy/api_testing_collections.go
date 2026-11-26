@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type apiTestCell struct {
@@ -63,6 +65,10 @@ func apiTestDataScope(row apiTestDataRow) (map[string]any, error) {
 		var value any = cell.Value
 		switch cell.Type {
 		case "string":
+		case "uuid":
+			if cell.Value != "" {
+				return nil, fmt.Errorf("UUID 数据列 %s 由执行器生成，请留空", key)
+			}
 		case "null":
 			value = nil
 		case "number", "boolean":
@@ -86,6 +92,23 @@ func apiTestDataScope(row apiTestDataRow) (map[string]any, error) {
 		scope["data."+key] = value
 	}
 
+	return scope, nil
+}
+
+func runAPITestDataScope(row apiTestDataRow) (map[string]any, error) {
+	scope, err := apiTestDataScope(row)
+	if err != nil {
+		return nil, err
+	}
+	for name, cell := range row.Values {
+		if cell.Type == "uuid" {
+			id, err := uuid.NewRandom()
+			if err != nil {
+				return nil, fmt.Errorf("生成 UUID 失败: %w", err)
+			}
+			scope["data."+name] = id.String()
+		}
+	}
 	return scope, nil
 }
 func validateAPITestData(v *apiTestCase) error {
