@@ -81,7 +81,13 @@ const closeActions = [
       <TabsList variant="line" class="h-full! w-max min-w-full shrink-0 justify-start rounded-none bg-transparent p-0">
         <ContextMenu v-for="tab in tabs" :key="tab.value">
           <ContextMenuTrigger class="inline-flex shrink-0">
-            <TabsTrigger :value="String(tab.value)" :title="tab.label" class="h-10 flex-none gap-2 rounded-none px-3">
+            <TabsTrigger
+              :value="String(tab.value)"
+              :title="tab.label"
+              class="h-10 flex-none gap-2 rounded-none px-3"
+              @mousedown.middle.prevent
+              @auxclick.middle.prevent.stop="canClose('current', tab.value) && $emit('tab-close', 'current', tab.value)"
+            >
               <span class="truncate">{{ tab.label }}</span>
             </TabsTrigger>
           </ContextMenuTrigger>
