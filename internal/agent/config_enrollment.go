@@ -6,20 +6,14 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"logplatform/internal/agent/deployment"
-	"logplatform/pkg/deploytask"
+	"logplatform/internal/agentconfig"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 )
 
-type DeploymentConfigRequest struct {
-	Scope             deploytask.EnrollmentScope `json:"scope"`
-	Token             string                     `json:"token"`
-	URL               string                     `json:"url"`
-	ExpectedConfigSHA string                     `json:"expected_config_sha"`
-	Output            string                     `json:"output"`
-}
+type DeploymentConfigRequest = agentconfig.DeploymentConfigRequest
 
 // PrepareDeploymentConfig only writes a private candidate and, on a fresh
 // installation, its new identity. It never rewrites collection settings or

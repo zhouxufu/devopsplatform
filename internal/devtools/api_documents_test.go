@@ -7,6 +7,7 @@ import (
 	"logplatform/internal/deploy"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,33 @@ import (
 )
 
 const reportDocument = `{"openapi":"3.0.3","info":{"title":"订单接口","version":"1"},"paths":{"/orders":{"get":{"responses":{"200":{"description":"ok"}}}}}}`
+
+func TestDocumentMCPReceiptReadScopeAndStableConfirmation(t *testing.T) {
+	svc, tok, _, writes := documentMCPFixture(t)
+	preview := docCall(t, svc, tok, "report_api_document", reportArgs(reportDocument))
+	id := stringArg(mapValue(preview), "confirmation_id")
+	if stringArg(mapValue(mapValue(preview)["preview"]), "report_id") != id {
+		t.Fatal("preview does not carry stable receipt", preview)
+	}
+	args := map[string]any{"service": "orders", "environment": "test", "report_id": id}
+	p := mapValue(docCall(t, svc, tok, "get_api_document_report", args))
+	if stringArg(mapValue(p["report"]), "state") != "preview" {
+		t.Fatal(p)
+	}
+	docConfirm(t, svc, tok, preview)
+	p = mapValue(docCall(t, svc, tok, "get_api_document_report", args))
+	if stringArg(mapValue(p["report"]), "state") != "saved" || writes.Load() != 1 {
+		t.Fatal(p, writes.Load())
+	}
+	list := mapValue(docCall(t, svc, tok, "list_api_document_reports", map[string]any{"service": "orders", "environment": "test"}))
+	if intArg(list, "total", 0) != 1 {
+		t.Fatal(list)
+	}
+	args["service"] = "other"
+	if _, _, _, e := svc.Call(context.Background(), tok, "get_api_document_report", args); e == nil {
+		t.Fatal("receipt escaped token scope")
+	}
+}
 
 func documentMCPFixture(t *testing.T) (*ToolService, *AccessToken, http.Handler, *atomic.Int32) {
 	t.Helper()
@@ -84,7 +112,7 @@ func TestDocumentMCPReportCompareAndDedupEndToEnd(t *testing.T) {
 	}
 	// Freeze caller data before confirmation, and survive reopening the action store.
 	args["document"].(map[string]any)["info"].(map[string]any)["title"] = "mutated"
-	reopened, e := OpenTokenStore(strings.TrimSuffix(svc.actions.path, "/devtools-tokens.json"))
+	reopened, e := OpenTokenStore(filepath.Dir(svc.actions.path))
 	if e != nil {
 		t.Fatal(e)
 	}

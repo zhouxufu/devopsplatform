@@ -45,9 +45,9 @@ function acceptMerge(){if(!merged.value||merged.value.conflicts.length)return;tr
 function changeContext(){const ref=id=>{if(!/^[1-9]\d*$/.test(String(id))||!Number.isSafeInteger(Number(id)))throw Error('请选择有效的工作项');return {id:Number(id)}};const fields={};for(const [pointer,id] of Object.entries(fieldRequirements.value))if(id)fields[pointer]=ref(id);return {work_item:requirementID.value?ref(requirementID.value):undefined,fields}}
 async function check(){if(busy.value||!applyJSON())return;busy.value=true;try{parseDocumentText(text.value);preview.value=await request('edit-preview',submission(changeContext()));additions.value=preview.value.field_additions||[];showPreview.value=true}catch(e){issue(e)}finally{busy.value=false}}
 async function save(){if(busy.value||uncertain.value||!applyJSON())return;busy.value=true;let writing=false;try{
- parseDocumentText(text.value);const p=await request('edit-preview',submission(changeContext()));preview.value=p
- if(p.unchanged){toast('文档内容未变化，未创建修订','info');return}
- writing=true;const result=await request('edit',submission(p.change_context),{expected_baseline_id:String(p.source_id),expected_digest:p.digest,...(p.maintainer_digest?{expected_maintainer_digest:p.maintainer_digest}:{})})
+ parseDocumentText(text.value);const body=submission(changeContext());const p=await request('edit-preview',body);preview.value=p
+
+ writing=true;const result=await request('edit',body,{report_id:p.report_id,expected_baseline_id:String(p.source_id),expected_digest:p.digest,...(p.maintainer_digest?{expected_maintainer_digest:p.maintainer_digest}:{})})
  emit('saved',result);toast('已保存，历史修订自动保留','success')
  }catch(e){if(e.status===409)stale.value=true;if(writing&&(!e.status||e.status>=500))uncertain.value=true;issue(Error(e.message+'；编辑内容已保留。'+(uncertain.value?'结果待核对，请勿重复保存。':e.status===409?'请点击“核对最新修订”后合并。':'')))}finally{busy.value=false}}
 async function reconcile(){if(busy.value)return;busy.value=true;try{const q=new URLSearchParams({service:props.source.service,environment:props.source.environment});const r=await fetch('api/api-documents?'+q);const v=await r.json();if(!r.ok)throw Error(v.error||'核对失败');const items=Array.isArray(v)?v:v.items||[],latest=items[0];if(latest?.digest===preview.value?.digest&&latest.id>preview.value.source_id&&latest.baseline_id===preview.value.source_id){emit('saved',{id:latest.id});toast('已找到内容一致的新修订','success')}else toast('未确认保存成功；请保留草稿并核对最新修订，未重放保存','warning')}catch(e){issue(e)}finally{busy.value=false}}

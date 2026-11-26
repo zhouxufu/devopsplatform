@@ -40,7 +40,7 @@ const props = defineProps({
   }
 })
 
-defineEmits(['tab-change', 'app-select', 'env-select', 'search-open', 'tab-close'])
+defineEmits(['tab-change', 'tab-duplicate', 'app-select', 'env-select', 'search-open', 'tab-close'])
 
 const appLabel = computed(() => props.currentApp || '应用')
 const envLabel = computed(() => props.currentEnv || '环境')
@@ -81,11 +81,12 @@ const closeActions = [
       <TabsList variant="line" class="h-full! w-max min-w-full shrink-0 justify-start rounded-none bg-transparent p-0">
         <ContextMenu v-for="tab in tabs" :key="tab.value">
           <ContextMenuTrigger class="inline-flex shrink-0">
-            <TabsTrigger :value="String(tab.value)" class="h-10 flex-none gap-2 rounded-none px-3">
+            <TabsTrigger :value="String(tab.value)" :title="tab.label" class="h-10 flex-none gap-2 rounded-none px-3">
               <span class="truncate">{{ tab.label }}</span>
             </TabsTrigger>
           </ContextMenuTrigger>
           <ContextMenuContent :aria-label="`${tab.label}的标签页操作`">
+            <ContextMenuItem v-if="String(tab.value)!=='0'" @select="$emit('tab-duplicate',tab.value)">在新标签打开</ContextMenuItem>
             <ContextMenuItem
               v-for="action in closeActions"
               :key="action.value"

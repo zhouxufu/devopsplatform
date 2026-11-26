@@ -127,7 +127,7 @@ func (g *Gateway) Routes(registry *Registry, bus *Bus) http.Handler {
 		r.Header.Del("X-Research-Identities")
 		r.Header.Del("X-MCP-Users")
 		r.Header.Del(personnames.Header)
-		if name == "devtools" || strings.HasPrefix(r.URL.Path, "/api/api-documents") || strings.HasPrefix(r.URL.Path, "/api/research/") {
+		if name == "devtools" || (strings.HasPrefix(r.URL.Path, "/api/api-documents") || strings.HasPrefix(r.URL.Path, "/api/api-document-reports")) || strings.HasPrefix(r.URL.Path, "/api/research/") {
 			users, err := registry.Users()
 			names := personnames.Directory{}
 			for _, u := range users {

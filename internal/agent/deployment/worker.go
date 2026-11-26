@@ -38,6 +38,10 @@ func scrub(j job, s string) string {
 	return s
 }
 
+func cleanEnv(dir string) []string {
+	return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "LANG=C", "LC_ALL=C", "DEPLOY_TASK_DIR=" + dir, "DEPLOY_ARTIFACT=" + filepath.Join(dir, "artifact")}
+}
+
 func runScript(ctx context.Context, dir, script string) (int, string) {
 	cmd := exec.CommandContext(ctx, "bash", "-euo", "pipefail", "-c", script)
 	cmd.Env = cleanEnv(dir)

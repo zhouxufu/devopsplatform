@@ -6,7 +6,7 @@ import {parse as parseSFC} from '@vue/compiler-sfc'
 import * as Vue from 'vue'
 import {cleanTablePreferences,defaultTablePreferences} from './tablePreferences.js'
 
-const source=file=>readFileSync(new URL(file,import.meta.url),'utf8')
+const source=file=>readFileSync(new URL(file,import.meta.url),'utf8').replaceAll('\r\n','\n')
 function nodes(file,tag){
  const root=parse(parseSFC(source(file)).descriptor.template.content)
  const found=[]

@@ -54,14 +54,14 @@ test('delivery subpages have distinct menu leaves, paths and workspace titles',(
 
 test('API documentation and testing remain independent menu leaves',()=>{
  const group=availableGroups([{name:'api-center'}]).find(g=>g.id==='api-center')
- assert.deepEqual(group.items.map(i=>i.hash),['#/documents','#/test-cases','#/test-execution'])
+ assert.deepEqual(group.items.map(i=>i.hash),['#/documents','#/reports','#/test-cases','#/test-execution'])
  assert.equal(selectedNavigation('api-center','#/test-execution?service=orders'),'api-testing')
 })
 test('business-owned plugins never duplicate in extension tools',async()=>{
  const {extensionPlugins}=await import('./navigation.js')
  const plugins=['research','deploy','dbms','redis','logs','monitor','api-center','devtools','delivery-core','platform','custom-tool'].map(name=>({name}))
  assert.deepEqual(extensionPlugins(plugins).map(p=>p.name),['custom-tool'])
- assert.equal(availableGroups(plugins).find(g=>g.id==='api-center').items.length,3)
+ assert.equal(availableGroups(plugins).find(g=>g.id==='api-center').items.length,4)
 })
 
 test('shell breadcrumbs describe location independently of renamed workspace tabs',async()=>{

@@ -19,6 +19,9 @@ import (
 )
 
 type APIDocumentSnapshot struct {
+	ReportID                 string                 `json:"-"`
+	ReportActor              string                 `json:"-"`
+	ReportSource             string                 `json:"-"`
 	Protocol                 string                 `json:"protocol"`
 	ExpectedMaintainerDigest string                 `json:"-"`
 	ChangeContext            *DocumentChangeContext `json:"-"`
@@ -178,11 +181,25 @@ func safeDocumentPath(root, relative string) (string, error) {
 func (pr *PipelineRunner) generateAPIDocument(ctx context.Context, runID int64, sv *Service, artifact *Artifact, workspace, outputDir string) error {
 	return pr.generateAPIDocumentWithEmit(ctx, runID, sv, artifact, workspace, outputDir, func(line string) { pr.emit(runID, line) })
 }
-func (pr *PipelineRunner) generateAPIDocumentWithEmit(ctx context.Context, runID int64, sv *Service, artifact *Artifact, workspace, outputDir string, emit func(string)) error {
+func (pr *PipelineRunner) generateAPIDocumentWithEmit(ctx context.Context, runID int64, sv *Service, artifact *Artifact, workspace, outputDir string, emit func(string)) (resultErr error) {
 	frozen := sv.APIDocumentation
 	if frozen == nil {
 		return nil
 	}
+	reportID := newDocumentReportID()
+	now := time.Now().Unix()
+	actor := ""
+	if run := pr.st.GetRun(runID); run != nil {
+		actor = run.Actor
+	}
+	if e := pr.st.insertDocumentReport(DocumentReport{ID: reportID, ApplicationID: sv.ApplicationID, Service: sv.Name, Environment: frozen.Environment, Protocol: "http", Actor: actor, Source: "build", State: "processing", CreatedAt: now, UpdatedAt: now, RunID: runID, Commit: pr.st.buildCommit(runID)}); e != nil {
+		return e
+	}
+	defer func() {
+		if resultErr != nil {
+			_, _ = pr.st.db.Exec(`UPDATE api_document_reports SET state='failed',error='构建文档生成未完成，请查看对应构建记录',updated_at=? WHERE id=? AND state='processing'`, time.Now().Unix(), reportID)
+		}
+	}()
 	failure := func(err error) error {
 		emit("⚠ 接口文档未生成：" + err.Error() + "；不会沿用旧文档冒充本次结果\n")
 		return err
@@ -300,7 +317,7 @@ func (pr *PipelineRunner) generateAPIDocumentWithEmit(ctx context.Context, runID
 			return failure(fmt.Errorf("源码含未提交变更，不能关联到本次 Commit"))
 		}
 	}
-	id, err := pr.st.recordAPIDocument(sv, APIDocumentSnapshot{Environment: frozen.Environment, RunID: runID, ArtifactID: artifact.ID, ArtifactDigest: artifact.Digest, Commit: commit, Provider: plan.Provider, ProviderVersion: plan.ProviderVersion}, raw)
+	id, err := pr.st.recordAPIDocument(sv, APIDocumentSnapshot{ReportID: reportID, ReportActor: actor, Environment: frozen.Environment, RunID: runID, ArtifactID: artifact.ID, ArtifactDigest: artifact.Digest, Commit: commit, Provider: plan.Provider, ProviderVersion: plan.ProviderVersion}, raw)
 	if err != nil {
 		return failure(err)
 	}
