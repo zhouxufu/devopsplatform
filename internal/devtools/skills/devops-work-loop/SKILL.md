@@ -2,7 +2,7 @@
 name: devops-work-loop
 description: 通过研发效能平台 MCP 跟进需求与 Bug，使用任务授权登记变更、推进开发测试交付、核对回归并回写来源。用于接手平台工作项开发、按用户指令交付或恢复已有任务。
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # 需求与 Bug 跟进
@@ -13,7 +13,7 @@ metadata:
 
 先用 `get_work_item`、`get_work_item_changes` 和 `list_work_loops` 核对平台工作项身份与现有任务。已有任务用 `get_work_loop` 读取本轮修订、授权、状态和原执行引用，不因换会话或页面接手另建执行单。`control_work_loop(action=claim)` 登记 Agent 身份不代表平台已启动编码进程；编码和本地测试在用户已授权的代码工作区完成。
 
-用户指派修复明确的 Bug 或开发需求时，默认从现有任务继续开发、验证和登记。没有原任务时用 `follow_work_item(work_item_id, applications)` 接手；可以先省略应用，实际改动出现后用同一工具补充草稿应用。该操作不授权发布或状态回写。应用范围只取实际关联的项目。部署一次独立变更直接用 `deploy_service`。
+用户指派修复明确的 Bug 或开发需求时，默认从现有任务继续开发、验证和登记。没有原任务时用 `follow_work_item(work_item_id, applications)` 接手；可以先省略应用，实际改动出现后用同一工具补充草稿应用。该操作不授权发布或状态回写。应用范围只取实际关联的项目。只要求发布时，已合入公共分支的单服务可用 `deploy_service(mode=build)`。单个代码变更默认用 `deploy_service(mode=change, change_id)` 合并后发布。需要按所选变更直接构建、多项变更或多服务时，用 `publish_delivery`。传原工作项和实际选中的变更、按应用填写 `artifact_sources` 与 `code_modes`（`direct` 已合入公共分支，`merge` 要先合并）。展示整次发布预览，确认一次后跟踪原任务。遇到冲突交给代码恢复流程；不能把发布拆为逐个节点确认。
 
 用户要求交付并回归时，在本人开发记录上用 `reauthorize_work_loop` 预览交付范围；没有开发记录时用 `create_work_loop`。本次操作预览列出应用、环境、分支策略、回归测试和回写目标，明确同意一次后执行 `confirm_platform_action`。后续读取原任务；新旧任务均按工作项进度继续，历史天数和轮次字段仅作审计。
 

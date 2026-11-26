@@ -225,9 +225,12 @@ func validateChangeOrderGates(draft *DeliveryDraftPlan, actual []DeliveryNode) e
 	if draft.Scope == nil || !slices.ContainsFunc(draft.Scope.Changes, func(c Change) bool { return len(c.Prerequisites) > 0 }) {
 		return nil
 	}
+	return validateOrderBarriers(draft.Nodes, actual)
+}
+func validateOrderBarriers(expected, actual []DeliveryNode) error {
 	segments := map[string]int{}
 	var gates []DeliveryNode
-	for _, node := range draft.Nodes {
+	for _, node := range expected {
 		if releaseOrderBarrier(node) {
 			gates = append(gates, node)
 		} else {
