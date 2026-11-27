@@ -24,7 +24,12 @@ const nodeTypeValue=n=>n.kind==='extension'?`extension@${n.extension?.provider}@
 function openDocumentSources(n){const d=pluginDescriptor(n),hash='#'+(d?.binding_path||'/documents')+(n.service?'?service='+encodeURIComponent(n.service):'');if(window.parent!==window)window.parent.postMessage({type:'workspace.open',plugin:'api-center',hash},location.origin);else window.open('/api/plugins/api-center/ui'+hash,'_blank','noopener')}
 const required=n=>props.requiredIds.includes(n.id)
 const recordLocked=n=>props.lockRecords&&n.kind==='manual'&&n.change_ids?.length
-function canMove(nodes,i,j){if(props.research)return j>=0&&j<nodes.length;return j>=0&&j<nodes.length&&!required(nodes[i])&&!required(nodes[j])&&nodes[i].kind===nodes[j].kind || j>=0&&j<nodes.length&&!required(nodes[i])&&!required(nodes[j])&&nodes[i].kind!=='approval'&&nodes[j].kind!=='approval'}
+const scopeGenerated=n=>n?.kind==='xxl_job'||n?.xxl_job_verification
+function canMove(nodes,i,j){
+ if(!nodes[i]||!nodes[j]||scopeGenerated(nodes[i])||scopeGenerated(nodes[j]))return false
+ if(props.research)return true
+ return !required(nodes[i])&&!required(nodes[j])&&(nodes[i].kind===nodes[j].kind||nodes[i].kind!=='approval'&&nodes[j].kind!=='approval')
+}
 function move(nodes,i,delta){const j=i+delta;if(canMove(nodes,i,j))[nodes[i],nodes[j]]=[nodes[j],nodes[i]]}
 let dragged=-1
 function drop(nodes,j){if(canMove(nodes,dragged,j)){const [n]=nodes.splice(dragged,1);nodes.splice(j,0,n)}dragged=-1}
@@ -39,7 +44,7 @@ const expandedNodes=_viewRef([])
 const splitSelections=ref({})
 function splitStage(index){const node=props.nodes[index];const id='sql-stage-'+randomUUID().slice(0,16);if(splitSQLNode(props.nodes,index,splitSelections.value[node.id]||[],id)){splitSelections.value[node.id]=[];expandedNodes.value.push(id)}}
 
-function expandNode(id,keys){expandedNodes.value=keys.length?[...new Set([...expandedNodes.value,id])]:expandedNodes.value.filter(key=>key!==id)}
+function expandNode(id,keys){expandedNodes.value=keys.length&&!scopeGenerated(props.nodes.find(node=>node.id===id))?[...new Set([...expandedNodes.value,id])]:expandedNodes.value.filter(key=>key!==id)}
 
 
 

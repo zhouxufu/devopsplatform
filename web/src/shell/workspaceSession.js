@@ -59,6 +59,8 @@ export function runtimeWorkspaceHash(value,plugin){
   }
   if(plugin==='research'&&/^\/work\/\d+$/.test(url.pathname)&&input.get('action')==='preview')query.set('action','preview')
   if(plugin==='api-center'&&['/documents','/reports','/testing','/test-cases','/test-execution'].includes(url.pathname)){
+   const requirement=input.get('requirement')
+   if(url.pathname==='/documents'&&/^[1-9]\d{0,17}$/.test(requirement||''))query.set('requirement',requirement)
    for(const key of ['protocol','detail_protocol']){const v=input.get(key);if(['http','dubbo'].includes(v))query.set(key,v)}
    for(const key of ['detail_service','detail_environment']){const v=input.get(key);if(v!==null&&/^[A-Za-z0-9_.-]{0,191}$/.test(v))query.set(key,v)}
    const report=input.get('report');if(url.pathname==='/reports'&&/^[a-f0-9]{32}$/.test(report||''))query.set('report',report)

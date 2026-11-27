@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"logplatform/pkg/personnames"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -42,6 +43,23 @@ func Routes(tokens *TokenStore, tools *ToolService) *http.ServeMux {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "transport": "streamable-http", "tools": toolNames(tools.Tools())})
 	})
+	mux.HandleFunc("GET /api/tokens/scopes", func(w http.ResponseWriter, r *http.Request) {
+		owner := r.Header.Get("X-User")
+		if owner == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "请先登录"})
+			return
+		}
+		admin := r.Header.Get("X-Role") == "admin"
+		scopes := []string{}
+		for scope := range allowedScopes {
+			if adminTokenScope(scope) && !admin || owner == "local" && (isWriteScope(scope) || scope == "arthas:read") {
+				continue
+			}
+			scopes = append(scopes, scope)
+		}
+		sort.Strings(scopes)
+		writeJSON(w, http.StatusOK, scopes)
+	})
 	mux.HandleFunc("GET /api/tokens", func(w http.ResponseWriter, r *http.Request) {
 		type tokenView struct {
 			AccessToken
@@ -57,24 +75,25 @@ func Routes(tokens *TokenStore, tools *ToolService) *http.ServeMux {
 		writeJSON(w, http.StatusOK, rows)
 	})
 	mux.HandleFunc("POST /api/tokens", func(w http.ResponseWriter, r *http.Request) {
+		owner := r.Header.Get("X-User")
+		if owner == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "请先登录"})
+			return
+		}
 		var req CreateTokenRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
 			return
 		}
-		req.Owner = r.Header.Get("X-User")
+		req.Owner = owner
 		req.Scopes = normalizeValues(req.Scopes, len(allowedScopes))
-		if (contains(req.Scopes, "resources:read") || contains(req.Scopes, "resources:write")) && r.Header.Get("X-Role") != "admin" {
-			writeJSON(w, 403, map[string]string{"error": "资源接入权限仅管理员可授权"})
-			return
-		}
-		if contains(req.Scopes, "apidocs:write") && r.Header.Get("X-Role") != "admin" {
-			writeJSON(w, 403, map[string]string{"error": "接口文档上报权限仅管理员可授权"})
-			return
-		}
-		if contains(req.Scopes, "arthas:read") && r.Header.Get("X-Role") != "admin" {
-			writeJSON(w, 403, map[string]string{"error": "Java 诊断权限仅管理员可授权"})
-			return
+		if r.Header.Get("X-Role") != "admin" {
+			for _, scope := range req.Scopes {
+				if adminTokenScope(scope) {
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": "权限 " + scope + " 仅管理员可授权"})
+					return
+				}
+			}
 		}
 		token, raw, err := tokens.Create(req)
 		if err != nil {

@@ -1,4 +1,4 @@
-export const changeKinds = {code:'代码',mysql:'SQL',nacos:'Nacos',redis:'Redis',manual:'人工操作',artifact:'制品','data-sync':'数据同步'}
+export const changeKinds = {code:'代码',mysql:'SQL',nacos:'Nacos',redis:'Redis',xxl_job:'定时任务',manual:'人工操作',artifact:'制品','data-sync':'数据同步'}
 export function overviewGroups(changes=[], {application='',kind='',query=''}={}) {
  const groups=new Map(),term=query.trim().toLocaleLowerCase()
  for(const change of changes){

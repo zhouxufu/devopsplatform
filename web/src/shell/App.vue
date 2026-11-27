@@ -208,15 +208,18 @@ function openDefault() { openHome() }
 
 function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
   if(activeWorkspace.value)activeWorkspace.value.context=controlsContext()
-  const ws = { id: ++st._seq, plugin: p, context:windowContext(source?.context||controlsContext()), hash:runtimeWorkspaceHash(hash||'#/',p.name), title:restored?.title||'' }
+  const ws = { id: ++st._seq, plugin: p, context:windowContext(source?.context||controlsContext()), hash:runtimeWorkspaceHash(hash||'#/',p.name), title:restored?.title||'', ready:false }
   const el = document.createElement('iframe')
   el.allowFullscreen = true
   el.allow = 'fullscreen'
   el.title=p.display||p.name
   el.name=restored?.name||'lp-workspace-'+randomUUID()
   // 内联样式：scoped CSS 对 JS 动态创建的元素不生效
-  el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;display:none'
+  el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;display:none;visibility:hidden'
   el.addEventListener('load', () => {
+    const workspace=st.workspaces.find(w=>w.id===ws.id)
+    if(!workspace)return
+    try{if(el.contentWindow.location.href==='about:blank')return}catch{}
     const readRoute=()=>{try{const target=st.workspaces.find(w=>w.id===ws.id);if(target)target.hash=runtimeWorkspaceHash(el.contentWindow.location.hash,p.name);rememberWindows()}catch{}}
     readRoute()
     try{
@@ -226,6 +229,8 @@ function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
     if(st.me.auth_enabled)getJSON('/api/me')
     ctxSync([ws])
     try { el.contentWindow.postMessage(themeSyncPayload(), location.origin) } catch {}
+    workspace.ready=true
+    el.style.visibility='visible'
   })
   el.src = p.url + (hash || '#/?ws=' + ws.id)
   document.getElementById('wsarea').appendChild(el)
@@ -555,7 +560,10 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
     @select="handleGlobalSearch"
   />
 
-  <div id="wsarea" class="relative min-h-0 min-w-0 flex-1 overflow-hidden"><PersonalHome v-if="windowsReady" v-show="st.active===0" :active="st.active===0&&!st.showLogin" :me="st.me" :plugins="st.plugins" :workspaces="homeWorkspaces" @open="homeOpen" @resume="switchWs" @platform="openPlatformWorkspace"/></div>
+  <div id="wsarea" class="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+    <PersonalHome v-if="windowsReady" v-show="st.active===0" :active="st.active===0&&!st.showLogin" :me="st.me" :plugins="st.plugins" :workspaces="homeWorkspaces" @open="homeOpen" @resume="switchWs" @platform="openPlatformWorkspace"/>
+    <div v-if="activeWorkspace&&!activeWorkspace.ready" role="status" class="flex items-center gap-2 p-4 text-sm text-muted-foreground"><Spinner/>正在加载工作区</div>
+  </div>
  </SidebarInset>
 </SidebarProvider>
 <Dialog :open="!!renameWorkspace" @update:open="v=>{if(!v)renameWorkspace=null}"><DialogContent class="sm:max-w-sm"><DialogHeader><DialogTitle>重命名工作区</DialogTitle><DialogDescription class="sr-only">仅修改当前页签名称</DialogDescription></DialogHeader><form class="space-y-5" @submit.prevent="saveWorkspaceName"><Field><FieldLabel for="workspace-name">工作区名称</FieldLabel><Input id="workspace-name" v-model="workspaceName" maxlength="60" required/></Field><DialogFooter><Button type="button" variant="outline" @click="renameWorkspace=null">取消</Button><Button type="submit" :disabled="!workspaceName.trim()">保存名称</Button></DialogFooter></form></DialogContent></Dialog>

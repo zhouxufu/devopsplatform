@@ -26,6 +26,7 @@ type resourceDiscoveryRequest struct {
 	Job                     string            `json:"job,omitempty"`
 	ConfigDataID            string            `json:"config_data_id,omitempty"`
 	ConfigGroup             string            `json:"config_group,omitempty"`
+	XXLJobAddressKey        string            `json:"xxl_job_address_key,omitempty"`
 	RequireEnvironmentScope bool              `json:"require_environment_scope,omitempty"`
 	Environments            []string          `json:"environments"`
 	Connections             map[string]string `json:"connections,omitempty"`
@@ -49,6 +50,7 @@ type resourceCandidate struct {
 	DataID        string                          `json:"data_id,omitempty"`
 	Group         string                          `json:"group,omitempty"`
 	Connection    string                          `json:"connection,omitempty"`
+	AppName       string                          `json:"app_name,omitempty"`
 	Supported     bool                            `json:"supported"`
 	Applyable     bool                            `json:"applyable"`
 	Requirement   *ApplicationResourceRequirement `json:"requirement,omitempty"`
@@ -301,6 +303,10 @@ func (s *Store) discoverApplicationResources(ctx context.Context, service string
 	if len(req.Environments) == 0 || len(req.Environments) > 10 {
 		return out, fmt.Errorf("请显式选择要识别的环境，最多 10 个")
 	}
+	req.XXLJobAddressKey = strings.TrimSpace(req.XXLJobAddressKey)
+	if req.XXLJobAddressKey != "" && !xxlJobPropertyKey.MatchString(req.XXLJobAddressKey) {
+		return out, fmt.Errorf("XXL-JOB 调度中心地址配置键格式无效，请填写属性名")
+	}
 	bootstrap, pom, source, err := s.resourceDiscoverySource(service, req)
 	if err != nil {
 		return out, err
@@ -344,7 +350,11 @@ func (s *Store) discoverApplicationResources(ctx context.Context, service string
 	environments := map[string]bool{}
 	currentOrigin := out.Origin
 	appendItem := func(c resourceCandidate) {
-		c.ID = strings.TrimPrefix(digestJSON([]any{c.Environment, c.Alias, c.Kind, c.Connection, c.Endpoint, c.Database, c.Group, c.DataID}), "sha256:")
+		identity := []any{c.Environment, c.Alias, c.Kind, c.Connection, c.Endpoint, c.Database, c.Group, c.DataID}
+		if c.Kind == xxlJobKind {
+			identity = append(identity, c.AppName)
+		}
+		c.ID = strings.TrimPrefix(digestJSON(identity), "sha256:")
 		if c.Applyable || c.CanDeclare {
 			evidence := currentOrigin
 			evidence.State = "declared"
@@ -368,6 +378,9 @@ func (s *Store) discoverApplicationResources(ctx context.Context, service string
 			if c.Kind == "nacos" {
 				config["data_id"] = c.DataID
 				config["group"] = c.Group
+			}
+			if c.Kind == xxlJobKind {
+				config["app_name"] = c.AppName
 			}
 			c.Binding = &ApplicationEnvironmentResource{Service: service, Environment: c.Environment, Alias: c.Alias, Connection: c.Connection, Config: config}
 		}
@@ -512,15 +525,35 @@ func (s *Store) discoverApplicationResources(ctx context.Context, service string
 				continue
 			}
 			appendItem(resourceCandidate{Environment: environment, Alias: ref.Alias, Kind: "nacos", Source: source, DataID: ref.DataID, Group: ref.Group, Connection: c.Name, Supported: true, State: "matched", Applyable: true})
-			parsed, parseErr := resourceYAML(content)
+			format := "yaml"
+			if strings.HasSuffix(strings.ToLower(ref.DataID), ".properties") {
+				format = "properties"
+			}
+			parsed, parseErr := resourceDiscoveryDocument(content, format)
 			if parseErr == nil {
 				mergeResourceYAML(merged, parsed)
 			} else {
 				complete = false
-				out.Warnings = append(out.Warnings, environment+" / "+ref.DataID+"：配置引用可用，但内容暂不能按 YAML 识别")
+				out.Warnings = append(out.Warnings, environment+" / "+ref.DataID+"：配置引用可用，但内容未能按 "+format+" 识别")
 			}
 		}
 		flattenResourceProperties(merged, "", properties)
+		if candidate, ok := discoverXXLJobBinding(environment, req.XXLJobAddressKey, properties, connections); ok {
+			if candidate.Applyable && !complete {
+				candidate.Applyable = false
+				candidate.State = "incomplete_source"
+				candidate.Message = "有配置未能读取或解析，请核对来源后重新识别"
+			}
+			for _, binding := range saved.Bindings {
+				if binding.Environment == environment && binding.Alias == candidate.Alias &&
+					(binding.Connection != candidate.Connection || binding.Config["app_name"] != candidate.AppName) {
+					candidate.Applyable = false
+					candidate.State = "existing_binding"
+					candidate.Message = "此环境已有其他绑定，请在资源配置中核对"
+				}
+			}
+			appendItem(candidate)
+		}
 		sources := resourceMap(resourcePath(merged, "spring", "datasource", "dynamic", "datasource"))
 		if len(sources) == 0 {
 			if basic := resourceMap(resourcePath(merged, "spring", "datasource")); basic["url"] != nil {

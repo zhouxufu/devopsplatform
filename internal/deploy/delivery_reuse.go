@@ -111,7 +111,7 @@ func (s *Store) verifySQLReuse(p *SQLExecutionPlan, environment string) error {
 
 func (s *Store) changeExecutionTouched(id int64) (bool, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?)`, id, id).Scan(&n)
+	err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM deploy_meta WHERE key=?)`, id, id, xxlChangeTouchKey(id)).Scan(&n)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

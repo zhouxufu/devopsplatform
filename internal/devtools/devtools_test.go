@@ -108,6 +108,8 @@ func TestAdminCreateResponseNeverReturnsHash(t *testing.T) {
 	h := Routes(store, NewToolService(Upstreams{}))
 	body, _ := json.Marshal(CreateTokenRequest{Name: "codex", Scopes: []string{"logs:read"}, Applications: []string{"orders"}, Environments: []string{"test"}, ExpiresInDays: 7})
 	req := httptest.NewRequest(http.MethodPost, "/api/tokens", bytes.NewReader(body))
+	req.Header.Set("X-User", "admin")
+	req.Header.Set("X-Role", "admin")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "lp_dev_") || strings.Contains(rec.Body.String(), `"hash"`) {

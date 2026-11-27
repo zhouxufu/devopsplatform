@@ -6,13 +6,14 @@ import {DropdownMenu,DropdownMenuTrigger,DropdownMenuContent,DropdownMenuItem} f
 import {FilterIcon,MoreHorizontalIcon,XIcon} from '@lucide/vue'
 import DataTable from '../shared/components/DataTable.vue'
 import OptionPicker from '../shared/components/OptionPicker.vue'
+import RequirementPicker from './RequirementPicker.vue'
 import HelpTip from '../shared/components/HelpTip.vue'
 import {reportTime} from './reportModel.js'
 import {applicationName} from '../shared/applicationName.js'
-const props=defineProps({protocol:{type:String,default:'http'},service:{type:String,default:''},search:{type:String,default:''},group:{type:String,default:''},maintainer:{type:String,default:''},environment:{type:String,default:'__all'},services:{type:Array,default:()=>[]},environments:{type:Array,default:()=>[]},opening:Boolean})
-const emit=defineEmits(['update:search','update:group','update:maintainer','open','total'])
+const props=defineProps({protocol:{type:String,default:'http'},service:{type:String,default:''},search:{type:String,default:''},group:{type:String,default:''},maintainer:{type:String,default:''},requirement:{type:String,default:''},environment:{type:String,default:'__all'},services:{type:Array,default:()=>[]},environments:{type:Array,default:()=>[]},opening:Boolean})
+const emit=defineEmits(['update:search','update:group','update:maintainer','update:requirement','open','total'])
 const sort=ref(''),rows=ref([]),groups=ref([]),page=ref(1),pageSize=ref(20),total=ref(0),snapshots=ref(0),loading=ref(false),error=ref('')
-const filterCount=computed(()=>Number(!!props.group)+Number(!!props.maintainer)+Number(props.protocol!=='http'))
+const filterCount=computed(()=>Number(!!props.group)+Number(!!props.maintainer)+Number(!!props.requirement)+Number(props.protocol!=='http'))
 let controller,timer,epoch=0
 const columns=[{id:'operation',label:'功能 / 接口路径',size:340,minSize:220,flex:true,required:true},{id:'application',label:'所属应用 / 环境',size:145,minSize:110,required:true},{id:'update',label:'文档更新',size:185,minSize:155,required:true},{id:'tags',label:'功能分组',size:130,minSize:100},{id:'maintainer',label:'维护人',size:100,minSize:90},{id:'actions',label:'操作',size:100,minSize:100,pin:'right',required:true}]
 function appName(row){return applicationName(props.services.find(s=>s.name===row.service))||row.display_name||row.service}
@@ -20,13 +21,14 @@ function envName(row){return props.environments.find(e=>e.name===row.environment
 async function refresh(){
  clearTimeout(timer);controller?.abort();controller=new AbortController();const token=++epoch;loading.value=true;error.value='';rows.value=[]
  const q=new URLSearchParams({protocol:props.protocol,q:props.search,group:props.group,maintainer:props.maintainer,page:String(page.value),page_size:String(pageSize.value),sort:sort.value})
+ if(props.requirement)q.set('work_item_id',props.requirement)
  if(props.service)q.set('service',props.service)
  if(props.environment!=='__all')q.set('environment',props.environment==='__unassigned'?'':props.environment)
  try{const r=await fetch('api/api-documents/search?'+q,{signal:controller.signal}),body=await r.json();if(token!==epoch)return;if(!r.ok)throw Error(body.error||'接口检索失败');rows.value=body.items||[];groups.value=body.groups||[];total.value=body.total||0;snapshots.value=body.snapshots||0;emit('total',total.value)}
  catch(e){if(token===epoch&&e.name!=='AbortError'){error.value=e.message;total.value=0;emit('total',0)}}
  finally{if(token===epoch)loading.value=false}
 }
-watch(()=>[props.protocol,props.search,props.group,props.maintainer,props.environment,props.service],()=>{page.value=1;controller?.abort();epoch++;rows.value=[];loading.value=true;clearTimeout(timer);timer=setTimeout(refresh,250)})
+watch(()=>[props.protocol,props.search,props.group,props.maintainer,props.requirement,props.environment,props.service],()=>{page.value=1;controller?.abort();epoch++;rows.value=[];loading.value=true;clearTimeout(timer);timer=setTimeout(refresh,250)})
 function turn(value){page.value=value;refresh()}
 onMounted(refresh)
 onBeforeUnmount(()=>{epoch++;clearTimeout(timer);controller?.abort()})
@@ -36,16 +38,18 @@ onBeforeUnmount(()=>{epoch++;clearTimeout(timer);controller?.abort()})
   <div class="flex shrink-0 flex-wrap items-center gap-2">
    <InputGroup class="min-w-0 flex-1 basis-64"><InputGroupInput :model-value="search" @update:model-value="emit('update:search',$event)" placeholder="搜索功能、路径、分组或维护人" aria-label="按功能搜索接口" @keydown.enter="refresh"/><InputGroupAddon align="inline-end"><InputGroupButton v-if="search" aria-label="清空功能搜索" size="icon-xs" @click="emit('update:search','')"><XIcon/></InputGroupButton></InputGroupAddon></InputGroup>
    <slot name="scope"/>
-   <Popover><PopoverTrigger as-child><Button variant="outline" size="sm"><FilterIcon/>更多筛选<Badge v-if="filterCount" variant="secondary">{{filterCount}}</Badge></Button></PopoverTrigger><PopoverContent align="end" class="w-80 max-w-[calc(100vw-2rem)]"><FieldGroup class="gap-4">
+   <Popover><PopoverTrigger as-child><Button variant="outline" size="sm"><FilterIcon/>更多筛选<Badge v-if="filterCount" variant="secondary">{{filterCount}}</Badge></Button></PopoverTrigger><PopoverContent align="end" class="w-88 max-w-[calc(100vw-2rem)]"><FieldGroup class="gap-4">
+    <Field><FieldLabel>功能分组</FieldLabel><OptionPicker :model-value="group" @update:model-value="emit('update:group',$event)" aria-label="功能分组" :loading="loading" :options="[{value:'',label:'全部分组'},...groups.map(value=>({value,label:value}))]"/></Field>
+    <Field><FieldLabel>关联需求 / Bug</FieldLabel><RequirementPicker filter :model-value="requirement" @update:model-value="emit('update:requirement',String($event))"/></Field>
     <slot name="advanced"/>
     <Field><FieldLabel>维护人</FieldLabel><InputGroup><InputGroupInput :model-value="maintainer" @update:model-value="emit('update:maintainer',$event)" placeholder="维护人姓名或账号" aria-label="搜索维护人" @keydown.enter="refresh"/><InputGroupAddon align="inline-end"><InputGroupButton v-if="maintainer" aria-label="清空维护人搜索" size="icon-xs" @click="emit('update:maintainer','')"><XIcon/></InputGroupButton></InputGroupAddon></InputGroup></Field>
-    <Field><FieldLabel>功能分组</FieldLabel><OptionPicker :model-value="group" @update:model-value="emit('update:group',$event)" aria-label="功能分组" :options="[{value:'',label:'全部分组'},...groups.map(value=>({value,label:value}))]"/></Field>
    </FieldGroup></PopoverContent></Popover>
    <Button variant="outline" size="sm" :disabled="loading" @click="refresh"><Spinner v-if="loading"/>搜索</Button>
   </div>
   <div v-if="filterCount" class="flex shrink-0 flex-wrap items-center gap-2 text-xs" aria-label="已选筛选条件">
    <Badge v-if="protocol!=='http'" variant="outline">Dubbo</Badge>
    <Button v-if="group" variant="outline" size="sm" class="h-7 max-w-full text-xs" @click="emit('update:group','')" :aria-label="'清除分组：'+group"><span class="truncate">分组：{{group}}</span><XIcon class="size-3"/></Button>
+   <Button v-if="requirement" variant="outline" size="sm" class="h-7 max-w-full text-xs" aria-label="清除需求筛选" @click="emit('update:requirement','')">关联需求 / Bug<XIcon class="size-3"/></Button>
    <Button v-if="maintainer" variant="outline" size="sm" class="h-7 max-w-full text-xs" @click="emit('update:maintainer','')" :aria-label="'清除维护人：'+maintainer"><span class="truncate">维护人：{{maintainer}}</span><XIcon class="size-3"/></Button>
   </div>
   <div v-if="error" role="alert" class="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"><span>{{error}}</span><Button variant="outline" @click="refresh">重试</Button></div>

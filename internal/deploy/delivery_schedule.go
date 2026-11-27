@@ -29,7 +29,13 @@ func nodeByID(nodes []DeliveryNode, id string) *DeliveryNode {
 	return nil
 }
 func disposableNode(n *DeliveryNode) bool {
-	return n != nil && n.Kind != "approval" && len(n.Approvers) == 0 && n.Monitor == nil && !(n.Kind == "verify" && n.Verification != nil && n.Verification.Mode == "manual")
+	return n != nil && n.Kind != "approval" && n.Kind != xxlJobKind && !n.XXLJobVerification && len(n.Approvers) == 0 && n.Monitor == nil && !(n.Kind == "verify" && n.Verification != nil && n.Verification.Mode == "manual")
+}
+
+func xxlJobReleaseDependency(nodes []DeliveryNode, id string) bool {
+	return slices.ContainsFunc(nodes, func(n DeliveryNode) bool {
+		return n.XXLJobVerification && slices.Contains(n.DependsOn, id)
+	})
 }
 func expandScheduleApplications(nodes []DeliveryNode, tpl *DeliveryTemplate, scope *DeliveryScope) []DeliveryNode {
 	names := slices.Clone(tpl.Services)
@@ -98,6 +104,9 @@ func configureDeliverySchedule(p *DeliveryPlan, r DeliveryRequest) error {
 	for id, note := range r.SkippedNodes {
 		if !disposableNode(nodeByID(p.Nodes, id)) {
 			return fmt.Errorf("不能跳过未选节点、审批或指定人员验证：%s", id)
+		}
+		if xxlJobReleaseDependency(p.Nodes, id) {
+			return fmt.Errorf("定时任务启用前不能跳过关联发布节点：%s", id)
 		}
 		note = strings.TrimSpace(note)
 		if len(note) > 8000 || (p.Environment.Protected && note == "") {
@@ -383,6 +392,9 @@ func (s *Store) disposeDeliveryStep(v *DeliveryRun, r dispositionRequest, actor 
 	n := nodeByID(v.Plan.Nodes, r.NodeID)
 	if !disposableNode(n) {
 		return fmt.Errorf("审批或指定人员验收请从原入口处理")
+	}
+	if xxlJobReleaseDependency(v.Plan.Nodes, r.NodeID) {
+		return fmt.Errorf("定时任务启用依赖本次应用发布成功，不能跳过或手动标记完成")
 	}
 	if r.Action != "skip" && r.Action != "manual_done" {
 		return fmt.Errorf("未知节点操作")

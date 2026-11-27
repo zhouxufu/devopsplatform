@@ -189,6 +189,9 @@ func (s *Store) resolveDeliveryDeployment(v *DeliveryRun, req deliveryDeployment
 	if err != nil {
 		return nil, err
 	}
+	if xxlJobReleaseDependency(v.Plan.Nodes, req.NodeID) {
+		return nil, fmt.Errorf("定时任务启用依赖本次应用发布成功，请使用原发布的重试入口")
+	}
 	comment := strings.TrimSpace(req.Comment)
 	if !req.ConfirmArtifact {
 		return nil, fmt.Errorf("请确认已核对本次审核制品")

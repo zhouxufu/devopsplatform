@@ -174,7 +174,7 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 	for i := range req.Changes {
 		c := &req.Changes[i]
 		switch c.Kind {
-		case "code", "artifact", "mysql", "nacos", "redis", "manual", "data-sync":
+		case "code", "artifact", "mysql", "nacos", "redis", "manual", "data-sync", xxlJobKind:
 		default:
 			return fmt.Errorf("第 %d 项：不支持的变更类型", i+1)
 		}
@@ -276,7 +276,7 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 	resourceKinds := map[string]map[string]string{}
 	services := []string{}
 	for _, c := range req.Changes {
-		if c.Service != "" && (c.SQL != nil || c.Nacos != nil || c.Redis != nil) {
+		if c.Service != "" && (c.SQL != nil || c.Nacos != nil || c.Redis != nil || c.XXLJob != nil) {
 			if _, found := resourceKinds[c.Service]; !found {
 				services = append(services, c.Service)
 				resourceKinds[c.Service] = nil
@@ -320,7 +320,7 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 				return fmt.Errorf("第 %d 项：请在原始工作项维护此变更", i+1)
 			}
 			var touched int
-			if err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?)`, c.ID, c.ID).Scan(&touched); err != nil {
+			if err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM deploy_meta WHERE key=?)`, c.ID, c.ID, xxlChangeTouchKey(c.ID)).Scan(&touched); err != nil {
 				return err
 			}
 			if touched > 0 {
@@ -351,6 +351,9 @@ func (s *Store) SaveWorkDelivery(id int64, req *WorkDeliverySave, actor string, 
 		}
 		if c.Redis != nil {
 			alias, kind = c.Redis.ResourceAlias, "redis"
+		}
+		if c.XXLJob != nil {
+			alias, kind = c.XXLJob.ResourceAlias, xxlJobKind
 		}
 		if alias != "" {
 			if resourceKinds[c.Service][alias] != kind {

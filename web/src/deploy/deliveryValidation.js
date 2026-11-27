@@ -13,10 +13,22 @@ export function validateDeliveryChange(change, rowKey, requireBranch=true) {
     if(!text(change.service))return fail('services','请选择至少一个影响应用')
     if(requireBranch&&!text(change.reference))return fail('reference','请补齐关联分支后再就绪')
   }
-  if(['mysql','nacos','redis'].includes(change.kind)){
+  if(['mysql','nacos','redis','xxl_job'].includes(change.kind)){
     if(!text(change.service))return fail('service','请选择应用')
-    const payload=change.sql||change.nacos||change.redis
+    const payload=change.sql||change.nacos||change.redis||change.xxl_job
     if(!resourceName.test(text(payload?.resource_alias)))return fail('resource','请选择逻辑资源')
+  }
+  if(change.kind==='xxl_job'){
+    const job=change.xxl_job,config=job.config||{}
+    if(job.action==='create'){
+      for(const [key,label] of [['jobDesc','任务标题'],['executorHandler','Handler'],['author','负责人'],['scheduleType','调度方式']]){
+        if(!text(config[key]))return fail(key,`请填写${label}`)
+      }
+      if(config.scheduleType!=='NONE'&&!text(config.scheduleConf))return fail('scheduleConf','请填写调度规则')
+    }else if(job.created_by_change_id){
+      if(!change.prerequisites?.some(d=>Number(d.change_id)===Number(job.created_by_change_id)))return fail('xxl_job','请把创建变更加到前置变更')
+    }else if(!text(job.target_title)||!text(job.target_handler))return fail('xxl_job','请填写现有任务标题和 Handler')
+    if(job.action==='update'&&!Object.keys(config).length)return fail('xxl_job','请填写要更新的任务配置')
   }
   if(change.sql){
     if(!text(change.sql.content))return fail('sql','请填写 SQL 脚本')
@@ -58,7 +70,7 @@ export function locateDeliveryServerError(message, changes, origins) {
   if(!match)return null // Network, permission and optimistic-lock errors have no field location.
   const index=Number(match[1])-1,c=changes[index],rowKey=origins[index]
   if(!c||!rowKey)return null
-  let field=({code:'reference',mysql:'sql',nacos:'entries',redis:'commands'})[c.kind]||'reference'
+  let field=({code:'reference',mysql:'sql',nacos:'entries',redis:'commands',xxl_job:'xxl_job'})[c.kind]||'reference'
   if(/应用不存在/.test(message))field=c.kind==='code'?'services':'service'
   else if(/未声明.*资源|资源别名|请选择.*资源/.test(message))field='resource'
   else if(/SQL 环境|环境专用脚本/.test(message))field='sql_environment_overrides'

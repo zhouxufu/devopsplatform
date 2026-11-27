@@ -1,7 +1,7 @@
 // Presentation/navigation only. Environment preflight stays in orchestration.
 // Editors keep inactive type drafts in memory. Only validate/send the active type.
 export function deliveryChangePayload(form){
- return {...form,sql:form.kind==='mysql'?form.sql:undefined,nacos:form.kind==='nacos'?form.nacos:undefined,redis:form.kind==='redis'?form.redis:undefined}
+ return {...form,sql:form.kind==='mysql'?form.sql:undefined,nacos:form.kind==='nacos'?form.nacos:undefined,redis:form.kind==='redis'?form.redis:undefined,xxl_job:form.kind==='xxl_job'?form.xxl_job:undefined}
 }
 export function savedDeliverySelection(submitted,saved,knownIDs=[]){
  if(!submitted)return 0

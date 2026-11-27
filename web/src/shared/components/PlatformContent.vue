@@ -14,10 +14,13 @@ const props=defineProps({view:String,currentUser:Object,directAPI:Boolean,active
 const emit=defineEmits(['state','open','switch'])
 const {mcpAvailable}=usePlatformCapabilities()
 const me=ref(null),frame=ref(null),state=ref({dirty:false,busy:false})
+const frameReady=ref(false)
 const admin=computed(()=>(props.currentUser||me.value)?.role==='admin')
 watch(state,value=>emit('state',value),{deep:true,immediate:true})
 watch(()=>props.view,()=>state.value={dirty:false,busy:false})
+watch([()=>props.view,mcpAvailable],()=>{frameReady.value=false})
 function syncTheme(){frame.value?.contentWindow?.postMessage(themeSyncPayload(),location.origin)}
+function frameLoaded(){syncTheme();frameReady.value=true}
 watch([themeDark,themeMode,themeTypography,themeDesign,themeColorway,themeDensity],syncTheme)
 function message(event){
  if(event.origin!==location.origin||event.source!==frame.value?.contentWindow)return
@@ -34,7 +37,10 @@ defineExpose({canLeave})
 import {confirmAction} from '../shadcnFeedback.js'
 
 
-import {Empty,EmptyContent,EmptyDescription,EmptyHeader} from '../shadcn-ui.js'
+import {Empty,EmptyContent,EmptyDescription,EmptyHeader,Spinner} from '../shadcn-ui.js'
 </script>
-<template><div v-if="view==='mcp'" class="platform-mcp-content"><iframe v-if="mcpAvailable" ref="frame" title="MCP 访问管理" src="/api/plugins/devtools/ui?panel=1" @load="syncTheme"/><Empty v-else><EmptyHeader><EmptyDescription>{{"MCP 服务尚未启用"}}</EmptyDescription></EmptyHeader></Empty></div><PageSurface v-else class="platform-content-surface"><ApplicationCenterView v-if="view==='apps'" @state="state=$event"/><ResourcesView v-else-if="view==='resources'" plugin="platform" :directAPI="directAPI" @state="state=$event"/><template v-else-if="view==='plugins'&&admin"><PageHeader title="插件管理" help="插件独立安装、配置和启停；安装不会自动启用。管理员管理插件，成员按各能力授权使用。"/><ExtensionManager embedded :show="active" @state="state=$event"/></template><Empty v-else><EmptyHeader><EmptyDescription>{{"此页面不可用或没有访问权限"}}</EmptyDescription></EmptyHeader></Empty></PageSurface></template>
+<template><div v-if="view==='mcp'" class="platform-mcp-content relative"><template v-if="mcpAvailable">
+  <div v-if="!frameReady" role="status" class="absolute inset-x-0 top-0 flex items-center gap-2 p-4 text-sm text-muted-foreground"><Spinner/>正在加载 MCP 访问管理</div>
+  <iframe ref="frame" :class="{'invisible':!frameReady}" title="MCP 访问管理" src="/api/plugins/devtools/ui?panel=1" @load="frameLoaded"/>
+ </template><Empty v-else><EmptyHeader><EmptyDescription>{{"MCP 服务尚未启用"}}</EmptyDescription></EmptyHeader></Empty></div><PageSurface v-else class="platform-content-surface"><ApplicationCenterView v-if="view==='apps'" @state="state=$event"/><ResourcesView v-else-if="view==='resources'" plugin="platform" :directAPI="directAPI" @state="state=$event"/><template v-else-if="view==='plugins'&&admin"><PageHeader title="插件管理" help="插件独立安装、配置和启停；安装不会自动启用。管理员管理插件，成员按各能力授权使用。"/><ExtensionManager embedded :show="active" @state="state=$event"/></template><Empty v-else><EmptyHeader><EmptyDescription>{{"此页面不可用或没有访问权限"}}</EmptyDescription></EmptyHeader></Empty></PageSurface></template>
 <style scoped>.platform-mcp-content{height:100%;min-height:0;background:var(--panel)}.platform-mcp-content>iframe{display:block;width:100%;height:100%;border:0}.platform-content-surface{min-height:100%}</style>

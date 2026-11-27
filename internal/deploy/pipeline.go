@@ -116,6 +116,14 @@ func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts Pi
 	if err != nil {
 		return 0, err
 	}
+	// A repository binding can supply settings.xml after the initial Maven
+	// command was generated. Update the executable steps on the runtime copy.
+	if sv.BuildTool == "maven" && sv.MavenSettingsPath != raw.MavenSettingsPath {
+		sv, err = serviceForPipelineRun(sv, PipelineRunOptions{})
+		if err != nil {
+			return 0, err
+		}
+	}
 	if err := pr.st.freezeAPIDocumentation(sv, opts.ReplayDelivery != nil, buildEnvironment); err != nil {
 		return 0, err
 	}

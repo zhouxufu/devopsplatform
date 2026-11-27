@@ -121,7 +121,8 @@ func saveSQLPayload(tx *deployTx, v *Change) error {
 		SQL           *SQLChange           `json:"sql,omitempty"`
 		Nacos         *NacosChange         `json:"nacos,omitempty"`
 		Redis         *RedisChange         `json:"redis,omitempty"`
-	}{v.Prerequisites, v.SQL, v.Nacos, v.Redis})
+		XXLJob        *XXLJobChange        `json:"xxl_job,omitempty"`
+	}{v.Prerequisites, v.SQL, v.Nacos, v.Redis, v.XXLJob})
 	_, err := tx.Exec(`INSERT INTO change_payloads(change_id,document) VALUES(?,?) ON CONFLICT(change_id) DO UPDATE SET document=excluded.document`, v.ID, string(doc))
 	return err
 }
@@ -142,11 +143,13 @@ func loadChangePayload(q interface{ QueryRow(string, ...any) *sql.Row }, v *Chan
 		SQL           *SQLChange           `json:"sql"`
 		Nacos         *NacosChange         `json:"nacos"`
 		Redis         *RedisChange         `json:"redis"`
+		XXLJob        *XXLJobChange        `json:"xxl_job"`
 	}
 	if err := json.Unmarshal([]byte(doc), &payload); err != nil {
 		return err
 	}
 	v.Prerequisites, v.SQL, v.Nacos, v.Redis = payload.Prerequisites, payload.SQL, payload.Nacos, payload.Redis
+	v.XXLJob = payload.XXLJob
 	return validateChangePrerequisites(v)
 }
 func digestJSON(v any) string {

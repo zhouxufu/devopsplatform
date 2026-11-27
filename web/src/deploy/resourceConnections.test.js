@@ -23,6 +23,10 @@ test('parameter tab is available only for types with parameter fields',()=>{
  for(const kind of ['mysql','redis','nacos','zentao','maven','aliyun-sae'])assert.equal(hasConnectionParameters(kind),true,kind)
  for(const kind of ['git','docker','',undefined,'future-plugin'])assert.equal(hasConnectionParameters(kind),false,String(kind))
 })
+test('XXL-JOB preserves the selected access method without copying credentials',()=>{
+ assert.deepEqual(instanceConnectionConfig('xxl_job',{environment:'test',xxl_job_auth:'console',password:'fixture'}),{environment:'test',xxl_job_auth:'console'})
+ assert.deepEqual(instanceConnectionConfig('xxl_job',{environment:'test'}),{environment:'test'})
+})
 test('generic database label, searchable public fields, no credential search',()=>{
  assert.equal(resourceKindLabels.mysql,'MySQL 数据库')
  assert.equal(filter(rows,['mysql','redis'],'','ORDERS').length,0)

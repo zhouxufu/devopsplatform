@@ -247,6 +247,79 @@ func TestDependencyDiscoveryKeepsEnvironmentsAndSecretsSeparate(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+func TestDiscoveryXXLJobFromNacosProperties(t *testing.T) {
+	store, _, _ := deliveryFixture(t)
+	const endpoint = "https://scheduler.example.invalid/estate-job"
+	const secret = "fixture-devops-secret-never-present-in-preview"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dataID := r.URL.Query().Get("dataId")
+		if r.Method != http.MethodGet || (dataID != "jobs.properties" && dataID != "custom-jobs.properties") {
+			t.Errorf("unexpected Nacos request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected", http.StatusBadRequest)
+			return
+		}
+		fmt.Fprintf(w, "scheduler.endpoint=%s/\nxxl.job.devops-token=%s\n", endpoint, secret)
+		if dataID == "custom-jobs.properties" {
+			fmt.Fprint(w, "xxl.job.admin.addresses=https://unrelated.example.invalid/estate-job\norders.scheduler.admin-url=${scheduler.endpoint}\nxxl.job.executor.appName=orders-jobs\n")
+			return
+		}
+		fmt.Fprint(w, "xxl.job.admin.addresses=${scheduler.endpoint}\nxxl.job.executor.appname=orders-jobs\n")
+	}))
+	defer upstream.Close()
+	for _, connection := range []ResourceConnection{
+		{Name: "nacos", Kind: "nacos", Endpoint: upstream.URL, Config: map[string]string{"nacos_auth": "none"}},
+		{Name: "scheduler-test", Kind: xxlJobKind, Endpoint: endpoint, Password: secret, Config: map[string]string{"environment": "test"}},
+		{Name: "scheduler-prod", Kind: xxlJobKind, Endpoint: endpoint, Password: secret, Config: map[string]string{"environment": "prod"}},
+	} {
+		if err := store.UpsertConnection(connection); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, scenario := range []struct {
+		name, dataID, addressKey, state string
+	}{
+		{"default key", "jobs.properties", "", "matched"},
+		{"custom key overrides default", "custom-jobs.properties", "orders.scheduler.admin-url", "matched"},
+		{"missing custom key does not fall back", "jobs.properties", "orders.scheduler.missing", "unresolved"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			request := resourceDiscoveryRequest{
+				Environments: []string{"test"}, Connections: map[string]string{"test": "nacos"},
+				BootstrapContent: "spring:\n  application:\n    name: orders\n", Adapter: "custom", ConfigDataID: scenario.dataID,
+				ConfigGroup: "DEFAULT_GROUP", XXLJobAddressKey: scenario.addressKey,
+			}
+			result, err := store.discoverApplicationResources(context.Background(), "orders", request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, _ := json.Marshal(result)
+			if strings.Contains(string(encoded), secret) || strings.Contains(string(encoded), "scheduler-prod") {
+				t.Fatal("preview exposed credential or selected another environment")
+			}
+			for _, candidate := range result.Items {
+				if candidate.Kind != xxlJobKind {
+					continue
+				}
+				if candidate.State != scenario.state {
+					t.Fatalf("unexpected candidate: %+v", candidate)
+				}
+				if scenario.state == "unresolved" {
+					if candidate.Applyable || candidate.Binding != nil {
+						t.Fatalf("missing property generated a binding: %+v", candidate)
+					}
+					return
+				}
+				if !candidate.Applyable || candidate.Binding == nil || candidate.Binding.Connection != "scheduler-test" ||
+					candidate.Binding.Config["app_name"] != "orders-jobs" || len(candidate.Binding.Config) != 1 {
+					t.Fatalf("unexpected binding: %+v", candidate)
+				}
+				return
+			}
+			t.Fatal("no XXL-JOB candidate in preview")
+		})
+	}
+}
+
 func TestResourceDiscoveryCannotReadOutsideManagedWorkspace(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "private.yml")

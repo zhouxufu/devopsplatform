@@ -1,7 +1,6 @@
 package deploy
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,26 +26,8 @@ func loadMaintenanceChange(tx *deployTx, id int64) (*Change, error) {
 	if err != nil {
 		return nil, fmt.Errorf("变更不存在")
 	}
-	if err = loadChangeOwnership(tx, &c); err != nil {
+	if err = loadChangePayload(tx, &c); err != nil {
 		return nil, err
-	}
-	var doc string
-	err = tx.QueryRow(`SELECT document FROM change_payloads WHERE change_id=?`, id).Scan(&doc)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, err
-	}
-	if doc != "" {
-		var p struct {
-			Prerequisites []ChangePrerequisite `json:"prerequisites,omitempty"`
-			SQL           *SQLChange           `json:"sql"`
-			Nacos         *NacosChange         `json:"nacos"`
-			Redis         *RedisChange         `json:"redis"`
-		}
-		if json.Unmarshal([]byte(doc), &p) != nil {
-			return nil, fmt.Errorf("变更载荷损坏")
-		}
-		c.SQL, c.Nacos, c.Redis = p.SQL, p.Nacos, p.Redis
-		c.Prerequisites = p.Prerequisites
 	}
 	rows, err := tx.Query(workItemSelect+` WHERE id IN (SELECT work_item_id FROM work_item_changes WHERE change_id=?) ORDER BY id`, id)
 	if err != nil {
@@ -131,7 +112,7 @@ func (s *Store) maintainChangeTx(tx *deployTx, id int64, req changeMaintenanceRe
 		return nil, fmt.Errorf("数据同步计划已冻结，请重新生成")
 	}
 	var touched int
-	if err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM redis_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM release_version_changes WHERE change_id=?)`, id, id, id, id).Scan(&touched); err != nil {
+	if err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM redis_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM release_version_changes WHERE change_id=?) + (SELECT COUNT(*) FROM deploy_meta WHERE key=?)`, id, id, id, id, xxlChangeTouchKey(id)).Scan(&touched); err != nil {
 		return nil, err
 	}
 	if !descriptionOnly && touched > 0 {
@@ -167,8 +148,10 @@ func (s *Store) maintainChangeTx(tx *deployTx, id int64, req changeMaintenanceRe
 			alias = next.SQL.ResourceAlias
 		case next.Kind == "redis" && next.Redis != nil:
 			alias = next.Redis.ResourceAlias
+		case next.Kind == xxlJobKind && next.XXLJob != nil:
+			alias = next.XXLJob.ResourceAlias
 		default:
-			return nil, fmt.Errorf("请提供有效源分支或完整的独立 SQL、Nacos、Redis 变更内容")
+			return nil, fmt.Errorf("请提供有效源分支或完整的独立 SQL、Nacos、Redis、定时任务变更内容")
 		}
 		if alias != "" {
 			kinds, err := s.workDeliveryResourceKinds(tx, next.Service)
@@ -214,6 +197,7 @@ func (s *Store) maintainChangeTx(tx *deployTx, id int64, req changeMaintenanceRe
 			json.Unmarshal(raw, &merged)
 			allowed := map[string]bool{"title": true, "reference": true, "summary": true, "risk_level": true, "rollback_plan": true, "sql": true, "nacos": true, "redis": true, "delivery_ownership": true}
 			allowed["prerequisites"] = true
+			allowed[xxlJobKind] = true
 			if len(req.Patch) == 0 {
 				return nil, fmt.Errorf("修改字段不能为空")
 			}
@@ -255,6 +239,9 @@ func (s *Store) maintainChangeTx(tx *deployTx, id int64, req changeMaintenanceRe
 		}
 		if next.Redis != nil {
 			alias, kind = next.Redis.ResourceAlias, "redis"
+		}
+		if next.XXLJob != nil {
+			alias, kind = next.XXLJob.ResourceAlias, xxlJobKind
 		}
 		if alias != "" && kinds[alias] != kind {
 			return nil, fmt.Errorf("应用未声明对应资源别名")

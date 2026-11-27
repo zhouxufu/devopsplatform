@@ -41,7 +41,7 @@ func changeNodeMatches(node DeliveryNode, c Change) bool {
 	if len(node.ChangeIDs) > 0 {
 		return slices.Contains(node.ChangeIDs, c.ID)
 	}
-	return kind == "mysql" || kind == "nacos" || kind == "redis"
+	return deliveryResourceKind(kind)
 }
 
 // Build the order only from explicit change dependencies. A workflow gate is
@@ -210,7 +210,7 @@ func orderChangeNodes(nodes []DeliveryNode, scope *DeliveryScope, suggest bool) 
 
 func releaseOrderBarrier(node DeliveryNode) bool {
 	switch node.Kind {
-	case "deploy", "mysql", "redis", "nacos":
+	case "deploy", "mysql", "redis", "nacos", xxlJobKind:
 		return false
 	case "manual":
 		return len(node.ChangeIDs) == 0 || len(node.Approvers) > 0

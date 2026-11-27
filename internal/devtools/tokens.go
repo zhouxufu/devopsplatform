@@ -42,6 +42,15 @@ var allowedScopes = map[string]bool{
 	"delivery:execute": true,
 }
 
+func adminTokenScope(scope string) bool {
+	switch scope {
+	case "resources:read", "resources:write", "apidocs:write", "arthas:read":
+		return true
+	default:
+		return false
+	}
+}
+
 type AccessToken struct {
 	Owner        string `json:"owner,omitempty"`
 	role         string
@@ -396,7 +405,7 @@ func (s *TokenStore) maintainToken(id, actor string, admin bool, req *UpdateToke
 				return AccessToken{}, err
 			}
 			for _, scope := range normalized.Scopes {
-				if !admin && (scope == "resources:read" || scope == "resources:write" || scope == "apidocs:write" || scope == "arthas:read") && !contains(old.Scopes, scope) {
+				if !admin && adminTokenScope(scope) && !contains(old.Scopes, scope) {
 					return AccessToken{}, fmt.Errorf("此权限仅管理员可授权")
 				}
 			}

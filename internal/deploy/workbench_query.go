@@ -45,6 +45,13 @@ func deliveryReviewRequired(p *DeliveryPlan) bool {
 	if p.Template.Workbench != "" {
 		return p.WorkbenchPolicy == nil || p.WorkbenchPolicy.ChangeApproval
 	}
+	if p.Environment.Purpose == "production" {
+		for _, node := range p.Nodes {
+			if node.Kind == xxlJobKind {
+				return true
+			}
+		}
+	}
 	if p.StrategyKind == "standard" && (p.Environment.Purpose == "development" || p.Environment.Purpose == "test") {
 		return false // Standard non-production delivery; explicit/custom gates remain intact.
 	}

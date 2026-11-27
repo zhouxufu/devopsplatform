@@ -42,6 +42,108 @@ type documentSearchResult struct {
 	Snapshots int                  `json:"snapshots"`
 }
 
+type documentSearchOperation struct {
+	ApplicationID string
+	Environment   string
+	ID            string
+}
+
+func (st *Store) documentWorkItemOperations(ctx context.Context, workID int64, protocol, service, environment string, hasEnvironment bool) (map[documentSearchOperation]int64, error) {
+	query := `SELECT v.application_id,v.environment,v.id,e.document
+ FROM api_document_work_item_events e JOIN api_document_versions v ON v.id=e.snapshot_id
+ LEFT JOIN api_document_protocols p ON p.snapshot_id=v.id
+ WHERE e.work_item_id=? AND COALESCE(p.protocol,'http')=?`
+	args := []any{workID, protocol}
+	if service != "" {
+		query += ` AND v.service=?`
+		args = append(args, service)
+	}
+	if hasEnvironment {
+		query += ` AND v.environment=?`
+		args = append(args, environment)
+	}
+	rows, err := st.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	matches := map[documentSearchOperation]int64{}
+	addEvents := func(key documentSearchOperation, snapshot int64, events []DocumentEvent) {
+		for _, event := range events {
+			if event.Operation == "" || event.Change == "unavailable" {
+				continue
+			}
+			key.ID = event.Operation
+			if first := matches[key]; first == 0 || snapshot < first {
+				matches[key] = snapshot
+			}
+		}
+	}
+	for rows.Next() {
+		var key documentSearchOperation
+		var snapshot int64
+		var raw string
+		if err = rows.Scan(&key.ApplicationID, &key.Environment, &snapshot, &raw); err != nil {
+			return nil, err
+		}
+		var events []DocumentEvent
+		if err = json.Unmarshal([]byte(raw), &events); err != nil {
+			return nil, err
+		}
+		addEvents(key, snapshot, events)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	query = `SELECT v.application_id,v.environment,v.id,l.document,d.document
+ FROM api_document_report_links l JOIN api_document_reports r ON r.id=l.report_id
+ JOIN api_document_versions v ON v.id=r.snapshot_id AND v.baseline_id=r.baseline_id
+ JOIN api_document_lineage d ON d.snapshot_id=v.id
+ WHERE l.source='manual' AND r.state='saved' AND r.protocol=? AND l.document LIKE ?`
+	args = []any{protocol, `%"id":` + strconv.FormatInt(workID, 10) + `%`}
+	if service != "" {
+		query += ` AND v.service=?`
+		args = append(args, service)
+	}
+	if hasEnvironment {
+		query += ` AND v.environment=?`
+		args = append(args, environment)
+	}
+	reports, err := st.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer reports.Close()
+	for reports.Next() {
+		var key documentSearchOperation
+		var snapshot int64
+		var linksRaw, lineageRaw string
+		if err = reports.Scan(&key.ApplicationID, &key.Environment, &snapshot, &linksRaw, &lineageRaw); err != nil {
+			return nil, err
+		}
+		var links []DocumentRequirement
+		if err = json.Unmarshal([]byte(linksRaw), &links); err != nil {
+			return nil, err
+		}
+		for _, link := range links {
+			if link.ID != workID {
+				continue
+			}
+			var lineage struct {
+				Events []DocumentEvent `json:"events"`
+			}
+			if err = json.Unmarshal([]byte(lineageRaw), &lineage); err != nil {
+				return nil, err
+			}
+			addEvents(key, snapshot, lineage.Events)
+			break
+		}
+	}
+	return matches, reports.Err()
+}
+
 // Search only the latest immutable snapshot in each existing application and
 // environment. Stream documents one at a time; retain just the requested page,
 // not the schemas or request examples of every application in the response.
@@ -59,6 +161,15 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 		keyword := strings.TrimSpace(q.Get("q"))
 		group := q.Get("group")
 		maintainer := strings.ToLower(strings.TrimSpace(q.Get("maintainer")))
+		var workID int64
+		if value := q.Get("work_item_id"); value != "" {
+			id, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || id <= 0 {
+				fail(w, 400, "请选择有效的需求或 Bug")
+				return
+			}
+			workID = id
+		}
 		names := personnames.FromRequest(r)
 		if utf8.RuneCountInString(keyword) > 256 || utf8.RuneCountInString(group) > 256 || utf8.RuneCountInString(maintainer) > 256 {
 			fail(w, 400, "检索条件过长")
@@ -103,6 +214,15 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 		query += ` ORDER BY v.service,v.environment,v.id`
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
+		var workOperations map[documentSearchOperation]int64
+		if workID > 0 {
+			var err error
+			workOperations, err = st.documentWorkItemOperations(ctx, workID, protocol, q.Get("service"), q.Get("environment"), q.Has("environment"))
+			if err != nil {
+				fail(w, 500, "读取需求关联的接口失败，请重试")
+				return
+			}
+		}
 		rows, e := st.db.QueryContext(ctx, query, args...)
 		if e != nil {
 			fail(w, 500, "文档检索失败，请重试")
@@ -151,6 +271,15 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 					fail(w, 500, "文档检索超时，请缩小范围后重试")
 					return
 				}
+				for _, tag := range op.Tags {
+					tags[tag] = true
+				}
+				if workID > 0 {
+					first := workOperations[documentSearchOperation{base.ApplicationID, base.Environment, op.ID}]
+					if first == 0 || first > base.SnapshotID {
+						continue
+					}
+				}
 				maintainerName := names.Name(op.Maintainer)
 				if maintainer != "" && !strings.Contains(strings.ToLower(op.Maintainer+" "+maintainerName), maintainer) {
 					continue
@@ -165,9 +294,6 @@ func registerDocumentSearchRoute(mux *http.ServeMux, st *Store, wj func(http.Res
 				}
 				if !matches {
 					continue
-				}
-				for _, tag := range op.Tags {
-					tags[tag] = true
 				}
 				if group != "" {
 					found := false

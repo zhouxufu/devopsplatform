@@ -46,3 +46,9 @@
 - nacos 支持 yaml/properties/json；每项 action 是 set 或 delete，delete 可省略 value。默认 Group 必填，Data ID 可来自环境绑定；执行时环境绑定中的 Data ID/Group 优先。保留原值类型的表达方式，不凭空猜 Namespace、密码或生产地址。
 - 关联工作项时顶层增加 work_item_id。默认是待确定交付归属的草稿；不要擅自指定 self/follow。独立草稿不传 delivery_ownership。
 - `get_change(service, change_id)` 读取完整内容；`get_work_item_changes(work_item_id)` 读取关联内容。旧 `add_work_item_changes` 仍可批量追加，已有内容由服务端保留，不需要把旧项重交。
+## XXL-JOB 定时任务
+
+- `kind: "xxl_job"`，`xxl_job.resource_alias` 为应用已声明的执行器别名。
+- `action: "create"` 的 `config` 至少提供 `jobDesc`、`author`、`executorHandler`、`scheduleType`。`CRON` 和 `FIX_RATE` 还需 `scheduleConf`，固定频率用秒数字符串。创建后调度保持停用。
+- `action: "update"` 用 `target_title` 和 `target_handler` 唯一定位已有任务，`config` 只提供修改项。省略字段保留原值，`executorParam: ""` 显式清空。参数不得包含密钥。
+- `action: "enable"` 或 `"disable"` 不带 `config`。启用本次新建任务时改用 `created_by_change_id` 引用本次创建变更，并在 `prerequisites` 写入该编号。若需等新版服务，在同一 `prerequisites` 加入实际提供 Handler 的代码变更。
