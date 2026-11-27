@@ -117,7 +117,7 @@ func (s *Store) ReviewDeliveryNode(id int64, actor, digest, nodeID, comment stri
 		return nil, fmt.Errorf("仅当前节点指定且仍有权限的审批人可以审核")
 	}
 	comment = strings.TrimSpace(comment)
-	if len(comment) > 8000 || (!approve && comment == "") {
+	if len(comment) > 8000 || (!approve && comment == "" && (env.Protected || v.Plan.Environment.Protected)) {
 		return nil, fmt.Errorf("驳回须填写原因，审核意见不得超过 8000 字节")
 	}
 	for _, r := range step.Reviews {

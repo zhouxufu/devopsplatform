@@ -25,6 +25,7 @@ func TestResourceExperienceBrowserFixture(t *testing.T) {
 	}
 	s, _, _ := deliveryFixture(t)
 	discoveryMode := os.Getenv("RESOURCE_DISCOVERY_FIXTURE") == "1"
+	xxlMode := os.Getenv("RESOURCE_XXL_FIXTURE") == "1"
 	for _, env := range []string{"dev", "test"} {
 		if err := s.UpsertEnvironment(Environment{Name: env, DisplayName: map[string]string{"dev": "开发", "test": "测试"}[env]}); err != nil {
 			t.Fatal(err)
@@ -39,6 +40,10 @@ func TestResourceExperienceBrowserFixture(t *testing.T) {
 		if r.URL.Query().Get("search") != "" {
 			fmt.Fprint(w, `{"totalCount":2,"pageItems":[{"dataId":"app-dev.yaml","group":"DEV_GROUP"},{"dataId":"app-test.yaml","group":"TEST_GROUP"}]}`)
 		} else {
+			if xxlMode && r.URL.Query().Get("dataId") == "orders-jobs.properties" {
+				fmt.Fprint(w, "xxl.job.admin.addresses=https://scheduler.example.invalid/estate-job\nxxl.job.executor.appname=orders-jobs\n")
+				return
+			}
 			if discoveryMode {
 				if r.URL.Query().Get("dataId") == "fixed.yaml" {
 					fmt.Fprint(w, "common:\n  mysql:\n    hostname: 127.0.0.1\n    username: fixture\n    password: fixture\njobs:\n  chosen:\n    mysql:\n      database: chosen_test\n  other:\n    mysql:\n      database: other_database\n")
@@ -182,7 +187,8 @@ func TestResourceExperienceBrowserFixture(t *testing.T) {
 			deliveryJSON(w, map[string]any{"items": items, "counts": counts, "permission_verified": false})
 			return
 		}
-		if r.Method != "GET" && !(r.Method == "PUT" && r.URL.Path == "/api/services/orders/resources") && !(r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/resources/discover")) {
+		connectionSave := xxlMode && r.Method == "POST" && r.URL.Path == "/api/connections"
+		if r.Method != "GET" && !(r.Method == "PUT" && r.URL.Path == "/api/services/orders/resources") && !(r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/resources/discover")) && !connectionSave {
 			http.Error(w, "fixture blocks execution", 403)
 			return
 		}

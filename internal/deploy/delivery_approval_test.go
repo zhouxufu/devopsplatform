@@ -81,10 +81,7 @@ func TestApprovalRejectAndSnapshotGuard(t *testing.T) {
 	if _, e := s.ReviewDeliveryNode(v.ID, "dev", "changed", "dev-review", "", true); e == nil {
 		t.Fatal("changed digest accepted")
 	}
-	if _, e := s.ReviewDeliveryNode(v.ID, "dev", v.Digest, "dev-review", "", false); e == nil {
-		t.Fatal("rejection missing reason")
-	}
-	rejected, e := s.ReviewDeliveryNode(v.ID, "dev", v.Digest, "dev-review", "not ready", false)
+	rejected, e := s.ReviewDeliveryNode(v.ID, "dev", v.Digest, "dev-review", "", false)
 	if e != nil || rejected.Status != "rejected" {
 		t.Fatal(e)
 	}

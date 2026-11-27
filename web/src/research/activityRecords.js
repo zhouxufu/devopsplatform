@@ -31,7 +31,7 @@ export function localActivityContent(activity){
  let value;try{value=JSON.parse(activity.content)}catch{return '详情暂不可读，可展开查看原始记录'}
  if(!value||typeof value!=='object'||Array.isArray(value))return '详情暂不可读，可展开查看原始记录'
  if(activity.kind==='release-intent')return value.release_required===true?'需要上线':value.release_required===false?'不需要上线'+(value.no_release_reason?'：'+value.no_release_reason:''):'上线意图待确认'
- const kind={code:'代码',mysql:'SQL',nacos:'Nacos 配置',redis:'Redis',manual:'自定义记录',artifact:'制品','data-sync':'数据同步'}[value.kind]||'变更'
+ const kind={code:'代码',mysql:'SQL',nacos:'Nacos 配置',redis:'Redis',xxl_job:'定时任务',manual:'自定义记录',artifact:'制品','data-sync':'数据同步'}[value.kind]||'变更'
  const name=`${kind}${value.change_id?' #'+value.change_id:''}${value.title?' · '+value.title:''}`
  if(activity.kind==='delivery-ownership')return name+'：'+({self:'由当前工作项交付',draft:'生产归属待确认',follow:'随工作项 #'+value.work_item_id+' 交付'}[value.mode]||'归属已更新')
  return name+' · '+(value.status==='ready'?'已校验并就绪':'草稿')

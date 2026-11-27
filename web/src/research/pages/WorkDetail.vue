@@ -77,7 +77,7 @@ async function refreshConflict(){
  try{const refreshed=await refreshActionConflict(item.value.id,form.value,api,data=>{item.value=data.item;remote.value=data.remote||null;sourceIdentity.value=data.source_identity||'';activities.value=data.activity||[];sourceError.value=data.source_error||'';pendingOperations.value=data.pending_operations||[]});options.value=refreshed.options;form.value=refreshed.form;actionNotice.value=conflictRefreshedMessage;toast(actionNotice.value,'warning',{duration:6000})}
  catch(e){actionNotice.value='刷新未完成，填写内容已保留。'+e.message;toast(actionNotice.value,'error',{duration:6000})}
 }
-async function submit(){if(operationBusy.value||busy.value||uploading.value)return;if(action.value==='release-intent'&&!form.value.metadata.use_rule&&(form.value.metadata.release_required==null||!form.value.metadata.no_release_reason.trim())){toast('请选择交付判定并填写人工调整原因，或恢复自动规则','warning');return}busy.value=true;try{
+async function submit(){if(operationBusy.value||busy.value||uploading.value)return;if(action.value==='release-intent'&&!form.value.metadata.use_rule&&form.value.metadata.release_required==null){toast('请选择交付判定，或恢复自动规则','warning');return}busy.value=true;try{
  if(external.value&&action.value!=='release-intent'&&!form.value.expected_digest){await refreshConflict();return}
  if(action.value==='release-intent'){await post('research/work-items/'+item.value.id+'/release-intent',form.value.metadata,'PUT');toast('已保存上线判定','success')}
  else if(external.value){const op=await post('research/work-items/'+item.value.id+'/actions',form.value);operation.value=op;if(op.state!=='success'){toast(op.message,'warning',{duration:6000});return};toast('已同步来源平台','success')}

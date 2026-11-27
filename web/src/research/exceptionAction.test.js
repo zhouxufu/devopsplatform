@@ -11,3 +11,8 @@ test('uses server-compatible Unicode character and UTF-8 byte limits',()=>{
   assert.equal(error('😀😀😀😀😀😀'),'')
   assert.match(error('文'.repeat(2667)),/过长/)
 })
+test('optional notes accept empty and short text but retain the byte limit',()=>{
+  assert.equal(error('',true),'')
+  assert.equal(error('已阅',true),'')
+  assert.match(error('文'.repeat(2667),true),/过长/)
+})

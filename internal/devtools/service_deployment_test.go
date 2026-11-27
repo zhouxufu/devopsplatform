@@ -12,14 +12,17 @@ import (
 
 func TestServiceDeploymentMCPConfirmOnceAndNarrowApplication(t *testing.T) {
 	var creates, advances atomic.Int32
+	var protected atomic.Bool
 	id := strings.Repeat("d", 32)
 	digest := "frozen"
-	spec := map[string]any{"service": "orders", "environment": "test", "mode": "build", "reason": "deploy", "branch": "shared-test"}
+	spec := map[string]any{"service": "orders", "environment": "test", "mode": "build", "branch": "shared-test"}
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Work-Loop-Authority") != "mcp" || r.Header.Get("X-Work-Loop-Key-ID") == "" {
+		if r.URL.Path != "/api/environments" && (r.Header.Get("X-Work-Loop-Authority") != "mcp" || r.Header.Get("X-Work-Loop-Key-ID") == "") {
 			t.Error("missing originating authority")
 		}
 		switch r.URL.Path {
+		case "/api/environments":
+			json.NewEncoder(w).Encode([]map[string]any{{"name": "test", "protected": protected.Load()}})
 		case "/api/service-deployments/preview":
 			json.NewEncoder(w).Encode(map[string]any{"spec": spec, "digest": digest})
 		case "/api/service-deployments":
@@ -47,8 +50,14 @@ func TestServiceDeploymentMCPConfirmOnceAndNarrowApplication(t *testing.T) {
 	if creates.Load() != 0 {
 		t.Fatal("preview wrote")
 	}
-	docConfirm(t, svc, tok, p)
-	docConfirm(t, svc, tok, p)
+	confirmation := map[string]any{"confirmation_id": mapValue(p)["confirmation_id"], "confirm": true}
+	protected.Store(true)
+	if _, _, _, err := svc.Call(context.Background(), tok, "confirm_platform_action", confirmation); err == nil || creates.Load() != 0 {
+		t.Fatal("protected target accepted empty reason")
+	}
+	protected.Store(false)
+	docCall(t, svc, tok, "confirm_platform_action", confirmation)
+	docCall(t, svc, tok, "confirm_platform_action", confirmation)
 	if creates.Load() != 1 {
 		t.Fatal("duplicate confirmation dispatched")
 	}

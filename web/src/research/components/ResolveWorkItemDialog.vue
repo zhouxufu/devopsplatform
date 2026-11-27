@@ -67,7 +67,6 @@ function validation(){
  if(!form.value.resolution)return '请选择解决方式'
  if(form.value.resolution==='fixed'&&!form.value.resolved_build)return '已修复时请选择来源解决版本'
  if(form.value.resolution==='duplicate'&&!/^[1-9]\d*$/.test(form.value.duplicate_bug||''))return '请填写有效的重复 Bug 编号'
- if(form.value.metadata.release_required!==null&&form.value.metadata.release_required!==undefined&&!form.value.metadata.no_release_reason.trim())return '请填写人工调整原因'
  return ''
 }
 function completed(){toast('已解决并同步来源平台','success');emit('saved',record.value)}

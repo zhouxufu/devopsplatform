@@ -64,7 +64,7 @@ func (s *Store) workLoopAttentionTarget(actor, id string) (attentionTarget, erro
 	if t.Intent != nil && t.Intent.State == "dispatching" {
 		canIgnore = false
 	}
-	return attentionTarget{Kind: "work-loop", Task: task, SourceDigest: t.raw, CanIgnore: canIgnore}, nil
+	return attentionTarget{Kind: "work-loop", ReasonOptional: s.environmentReasonOptional(t.Grant.Spec.Environment, false), Task: task, SourceDigest: t.raw, CanIgnore: canIgnore}, nil
 }
 func (s *Store) projectWorkLoopTasks(actor, view string, tasks []ResearchTask, tracking bool) ([]ResearchTask, error) {
 	loops, e := s.ownedWorkLoops(actor)

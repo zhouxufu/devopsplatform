@@ -44,11 +44,11 @@ func TestDeliveryMCPOrderedPreviewUsesServerDraft(t *testing.T) {
 			var req map[string]any
 			json.NewDecoder(r.Body).Decode(&req)
 			nodes, _ := req["nodes"].([]any)
-			if len(nodes) != 2 || stringArg(mapValue(nodes[1]), "kind") != "mysql" || stringArg(mapValue(nodes[1]), "service") != "orders" || stringArg(mapValue(nodes[1]), "sql_group") != "sql" {
+			if intArg(req, "max_active_nodes", 0) != 2 || len(nodes) != 2 || stringArg(mapValue(nodes[1]), "kind") != "mysql" || stringArg(mapValue(nodes[1]), "service") != "orders" || stringArg(mapValue(nodes[1]), "sql_group") != "sql" {
 				t.Error("incorrect resolved stages", req)
 			}
 			previews++
-			json.NewEncoder(w).Encode(map[string]any{"preflight_token": "fixture-proof", "blockers": []any{}})
+			json.NewEncoder(w).Encode(map[string]any{"initial_dispatch": []string{"sql"}, "preflight_token": "fixture-proof", "blockers": []any{}})
 		default:
 			t.Error("unexpected operation", r.URL.Path)
 			http.Error(w, "unexpected", 403)
@@ -60,8 +60,11 @@ func TestDeliveryMCPOrderedPreviewUsesServerDraft(t *testing.T) {
 	svc.actions = store
 	tok := workflowToken(t, store)
 	tok.Scopes = append(tok.Scopes, "delivery:write")
-	args := map[string]any{"phase": "release", "request": map[string]any{"environment": "test", "source_change_ids": []any{1, 2}, "nodes": []any{map[string]any{"id": "sql", "change_ids": []any{1}}, map[string]any{"id": "after", "sql_group": "sql", "change_ids": []any{2}}}}}
-	docCall(t, svc, tok, "preview_delivery", args)
+	args := map[string]any{"phase": "release", "request": map[string]any{"environment": "test", "max_active_nodes": 2, "source_change_ids": []any{1, 2}, "nodes": []any{map[string]any{"id": "sql", "change_ids": []any{1}}, map[string]any{"id": "after", "sql_group": "sql", "change_ids": []any{2}}}}}
+	v := mapValue(docCall(t, svc, tok, "preview_delivery", args))
+	if ids, ok := v["initial_dispatch"].([]any); !ok || len(ids) != 1 || ids[0] != "sql" {
+		t.Fatal(v)
+	}
 	action := docCall(t, svc, tok, "create_delivery_run", args)
 	body := mapValue(mapValue(action)["request"])
 	if previews != 2 || len(body["nodes"].([]any)) != 2 {

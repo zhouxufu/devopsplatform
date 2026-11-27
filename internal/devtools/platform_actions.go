@@ -286,6 +286,7 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 		}
 		allowed := map[string]bool{"kind": true, "title": true, "service": true, "reference": true, "summary": true, "risk_level": true, "rollback_plan": true, "sql": true, "nacos": true, "redis": true, "delivery_ownership": true}
 		allowed["prerequisites"] = true
+		allowed["xxl_job"] = true
 		for _, r := range newRows {
 			c := mapValue(cloneJSON(r))
 			if len(c) == 0 || stringArg(c, "title") == "" {
@@ -307,7 +308,7 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 				c["service"] = service
 			}
 			switch stringArg(c, "kind") {
-			case "code", "artifact", "mysql", "nacos", "redis", "manual":
+			case "code", "artifact", "mysql", "nacos", "redis", "manual", "xxl_job":
 			default:
 				return nil, fmt.Errorf("变更类型无效")
 			}
@@ -432,6 +433,19 @@ func (s *TokenStore) actionStatus(t *AccessToken, id string) (any, error) {
 	}
 	return nil, fmt.Errorf("本令牌没有此操作")
 }
+
+// Inspect only the identity-bound frozen target, before claiming a write.
+func (s *TokenStore) confirmationEnvironment(t *AccessToken, id string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.data.Actions {
+		if a.ID == id && a.TokenID == t.ID && a.Owner == t.Owner {
+			return a.Query.Get("environment"), a.Body["confirm_protected"] == true, nil
+		}
+	}
+	return "", false, fmt.Errorf("本令牌没有此操作")
+}
+
 func (s *TokenStore) claimAction(t *AccessToken, id string, reason ...string) (PlatformAction, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -477,14 +491,42 @@ func (s *TokenStore) finishAction(id, state string, result any, err error) error
 	}
 	return fmt.Errorf("操作不存在")
 }
+func (s *ToolService) checkReasonMayBeOmitted(ctx context.Context, t *AccessToken, env string) error {
+	value, err := s.platformRequest(ctx, t, "GET", "/api/environments", nil, nil)
+	if err != nil {
+		return err
+	}
+	rows, _ := value.([]any)
+	for _, v := range rows {
+		row := mapValue(v)
+		if stringArg(row, "name") == env && row["protected"] == false {
+			return nil
+		}
+	}
+	return fmt.Errorf("受保护或无法核实的环境须填写操作原因")
+}
 func (s *ToolService) confirmAction(ctx context.Context, t *AccessToken, args map[string]any) (any, error) {
 	if s.actions == nil {
 		return nil, fmt.Errorf("确认存储不可用")
 	}
-	if args["confirm"] != true || stringArg(args, "reason") == "" {
-		return nil, fmt.Errorf("请明确确认并填写操作原因")
+	if args["confirm"] != true {
+		return nil, fmt.Errorf("请明确确认这份操作预览")
 	}
 	id := stringArg(args, "confirmation_id")
+	if stringArg(args, "reason") == "" {
+		env, protected, err := s.actions.confirmationEnvironment(t, id)
+		if err != nil {
+			return nil, err
+		}
+		if protected {
+			return nil, fmt.Errorf("受保护环境须填写操作原因")
+		}
+		if env != "" {
+			if err := s.checkReasonMayBeOmitted(ctx, t, env); err != nil {
+				return nil, err
+			}
+		}
+	}
 	a, claimed, e := s.actions.claimAction(t, id, stringArg(args, "reason"))
 	if e != nil {
 		return nil, e

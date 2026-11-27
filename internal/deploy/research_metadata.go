@@ -101,9 +101,6 @@ func validateResearchMetadata(v ResearchMetadata) error {
 	if v.ReleaseRequired == nil {
 		return fmt.Errorf("请选择是否需要上线")
 	}
-	if !*v.ReleaseRequired && strings.TrimSpace(v.NoReleaseReason) == "" {
-		return fmt.Errorf("不需要上线时须填写原因")
-	}
 	if len(v.NoReleaseReason) > 4000 {
 		return fmt.Errorf("原因过长")
 	}

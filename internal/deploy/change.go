@@ -83,6 +83,7 @@ type Change struct {
 	SQL               *SQLChange               `json:"sql,omitempty"`
 	Nacos             *NacosChange             `json:"nacos,omitempty"`
 	Redis             *RedisChange             `json:"redis,omitempty"`
+	XXLJob            *XXLJobChange            `json:"xxl_job,omitempty"`
 }
 
 type ReleaseVersion struct {
@@ -586,6 +587,9 @@ func normalizeChangeForSave(v *Change, sqlDraft bool) error {
 			return err
 		}
 	}
+	if v.Kind == xxlJobKind || v.XXLJob != nil {
+		return normalizeXXLJobChange(v)
+	}
 	return nil
 }
 
@@ -600,6 +604,9 @@ func (s *Store) CreateChange(v *Change) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err = s.checkXXLChangeDeclaration(tx, v); err != nil {
+		return err
+	}
 	res, err := tx.Exec(`INSERT INTO changes(kind,title,service,reference,summary,risk_level,rollback_plan,status,owner,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		v.Kind, v.Title, v.Service, v.Reference, v.Summary, v.RiskLevel, v.RollbackPlan, v.Status, strings.TrimSpace(v.Owner), now, now)
 	if err == nil {
@@ -720,6 +727,9 @@ func (s *Store) UpdateChange(v *Change) error {
 	if err = saveSQLPayload(tx, v); err != nil {
 		return err
 	}
+	if err = s.checkXXLChangeDeclaration(tx, v); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -830,6 +840,17 @@ func (s *Store) SetChangeReady(id int64, ready bool) (*Change, error) {
 			change.SQL = payload.SQL
 			if e = normalizeChange(&change); e != nil {
 				return nil, fmt.Errorf("SQL 尚未通过就绪校验：%w", e)
+			}
+		}
+		if change.Kind == xxlJobKind {
+			if e = loadChangePayload(tx, &change); e != nil {
+				return nil, e
+			}
+			if e = normalizeXXLJobChange(&change); e != nil {
+				return nil, e
+			}
+			if e = s.checkXXLChangeDeclaration(tx, &change); e != nil {
+				return nil, e
 			}
 		}
 		status = ChangeReady
@@ -1189,7 +1210,7 @@ func (s *Store) SetReleasePromotionStatus(id int64, from []string, status string
 }
 
 func validApplicationResourceKind(kind string) bool {
-	return kind == "mysql" || kind == "nacos" || kind == "redis"
+	return kind == "mysql" || kind == "nacos" || kind == "redis" || kind == xxlJobKind
 }
 
 func (s *Store) ApplicationResources(service string) ApplicationResources {

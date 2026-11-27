@@ -155,7 +155,11 @@ func (pr *PipelineRunner) StartWithOptions(sv *Service, autoDeploy bool, opts Pi
 		releaseRunner()
 		return 0, err
 	}
-	if err := pr.st.saveBuildSnapshot(r.ID, raw, delivery); err != nil {
+	scope := opts.replayReasonScope
+	if opts.ReplayDelivery == nil {
+		scope = &buildReasonScope{Name: buildEnvironment, Protected: buildEnvironment != "" && !pr.st.environmentReasonOptional(buildEnvironment, false)}
+	}
+	if err := pr.st.saveBuildSnapshot(r.ID, raw, delivery, scope); err != nil {
 		pr.st.FinishRun(r.ID, "failed")
 		releaseRunner()
 		return 0, err

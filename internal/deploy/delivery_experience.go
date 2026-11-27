@@ -316,7 +316,7 @@ func (s *Store) deliveryRunPage(q, status, environment, version, owner string, s
 			v.Version = r.Plan.Version.Version
 		}
 		for _, step := range r.Steps {
-			if step.Status == "success" || step.Status == "skipped" {
+			if scheduleStepDone(step) {
 				v.Completed++
 			} else if v.CurrentNode == "" {
 				v.CurrentNode = step.Name

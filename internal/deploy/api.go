@@ -43,6 +43,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 	registerWorkCandidateRoutes(mux, st)
 	registerGitBranchRoutes(mux, st)
 	registerWorkbenchRoutes(mux, st, busURL)
+	registerXXLJobRoutes(mux, st)
 	applicationObserver := appcatalog.NewObserver(busURL)
 	wj := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -640,6 +641,10 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 			writeError(w, 400, "bad request")
 			return
 		}
+		if strings.TrimSpace(v.Kind) == xxlJobKind && (!deliveryManage(r, "") || !sameOrigin(r)) {
+			writeError(w, 403, "仅管理员可配置 XXL-JOB 连接")
+			return
+		}
 		if err := st.UpsertConnection(v); err != nil {
 			writeError(w, 400, err)
 			return
@@ -666,7 +671,11 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 			writeError(w, 404, "连接不存在")
 			return
 		}
-		if c.Kind == "mysql" || c.Kind == "zentao" || c.Kind == "nacos" || c.Kind == "redis" {
+		if c.Kind == "zentao" || deliveryResourceKind(c.Kind) {
+			if c.Kind == xxlJobKind && (!deliveryManage(r, "") || !sameOrigin(r)) {
+				writeError(w, 403, "仅管理员可核验 XXL-JOB 连接")
+				return
+			}
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 			defer cancel()
 			err := testIntegrationConnection(ctx, c)
@@ -680,6 +689,9 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				return
 			}
 			status := "认证及读取权限验证成功"
+			if c.Kind == xxlJobKind {
+				status = "XXL-JOB 接入接口与令牌认证通过"
+			}
 			if c.Kind == "mysql" && c.Config["database"] == "" {
 				status = "MySQL 实例连接及认证成功；具体数据库在应用资源绑定时选择，未验证目标表权限"
 			}
@@ -1461,7 +1473,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				writeError(w, http.StatusPreconditionRequired, "受保护环境回滚需要二次确认")
 				return
 			}
-			if env != nil && env.RequireReason && strings.TrimSpace(req.Reason) == "" {
+			if env != nil && env.Protected && env.RequireReason && strings.TrimSpace(req.Reason) == "" {
 				writeError(w, http.StatusBadRequest, "受保护环境回滚必须填写原因")
 				return
 			}
@@ -1744,7 +1756,7 @@ func Routes(st *Store, b *Builder, hub *logHub, busURL string, stepLib *StepLib)
 				writeError(w, http.StatusPreconditionRequired, "受保护环境必须通过发布单审批，不能从流水线直接部署")
 				return
 			}
-			if target.RequireReason && strings.TrimSpace(req.Reason) == "" {
+			if target.Protected && target.RequireReason && strings.TrimSpace(req.Reason) == "" {
 				writeError(w, http.StatusBadRequest, "该环境要求填写发布原因")
 				return
 			}

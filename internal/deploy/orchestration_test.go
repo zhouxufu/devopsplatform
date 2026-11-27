@@ -371,3 +371,18 @@ func TestDeliveryMultipleApplicationsAdvanceInOrder(t *testing.T) {
 		t.Fatalf("multi app completion: %#v %v", run, err)
 	}
 }
+
+func TestReleaseReasonFlagOnlyAppliesToProtectedTargets(t *testing.T) {
+	st, releases, _ := deliveryFixture(t)
+	env := st.GetEnvironment("test")
+	env.RequireReason = true
+	if err := st.UpsertEnvironment(*env); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := releases.ValidateTarget("orders", "test", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := releases.ValidateTarget("orders", "prod", ""); err == nil {
+		t.Fatal("missing protected release reason")
+	}
+}

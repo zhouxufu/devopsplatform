@@ -10,6 +10,6 @@ export function buildDeployBlocker(target,reason=''){
  if(!target)return '请选择目标环境'
  if(!deploymentTargetReady(target))return target.target_type==='manual'?'请先配置手动发布操作说明':'该环境发布资源不完整，请先配置环境'
  if(target.protected&&!target.approvers)return '受保护环境尚未配置审批人'
- if(target.require_reason&&!reason.trim())return '请填写发布原因'
+ if((target.protected&&target.require_reason)&&!reason.trim())return '请填写发布原因'
  return ''
 }

@@ -84,6 +84,7 @@ func (o *MavenExecutionOptions) arguments() ([]string, error) {
 }
 
 type PipelineRunOptions struct {
+	replayReasonScope       *buildReasonScope
 	BuildEnvironment        string
 	ReplayDelivery          *ServiceDelivery
 	Branch                  string

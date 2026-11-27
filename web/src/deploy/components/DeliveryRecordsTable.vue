@@ -30,7 +30,7 @@ const mineAvailable=computed(()=>!!props.me.username&&props.me.username!=='local
 const mine=computed(()=>mineAvailable.value&&owner.value===props.me.username);
 const ownerOptions=computed(()=>[...new Set([...owners.value,...(owner.value?[owner.value]:[])])].map(value=>({value,label:value})));
 const statusOptions=computed(()=>isVersion.value?[{value:'draft',label:'草稿'},{value:'ready',label:'已冻结'},{value:'completed',label:'已完成'},{value:'canceled',label:'已取消'}]:[{value:'draft',label:'草稿'},{value:'ready',label:'已就绪'},{value:'archived',label:'已归档'}]);
-const kindOptions=[{value:'code',label:'代码分支'},{value:'artifact',label:'应用制品'},{value:'mysql',label:'SQL / 数据同步'},{value:'nacos',label:'Nacos 配置'},{value:'redis',label:'Redis 命令'},{value:'manual',label:'自定义记录'}];
+const kindOptions=[{value:'code',label:'代码分支'},{value:'artifact',label:'应用制品'},{value:'mysql',label:'SQL / 数据同步'},{value:'nacos',label:'Nacos 配置'},{value:'redis',label:'Redis 命令'},{value:'xxl_job',label:'定时任务'},{value:'manual',label:'自定义记录'}];
 const kindLabel=v=>v.data_sync?'数据同步':v.kind==='mysql'?'SQL 变更':kindOptions.find(k=>k.value===v.kind)?.label||v.kind;
 const statusLabel=v=>v.missing_branch?'草稿 · 待补分支':statusOptions.value.find(s=>s.value===v.status)?.label||v.status;
 const date=value=>value?new Date(value*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'—';

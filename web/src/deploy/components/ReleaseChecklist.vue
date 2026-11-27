@@ -4,7 +4,7 @@ import {Button} from '../../shared/shadcn-ui.js'
 const emit=defineEmits(['edit','order'])
 const props=defineProps({canEdit:Function,disabled:Boolean,steps:{type:Array,default:()=>[]}})
 const hasDependencies=computed(()=>props.steps.some(step=>step.items?.some(item=>item.prerequisites?.length)))
-const labels={planned:'计划执行',blocked:'待补齐',applied:'已有回执，跳过',not_applicable:'本环境无需执行'}
+const labels={skipped:"本次跳过",planned:'计划执行',blocked:'待补齐',applied:'已有回执，跳过',not_applicable:'本环境无需执行'}
 </script>
 <template>
   <section v-if="steps.length" aria-label="本环境发布清单" class="space-y-2">

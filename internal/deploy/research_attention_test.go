@@ -202,16 +202,61 @@ func TestResearchAttentionLegacyRestoreAndBatchPartial(t *testing.T) {
 	if len(result.Results) != 2 || !result.Results[0].Success || result.Results[1].Success || !result.ExecutionStateUnchanged {
 		t.Fatal(w.Body.String())
 	}
-	request.Reason = "短"
+	request.Reason = strings.Repeat("长", 667)
 	payload, _ = json.Marshal(request)
 	w = collaborationRequest(mux, "POST", "/api/research/attention", "alice", string(payload))
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "至少6字") {
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "2000字节") {
 		t.Fatal(w.Body.String())
 	}
 	var count int
 	s.db.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action LIKE 'attention-%'`).Scan(&count)
 	if count != 2 {
 		t.Fatal("missing audit or duplicate write", count)
+	}
+}
+
+func TestAttentionReasonByEnvironment(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, env := range []Environment{{Name: "dev", DisplayName: "开发"}, {Name: "guarded", DisplayName: "保护测试", Protected: true, Approvers: "qa"}} {
+		if err := s.UpsertEnvironment(env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mux := http.NewServeMux()
+	registerResearchCollaboration(mux, s)
+	var items []researchAttentionItem
+	for _, env := range []Environment{{Name: "dev"}, {Name: "guarded"}, {Name: "dev", Protected: true}, {Name: "removed"}} {
+		run := collaborationRun(t, s, "alice", "failed", false)
+		run.Plan.Environment = env
+		// Seed the frozen plan itself; runtime status updates preserve the original plan.
+		plan, err := json.Marshal(run.Plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`UPDATE delivery_runs SET plan=?,digest=? WHERE id=?`, string(plan), digestJSON(run.Plan), run.ID); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, attentionTestItem(t, s, "alice", fmt.Sprint("delivery:", run.ID)))
+	}
+	body, _ := json.Marshal(researchAttentionRequest{Action: "ignore", Items: items, RequestID: "mixed-attention"})
+	w := collaborationRequest(mux, "POST", "/api/research/attention", "alice", string(body))
+	var result struct {
+		Results []struct {
+			Success bool
+			Error   string
+		}
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || len(result.Results) != 4 {
+		t.Fatal(w.Body.String())
+	}
+	for i, r := range result.Results {
+		if r.Success != (i == 0) || i > 0 && !strings.Contains(r.Error, "至少6字") {
+			t.Fatal(w.Body.String())
+		}
 	}
 }
 

@@ -19,16 +19,19 @@ func deliveryTools() []Tool {
 	id := map[string]any{"type": "integer", "minimum": 1}
 	request := objectSchema(map[string]any{
 		"environment": str("明确的非受保护开发/测试环境"), "template_id": id,
-		"strategy_kind": map[string]any{"type": "string", "enum": []string{"custom", "standard"}},
-		"source_type":   map[string]any{"type": "string", "enum": []string{"work_items", "version", "changes", "fixed"}},
-		"work_item_ids": map[string]any{"type": "array", "items": id, "maxItems": 100}, "version_id": id,
+		"execution_mode":   map[string]any{"type": "string", "enum": []string{"dependencies"}, "description": "同单按冻结前置依赖调度，独立的应用发布可并行"},
+		"max_active_nodes": map[string]any{"type": "integer", "minimum": 1, "description": "本执行单同时在途的自动节点数上限。省略时按原策略调度"},
+		"skipped_nodes":    map[string]any{"type": "object", "additionalProperties": str("本单跳过原因"), "description": "节点 ID 到跳过原因；保留步骤和依赖，不自动放行后继"},
+		"strategy_kind":    map[string]any{"type": "string", "enum": []string{"custom", "standard"}},
+		"source_type":      map[string]any{"type": "string", "enum": []string{"work_items", "version", "changes", "fixed"}},
+		"work_item_ids":    map[string]any{"type": "array", "items": id, "maxItems": 100}, "version_id": id,
 		"selected_change_ids": map[string]any{"type": "array", "items": id, "maxItems": 200},
 		"source_change_ids":   map[string]any{"type": "array", "items": id, "maxItems": 200},
 		"artifacts":           map[string]any{"type": "object", "additionalProperties": id},
 		"code_modes":          map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string", "enum": []string{"direct", "merge"}}, "description": "逐应用选择直接构建公共分支或合并选定代码后构建；发布从准备阶段一次执行"},
 		"artifact_sources":    map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string", "enum": []string{"build", "existing"}}},
 		"preparation_run_id":  id, "code_preparation_id": str("已有代码准备任务ID"),
-		"nodes":  map[string]any{"type": "array", "maxItems": 30, "items": objectSchema(map[string]any{"id": str("原节点 ID；拆分 SQL 阶段使用新的唯一 ID"), "sql_group": str("拆分 SQL 时引用预览中的原 SQL 节点 ID"), "change_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 50}}, "id"), "description": "可选的执行顺序：仅提交原节点 id；SQL 拆分可附 sql_group 和 change_ids。服务端保留原节点类型、目标、脚本和审核，不能增添其他节点或改写执行内容。"},
+		"nodes":  map[string]any{"type": "array", "maxItems": 30, "items": objectSchema(map[string]any{"id": str("原节点 ID；拆分 SQL 阶段使用新的唯一 ID"), "depends_on": map[string]any{"type": "array", "maxItems": 30, "items": str("前置节点 ID，保留模板强制依赖")}, "sql_group": str("拆分 SQL 时引用预览中的原 SQL 节点 ID"), "change_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 50}}, "id"), "description": "可选的执行顺序与前置依赖：提交原节点 id，可附 depends_on；SQL 拆分可附 sql_group 和 change_ids。服务端保留原节点类型、目标、脚本和审核，不能增添其他节点或改写执行内容。"},
 		"reason": str("此次交付目的"), "order_confirmed": map[string]any{"type": "boolean"}, "code_confirmed": map[string]any{"type": "boolean"},
 	}, "environment")
 	phase := map[string]any{"type": "string", "enum": []string{"preparation", "release"}, "description": "preparation=环境绑定流程的范围确认/代码准备阶段；release=完成准备后的环境预检/发布阶段"}
@@ -167,6 +170,9 @@ func (s *ToolService) deliveryPreview(ctx context.Context, t *AccessToken, phase
 // never silently select the template's version mode. Never guess a template
 // from its name/list order or revive standalone preparation records.
 func (s *ToolService) resolveDeliveryMCPRequest(ctx context.Context, t *AccessToken, phase string, req map[string]any) error {
+	if phase == "release" && req["execution_mode"] == nil {
+		req["execution_mode"] = "dependencies"
+	}
 	env := stringArg(req, "environment")
 	v, err := s.platformRequest(ctx, t, "GET", "/api/environments/"+url.PathEscape(env)+"/delivery-policy", nil, nil)
 	if err != nil {
@@ -232,6 +238,9 @@ func (s *ToolService) prepareDeliveryAction(ctx context.Context, t *AccessToken,
 		phase := stringArg(args, "phase")
 		if name == "publish_delivery" {
 			phase = "release"
+			if req["execution_mode"] == nil {
+				req["execution_mode"] = "dependencies"
+			}
 			modes := mapValue(req["artifact_sources"])
 			needsBuild := len(mapValue(req["code_modes"])) > 0
 			for _, mode := range modes {
@@ -453,8 +462,15 @@ func (s *ToolService) prepareDeliveryAction(ctx context.Context, t *AccessToken,
 	}
 	var next map[string]any
 	steps, _ := run["steps"].([]any)
-	for _, row := range steps {
+	for i, row := range steps {
 		step := mapValue(row)
+		if stringArg(plan, "execution_mode") == "dependencies" {
+			if int64(i) == intArg(run, "next_step_index", -1) {
+				next = step
+				break
+			}
+			continue
+		}
 		if stringArg(step, "status") != "success" {
 			next = step
 			break

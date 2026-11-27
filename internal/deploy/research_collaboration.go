@@ -406,12 +406,16 @@ func (s *Store) researchExceptionHistory(actor string) ([]ResearchTask, error) {
 		t.Stage = "异常核对已记录（原状态保留）"
 		t.Assignees = nil
 		t.ReadOnly = true
-		t.NextAction = "已人工核对：" + comment + "（原发布状态不变）"
+		t.NextAction = "已人工核对"
 		if t.ResolutionAction == "ignore" {
 			t.Title = "异常忽略记录 · " + strings.TrimPrefix(t.Title, "异常核对记录 · ")
 			t.Stage = "异常待办已忽略（原状态保留）"
-			t.NextAction = "忽略原因：" + comment + "（不代表故障已恢复，原发布状态不变）"
+			t.NextAction = "已忽略异常待办"
 		}
+		if comment != "" {
+			t.NextAction += "：" + comment
+		}
+		t.NextAction += "（原发布状态不变）"
 		t.At, t.UpdatedAt = at, at
 		out = append(out, t)
 	}
@@ -513,8 +517,8 @@ func registerResearchCollaboration(mux *http.ServeMux, s *Store) {
 			Comment string `json:"comment"`
 			Action  string `json:"action"`
 		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16000)).Decode(&body) != nil || utf8.RuneCountInString(strings.TrimSpace(body.Comment)) < 6 || len(body.Comment) > 8000 {
-			deliveryWriteError(w, 400, "请填写处理结果或忽略原因（至少 6 个字符，最多 8000 字节）")
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 16000)).Decode(&body) != nil || len(body.Comment) > 8000 {
+			deliveryWriteError(w, 400, "请求格式有误或处理说明超过 8000 字节")
 			return
 		}
 		if body.Action == "" {
@@ -532,6 +536,17 @@ func registerResearchCollaboration(mux *http.ServeMux, s *Store) {
 		}
 		for _, t := range items {
 			if t.ID == body.ID && t.Kind == "exception" && t.SourceKind != "operation" && t.ResolutionDigest != "" && t.ResolutionDigest == body.Digest {
+				if utf8.RuneCountInString(strings.TrimSpace(body.Comment)) < 6 {
+					kind := t.SourceKind
+					if kind == "" {
+						kind = "delivery"
+					}
+					target, e := s.attentionTarget(actor, fmt.Sprintf("%s:%d", kind, t.RunID))
+					if e != nil || !target.ReasonOptional {
+						deliveryWriteError(w, 400, "此记录需要填写至少 6 个字符的处理说明")
+						return
+					}
+				}
 				if t.SourceKind == "release" {
 					target, e := s.attentionTarget(actor, "release:"+fmt.Sprint(t.RunID))
 					if e != nil || !target.CanIgnore {

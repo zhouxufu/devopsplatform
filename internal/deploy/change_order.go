@@ -19,8 +19,8 @@ func validateChangePrerequisites(change *Change) error {
 	for i := range change.Prerequisites {
 		dep := &change.Prerequisites[i]
 		dep.Reason = strings.TrimSpace(dep.Reason)
-		if dep.ChangeID < 1 || dep.ChangeID == change.ID || seen[dep.ChangeID] || dep.Reason == "" || len(dep.Reason) > 1000 {
-			return fmt.Errorf("前置变更编号须为其他已保存的变更、不能重复，并需填写 1–1000 字节的原因")
+		if dep.ChangeID < 1 || dep.ChangeID == change.ID || seen[dep.ChangeID] || len(dep.Reason) > 1000 {
+			return fmt.Errorf("前置变更编号须为其他已保存的变更、不能重复，原因最多 1000 字节")
 		}
 		seen[dep.ChangeID] = true
 	}
@@ -41,7 +41,7 @@ func changeNodeMatches(node DeliveryNode, c Change) bool {
 	if len(node.ChangeIDs) > 0 {
 		return slices.Contains(node.ChangeIDs, c.ID)
 	}
-	return kind == "mysql" || kind == "nacos" || kind == "redis"
+	return deliveryResourceKind(kind)
 }
 
 // Build the order only from explicit change dependencies. A workflow gate is
@@ -210,7 +210,7 @@ func orderChangeNodes(nodes []DeliveryNode, scope *DeliveryScope, suggest bool) 
 
 func releaseOrderBarrier(node DeliveryNode) bool {
 	switch node.Kind {
-	case "deploy", "mysql", "redis", "nacos":
+	case "deploy", "mysql", "redis", "nacos", xxlJobKind:
 		return false
 	case "manual":
 		return len(node.ChangeIDs) == 0 || len(node.Approvers) > 0
@@ -243,6 +243,9 @@ func validateOrderBarriers(expected, actual []DeliveryNode) error {
 	segment := 0
 	for _, node := range actual {
 		if releaseOrderBarrier(node) {
+			if segment < len(gates) && node.Kind != "approval" && !slices.ContainsFunc(gates[segment].DependsOn, func(dep string) bool { return !slices.Contains(node.DependsOn, dep) }) {
+				node.DependsOn = gates[segment].DependsOn
+			}
 			if segment >= len(gates) || digestJSON(node) != digestJSON(gates[segment]) {
 				return fmt.Errorf("发布依赖所用的流程关卡发生变化，请重新预检")
 			}

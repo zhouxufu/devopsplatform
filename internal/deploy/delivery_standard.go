@@ -28,6 +28,7 @@ type DeliveryPolicySnapshot struct {
 	Stages      []DeliveryNode `json:"stages"`
 }
 type DeliveryDraftPlan struct {
+	ScheduleNodes   []DeliveryNode         `json:"schedule_nodes,omitempty"`
 	StepsDigest     string                 `json:"steps_digest"`
 	Defaults        DeliveryDefaults       `json:"defaults"`
 	StrategyKind    string                 `json:"strategy_kind"`
@@ -315,6 +316,13 @@ func (s *Store) DraftDelivery(req DeliveryRequest) (*DeliveryDraftPlan, error) {
 		nodes = includeManualRecords(nodes, scope)
 	}
 	if tpl.Workbench == "" {
+		if req.ExecutionMode == dependencyExecution {
+			nodes = expandScheduleApplications(nodes, tpl, scope)
+		}
+		nodes, err = includeXXLJobNodes(nodes, scope)
+		if err != nil {
+			return nil, err
+		}
 		nodes, err = orderChangeNodes(nodes, scope, true)
 		if err != nil {
 			return nil, err
@@ -482,6 +490,16 @@ func (s *Store) registerStandardDeliveryAPI(mux *http.ServeMux, reply func(http.
 		}
 		req.previewDrafts = true
 		p, err := s.DraftDelivery(req)
+		if err == nil && req.ExecutionMode == dependencyExecution && p.Template.Workbench == "" {
+			nodes := p.Nodes
+			if req.Nodes != nil {
+				nodes = req.Nodes
+			}
+			schedule := DeliveryPlan{ExecutionMode: dependencyExecution, Nodes: slices.Clone(nodes), Scope: p.Scope}
+			if err = freezeScheduleDependencies(&schedule); err == nil {
+				p.ScheduleNodes = schedule.Nodes
+			}
+		}
 		reply(w, p, err)
 	})
 	mux.HandleFunc("GET /api/environments/{name}/delivery-policy", func(w http.ResponseWriter, r *http.Request) {

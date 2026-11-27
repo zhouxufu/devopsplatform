@@ -65,11 +65,11 @@ func (s *Store) appliedSQLChange(c *Change, destination *ResourceConnection, env
 		if e.status != "success" {
 			return nil, fmt.Errorf("变更 #%d 在目标上存在 %s 执行记录，必须人工核对，不能自动跳过或重试", c.ID, e.status)
 		}
-		selected, _, err := selectEnvironmentSQL(c.SQL, environment)
+		selected, _, err := s.selectEnvironmentSQL(c.SQL, environment)
 		if err != nil {
 			return nil, err
 		}
-		previous, _, err := selectEnvironmentSQL(c.SQL, prior.Plan.Environment.Name)
+		previous, _, err := s.selectEnvironmentSQL(c.SQL, prior.Plan.Environment.Name)
 		if err != nil || selected.Skip || previous.Skip || !sameSQLTokens(selected.Content, previous.Content) {
 			return nil, fmt.Errorf("变更 #%d 在同一数据库上的历史脚本与当前环境不同，请新增后续变更", c.ID)
 		}
@@ -111,7 +111,7 @@ func (s *Store) verifySQLReuse(p *SQLExecutionPlan, environment string) error {
 
 func (s *Store) changeExecutionTouched(id int64) (bool, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?)`, id, id).Scan(&n)
+	err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM sql_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM nacos_execution_ledger WHERE change_id=?) + (SELECT COUNT(*) FROM deploy_meta WHERE key=?)`, id, id, xxlChangeTouchKey(id)).Scan(&n)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

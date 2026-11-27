@@ -312,7 +312,7 @@ func (m *instanceManager) control(service, environment string, h Host, action, a
 	if !found {
 		return empty, fmt.Errorf("主机已移出应用环境")
 	}
-	if t.Protected && !req.ConfirmProtected || (t.Protected || t.RequireReason) && strings.TrimSpace(req.Reason) == "" {
+	if t.Protected && !req.ConfirmProtected || t.Protected && strings.TrimSpace(req.Reason) == "" {
 		return empty, fmt.Errorf("环境审批要求已变化，请重新确认")
 	}
 	r := m.inspect(t, sv, h)
@@ -419,7 +419,7 @@ func registerInstanceRoutes(mux *http.ServeMux, st *Store, exec javaExec) {
 			return
 		}
 		req.Reason = strings.TrimSpace(req.Reason)
-		if (t.Protected || t.RequireReason) && req.Reason == "" || len(req.Reason) > 2000 {
+		if t.Protected && req.Reason == "" || len(req.Reason) > 2000 {
 			deliveryWriteError(w, 400, "请填写操作原因（最多 2000 字节）")
 			return
 		}

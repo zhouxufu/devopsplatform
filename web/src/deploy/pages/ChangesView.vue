@@ -1,5 +1,6 @@
 <script setup>
 import PrerequisiteFields from '../../delivery-editor/PrerequisiteFields.vue';
+import XXLJobFields from '../../delivery-editor/XXLJobFields.vue';
 import {applicationOption} from '../../shared/applicationName.js'
 
 
@@ -182,6 +183,7 @@ const kinds = [
   { value: "mysql", label: "SQL 变更" },
   { value: "data-sync", label: "数据对比同步" },
   { value: "redis", label: "Redis 命令" },
+  { value: "xxl_job", label: "定时任务" },
   { value: "manual", label: "自定义记录" },
 ];
 const labels = {
@@ -228,7 +230,7 @@ const sqlResources=ref([]),sqlResourcesLoading=ref(false),sqlResourcesError=ref(
 let resourceRequest=0;
 async function loadSQLResources(){
   const seq=++resourceRequest;sqlResources.value=[];sqlResourcesError.value='';
-  if(dialog.value!=='changes'||!['mysql','nacos','redis'].includes(form.value.kind)||!form.value.service)return;
+  if(dialog.value!=='changes'||!['mysql','nacos','redis','xxl_job'].includes(form.value.kind)||!form.value.service)return;
   sqlResourcesLoading.value=true;
   try{const data=await api(`api/services/${encodeURIComponent(form.value.service)}/resources`);if(seq===resourceRequest)sqlResources.value=(data.requirements||[]).filter(r=>r.kind===form.value.kind)}
   catch(e){if(seq===resourceRequest)sqlResourcesError.value=e.message}finally{if(seq===resourceRequest)sqlResourcesLoading.value=false}
@@ -335,6 +337,7 @@ function open(type, item) {
   if(type==='changes')form.value.prerequisites=(item?.prerequisites||[]).map(dep=>({...dep}));
   if(type==='changes')form.value.sql=item?.sql?{...item.sql}:{resource_alias:'',content:item?.kind==='mysql'?item.reference||'':'',max_affected_rows:100};
   if(type==='changes')form.value.redis=item?.redis?{...item.redis}:{resource_alias:'',commands:''};
+  if(type==='changes')form.value.xxl_job=item?.xxl_job?structuredClone(item.xxl_job):{resource_alias:'',action:'create',config:{scheduleType:'CRON'}};
   if(type==='changes')form.value.nacos=item?.nacos?JSON.parse(JSON.stringify(item.nacos)):{resource_alias:'',data_id:'',group:'DEFAULT_GROUP',format:'yaml',entries:[{key:'',value:'',action:'set'}]};
   if (type === "versions")
     form.value = item
@@ -388,7 +391,7 @@ async function save() {
     const result=await api(`api/${endpoint}${form.value.id ? "/" + form.value.id : ""}`, {
       method: form.value.id ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({...form.value,sql:dialog.value==='changes'&&form.value.kind==='mysql'?{...form.value.sql,max_affected_rows:Number(form.value.sql.max_affected_rows)}:undefined,nacos:dialog.value==='changes'&&form.value.kind==='nacos'?form.value.nacos:undefined,redis:dialog.value==='changes'&&form.value.kind==='redis'?form.value.redis:undefined}),
+      body: JSON.stringify(type==='changes'?deliveryChangePayload({...form.value,sql:form.value.sql&&{...form.value.sql,max_affected_rows:Number(form.value.sql.max_affected_rows)}}):form.value),
     });
     if(type==='versions'&&result.preparation_error)toast('版本已保存，准备流程待补齐：'+result.preparation_error,'warning',{duration:7000});
     if(type==='work'&&creating)newWorkDraft.value=null;
@@ -467,7 +470,12 @@ import {XIcon} from '@lucide/vue'
                 { value: 'closed', label: '已关闭' },
               ]" :style="{width:'100%',maxWidth:'100%'}"/></Field><label class="span">说明<MarkdownEditor :key="form.id||'new'" v-model="form.description" :format="form.description_format" :source-url="form.url" :disabled="saving" @uploading="imageUploading=$event"/></label><p class="notice span">
             外部 Bug 在研发工作台实时查询，选中后登记交付关联；此处用于自定义需求，不再全量同步来源数据。
-          </p></template><template v-if="dialog === 'changes'"><Field ><FieldLabel as="div">变更类型</FieldLabel><OptionPicker v-model="form.kind" :options="kinds" :style="{width:'100%',maxWidth:'100%'}"/></Field><Field data-field="service"><FieldLabel as="div">关联应用</FieldLabel><OptionPicker v-model="form.service" :options="services.map(applicationOption)" all-label="不关联应用"  :style="{width:'100%',maxWidth:'100%'}"/></Field><Field v-if="form.kind==='code'" class="span" data-field="reference"><FieldLabel as="div">代码分支</FieldLabel><GitBranchSelect v-model="form.reference" empty-label="待补分支" :repositories="form.service?[{service:form.service}]:[]"/></Field><template v-if="form.kind==='nacos'"><Field data-field="resource"><FieldLabel as="div">配置资源</FieldLabel><OptionPicker v-model="form.nacos.resource_alias" :disabled="!!form.nacos.restore" :options="sqlResources.map(r=>({value:r.alias,label:r.description||r.alias}))"  :style="{width:'100%',maxWidth:'100%'}"/><span v-if="sqlResourcesLoading">正在读取…</span><span v-else-if="sqlResourcesError">{{sqlResourcesError}}</span><Button v-if="form.service&&(me.role==='admin'||me.username==='local')" @click="showBindings=true" variant="outline" size="sm" type="button">配置应用资源</Button></Field><NacosChangeFields :model="form.nacos" :disabled="saving"/></template><template v-if="form.kind==='redis'"><Field data-field="resource"><FieldLabel as="div">Redis 资源</FieldLabel><OptionPicker v-model="form.redis.resource_alias" :options="sqlResources.map(r=>({value:r.alias,label:r.alias}))" :style="{width:'100%',maxWidth:'100%'}"/><span v-if="sqlResourcesLoading">正在读取…</span><span v-else-if="sqlResourcesError">{{sqlResourcesError}}</span><Button v-if="form.service&&(me.role==='admin'||me.username==='local')" @click="showBindings=true" variant="outline" size="sm" type="button">配置应用资源</Button></Field><RedisChangeFields :model="form.redis" :disabled="saving"/></template><Field v-if="!['mysql','code','nacos','redis'].includes(form.kind)" class="span"><FieldLabel as="div">{{
+          </p></template><template v-if="dialog === 'changes'"><Field ><FieldLabel as="div">变更类型</FieldLabel><OptionPicker v-model="form.kind" :options="kinds" :style="{width:'100%',maxWidth:'100%'}"/></Field><Field data-field="service"><FieldLabel as="div">关联应用</FieldLabel><OptionPicker v-model="form.service" :options="services.map(applicationOption)" all-label="不关联应用"  :style="{width:'100%',maxWidth:'100%'}"/></Field><Field v-if="form.kind==='code'" class="span" data-field="reference"><FieldLabel as="div">代码分支</FieldLabel><GitBranchSelect v-model="form.reference" empty-label="待补分支" :repositories="form.service?[{service:form.service}]:[]"/></Field><template v-if="form.kind==='nacos'"><Field data-field="resource"><FieldLabel as="div">配置资源</FieldLabel><OptionPicker v-model="form.nacos.resource_alias" :disabled="!!form.nacos.restore" :options="sqlResources.map(r=>({value:r.alias,label:r.description||r.alias}))"  :style="{width:'100%',maxWidth:'100%'}"/><span v-if="sqlResourcesLoading">正在读取…</span><span v-else-if="sqlResourcesError">{{sqlResourcesError}}</span><Button v-if="form.service&&(me.role==='admin'||me.username==='local')" @click="showBindings=true" variant="outline" size="sm" type="button">配置应用资源</Button></Field><NacosChangeFields :model="form.nacos" :disabled="saving"/></template><template v-if="form.kind==='redis'"><Field data-field="resource"><FieldLabel as="div">Redis 资源</FieldLabel><OptionPicker v-model="form.redis.resource_alias" :options="sqlResources.map(r=>({value:r.alias,label:r.alias}))" :style="{width:'100%',maxWidth:'100%'}"/><span v-if="sqlResourcesLoading">正在读取…</span><span v-else-if="sqlResourcesError">{{sqlResourcesError}}</span><Button v-if="form.service&&(me.role==='admin'||me.username==='local')" @click="showBindings=true" variant="outline" size="sm" type="button">配置应用资源</Button></Field><RedisChangeFields :model="form.redis" :disabled="saving"/></template>
+          <template v-if="form.kind==='xxl_job'">
+            <Field data-field="resource"><FieldLabel as="div">执行器资源</FieldLabel><OptionPicker v-model="form.xxl_job.resource_alias" :options="sqlResources.map(r=>({value:r.alias,label:r.alias}))" :disabled="saving||sqlResourcesLoading"/><span v-if="sqlResourcesError">{{sqlResourcesError}}</span></Field>
+            <XXLJobFields :model="form.xxl_job" field-id="standalone-xxl-job" :disabled="saving"/>
+          </template>
+          <Field v-if="!['mysql','code','nacos','redis','xxl_job'].includes(form.kind)" class="span"><FieldLabel as="div">{{
               form.kind === "code"
                 ? "代码分支"
                 : form.kind === "artifact"
@@ -483,7 +491,7 @@ import {XIcon} from '@lucide/vue'
                 { value: 'low', label: '低' },
                 { value: 'medium', label: '中' },
                 { value: 'high', label: '高' },
-              ]" :style="{width:'100%',maxWidth:'100%'}"/></Field><Field ><FieldLabel as="div">变更说明</FieldLabel><Textarea v-model="form.summary" :rows="({minRows:(3),maxRows:Math.max((3),16)}).minRows||4"/></Field><Field ><FieldLabel as="div">回退方案</FieldLabel><Textarea v-model="form.rollback_plan" :rows="({minRows:(3),maxRows:Math.max((3),16)}).minRows||4"/></Field><PrerequisiteFields id="single-change" v-model="form.prerequisites" :choices="changes.filter(c=>c.id!==form.id && c.status!=='archived')" :disabled="saving"/><p v-if="!['code', 'artifact', 'manual','mysql','nacos','redis'].includes(form.kind)" class="notice span">
+              ]" :style="{width:'100%',maxWidth:'100%'}"/></Field><Field ><FieldLabel as="div">变更说明</FieldLabel><Textarea v-model="form.summary" :rows="({minRows:(3),maxRows:Math.max((3),16)}).minRows||4"/></Field><Field ><FieldLabel as="div">回退方案</FieldLabel><Textarea v-model="form.rollback_plan" :rows="({minRows:(3),maxRows:Math.max((3),16)}).minRows||4"/></Field><PrerequisiteFields id="single-change" v-model="form.prerequisites" :choices="changes.filter(c=>c.id!==form.id && c.status!=='archived')" :disabled="saving"/><p v-if="!['code', 'artifact', 'manual','mysql','nacos','redis','xxl_job'].includes(form.kind)" class="notice span">
             该类变更目前可登记、关联和进入版本；执行器未接通，编排会阻止提交，不会自动执行或标记成功。
           </p></template><template v-if="dialog === 'versions'"><Field ><FieldLabel as="div">版本号</FieldLabel><Input v-model="form.version" placeholder="例如 2026.10.1"/></Field><div class="version-work-choice"><span>需求与 BUG · 已选 {{form.work_item_ids?.length||0}} 项</span><Button @click="showWorkPicker=true" variant="outline" size="default" type="button" :disabled="(saving)">选择需求与 BUG</Button><small>弹窗搜索、跨页勾选；确认后自动汇总关联变更。</small></div><Field class="span"><FieldLabel as="div">手工补入变更（可含草稿）</FieldLabel><OptionPicker v-model="form.manual_change_ids" multiple :options="
                 changes.map((c) => ({

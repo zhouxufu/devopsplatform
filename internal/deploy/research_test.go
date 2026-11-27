@@ -309,10 +309,7 @@ func TestResearchReleaseIntentCASAndCandidateFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 	no := false
-	if err = s.SetResearchMetadata(w.ID, ResearchMetadata{ReleaseRequired: &no}, "alice"); err == nil {
-		t.Fatal("missing reason accepted")
-	}
-	if err = s.SetResearchMetadata(w.ID, ResearchMetadata{ReleaseRequired: &no, NoReleaseReason: "重复问题"}, "alice"); err != nil {
+	if err = s.SetResearchMetadata(w.ID, ResearchMetadata{ReleaseRequired: &no}, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	yes := true

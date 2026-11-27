@@ -45,6 +45,19 @@ func (s *Store) deploymentRecoveryStep(v *DeliveryRun, req deliveryDeploymentRec
 	}
 	var step *DeliveryStep
 	for i := range v.Steps {
+		if v.Plan.ExecutionMode == dependencyExecution {
+			st := &v.Steps[i]
+			if st.Status == "executing" || st.Status == "uncertain" {
+				return nil, nil, nil, fmt.Errorf("请先核对在途执行回执")
+			}
+			if st.NodeID == req.NodeID && st.Service == req.Service && !scheduleStepDone(*st) {
+				n := nodeByID(v.Plan.Nodes, st.NodeID)
+				if n != nil && blockedPredecessor(v, n) == "" {
+					step = st
+				}
+			}
+			continue
+		}
 		if v.Steps[i].Status != "success" {
 			step = &v.Steps[i]
 			break
@@ -176,6 +189,9 @@ func (s *Store) resolveDeliveryDeployment(v *DeliveryRun, req deliveryDeployment
 	if err != nil {
 		return nil, err
 	}
+	if xxlJobReleaseDependency(v.Plan.Nodes, req.NodeID) {
+		return nil, fmt.Errorf("定时任务启用依赖本次应用发布成功，请使用原发布的重试入口")
+	}
 	comment := strings.TrimSpace(req.Comment)
 	if !req.ConfirmArtifact {
 		return nil, fmt.Errorf("请确认已核对本次审核制品")
@@ -189,9 +205,9 @@ func (s *Store) resolveDeliveryDeployment(v *DeliveryRun, req deliveryDeployment
 	step.Status = "success"
 	step.EndedAt = now
 	step.ManualRecovery = &DeliveryManualRecovery{Actor: actor, Comment: comment, At: now, ArtifactID: app.Artifact.ID, ArtifactDigest: app.Artifact.Digest}
-	v.Status = "success"
+	v.Status = deliveryCompletedStatus(v)
 	for _, next := range v.Steps {
-		if next.Status != "success" {
+		if next.Status != "success" && !(v.Plan.ExecutionMode == dependencyExecution && scheduleStepDone(next)) {
 			v.Status = "running"
 			break
 		}

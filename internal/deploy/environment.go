@@ -279,6 +279,15 @@ func (s *Store) Environments() []Environment {
 	return out
 }
 
+// A historical snapshot can require protection even when the environment has since changed.
+func (s *Store) environmentReasonOptional(environment string, frozenProtected bool) bool {
+	if frozenProtected {
+		return false
+	}
+	env := s.GetEnvironment(environment)
+	return env != nil && !env.Protected
+}
+
 func (s *Store) GetEnvironment(name string) *Environment {
 	var env Environment
 	if s.db.QueryRow(`SELECT name,display_name,COALESCE(purpose,''),protected,require_reason,sort_order,COALESCE(approvers,'') FROM environments WHERE name=?`, name).

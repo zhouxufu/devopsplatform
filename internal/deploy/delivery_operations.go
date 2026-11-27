@@ -130,11 +130,23 @@ func hasOperations(t *DeliveryTemplate) bool {
 }
 
 func (s *Store) freezeOperations(p *DeliveryPlan, t *DeliveryTemplate) error {
-	if operationSignature(p.Nodes) != operationSignature(t.Nodes) {
+	nodes := p.Nodes
+	if p.ExecutionMode == dependencyExecution {
+		nodes = append([]DeliveryNode(nil), nodes...)
+		for i := range nodes {
+			if orig := nodeByID(t.Nodes, nodes[i].ID); orig != nil {
+				nodes[i].DependsOn = orig.DependsOn
+			}
+		}
+	} // Dependencies are separately checked against the generated draft.
+	if operationSignature(nodes) != operationSignature(t.Nodes) {
 		return fmt.Errorf("验证、脚本、自动观察须使用管理员维护的模板配置；不能在交付草稿中替换")
 	}
 	for i := range p.Nodes {
 		n := &p.Nodes[i]
+		if _, skip := p.SkippedNodes[n.ID]; skip {
+			continue
+		}
 		if err := validateOperationNode(*n); err != nil {
 			return err
 		}
@@ -168,7 +180,7 @@ func (s *Store) freezeOperations(p *DeliveryPlan, t *DeliveryTemplate) error {
 			for _, app := range p.Services {
 				if app.Service == n.Service {
 					found = true
-					if !app.Target.PauseBetweenBatches {
+					if !app.PendingTarget && !app.Target.PauseBetweenBatches {
 						return fmt.Errorf("自动观察要求应用环境开启批次暂停")
 					}
 				}
@@ -547,7 +559,7 @@ func (s *Store) performDeliveryOperation(run *DeliveryRun, step *DeliveryStep, n
 	step.Detail = detail
 	step.EndedAt = time.Now().Unix()
 	if err != nil {
-		step.Status, run.Status = "failed", "failed"
+		step.Status, run.Status = "failed", deliveryFailureStatus(run)
 		if n.Kind == "script" {
 			step.Status, run.Status = "uncertain", "failed"
 		}
@@ -565,6 +577,17 @@ func (s *Store) performDeliveryOperation(run *DeliveryRun, step *DeliveryStep, n
 	return nil
 }
 
+func deliveryOperationStep(run *DeliveryRun, id string) (*DeliveryStep, *DeliveryNode) {
+	if run.Plan.ExecutionMode != dependencyExecution {
+		return researchNextNode(run)
+	}
+	for i := range run.Steps {
+		if run.Steps[i].NodeID == id {
+			return &run.Steps[i], nodeByID(run.Plan.Nodes, id)
+		}
+	}
+	return nil, nil
+}
 func (s *Store) reviewVerification(id int64, nodeID, digest, actor, comment string, passed bool) (*DeliveryRun, error) {
 	run := s.DeliveryRun(id)
 	if run == nil || run.Digest != digest || (run.Status != "approved" && run.Status != "running") {
@@ -573,8 +596,15 @@ func (s *Store) reviewVerification(id int64, nodeID, digest, actor, comment stri
 	if err := s.checkDeliveryPolicy(&run.Plan); err != nil {
 		return nil, err
 	}
-	step, n := researchNextNode(run)
-	if n == nil || n.ID != nodeID || n.Kind != "verify" || n.Verification.Mode != "manual" || !namedApprover(n, actor) || strings.TrimSpace(comment) == "" || len(comment) > 8000 {
+	if run.Plan.ExecutionMode == dependencyExecution {
+		for _, other := range run.Steps {
+			if other.NodeID != nodeID && blocksDisposition(other) {
+				return nil, fmt.Errorf("请先核对在途执行回执")
+			}
+		}
+	}
+	step, n := deliveryOperationStep(run, nodeID)
+	if n == nil || n.Verification == nil || (run.Plan.ExecutionMode == dependencyExecution && (blockedPredecessor(run, n) != "" || step.Status != "pending" && step.Status != "reviewing")) || n.ID != nodeID || n.Kind != "verify" || n.Verification.Mode != "manual" || !namedApprover(n, actor) || strings.TrimSpace(comment) == "" || len(comment) > 8000 {
 		return nil, fmt.Errorf("仅当前节点指定验证人可提交，须填写验证记录或证据链接")
 	}
 	for _, r := range step.Reviews {
@@ -584,7 +614,7 @@ func (s *Store) reviewVerification(id int64, nodeID, digest, actor, comment stri
 	}
 	step.Reviews = append(step.Reviews, ApprovalDecision{Actor: actor, Approved: passed, Comment: comment, At: time.Now().Unix()})
 	if !passed {
-		step.Status, run.Status = "failed", "failed"
+		step.Status, run.Status = "failed", deliveryFailureStatus(run)
 	} else {
 		approved := map[string]bool{}
 		for _, r := range step.Reviews {
@@ -633,7 +663,7 @@ func registerOperationRoutes(mux *http.ServeMux, s *Store) {
 			deliveryWriteError(w, 409, "请先暂停自动推进")
 			return
 		}
-		step, n := researchNextNode(run)
+		step, n := deliveryOperationStep(run, req.NodeID)
 		if n == nil || n.ID != req.NodeID || n.Kind != "script" || (step.Status != "uncertain" && !(step.Status == "executing" && step.LeaseUntil < time.Now().Unix())) {
 			deliveryWriteError(w, 409, "当前节点不是可核对的脚本，或执行租约尚未结束")
 			return

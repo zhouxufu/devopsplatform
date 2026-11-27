@@ -3,6 +3,7 @@ package deploy
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -463,13 +464,15 @@ func (m *ReleaseManager) CreateArtifact(service string, artifactID int64, enviro
 // ValidateTarget checks whether a release can be submitted to an application
 // environment. It is also used before a one-click build starts so an expensive
 // build is not launched for an environment that cannot accept its artifact.
+var errMissingDeliveryTarget = errors.New("应用环境缺少部署目标")
+
 func (m *ReleaseManager) ValidateTarget(service, environment, reason string) (*ServiceEnvironment, error) {
 	target := m.st.GetServiceEnvironment(service, environment)
 	if target == nil {
-		return nil, fmt.Errorf("应用环境不存在")
+		return nil, fmt.Errorf("应用环境不存在：%w", errMissingDeliveryTarget)
 	}
 	if !target.ManualTarget() && len(target.ExecutionTargets()) == 0 {
-		return nil, fmt.Errorf("环境没有可用执行目标")
+		return nil, fmt.Errorf("环境没有可用执行目标：%w", errMissingDeliveryTarget)
 	}
 	if !target.ManagedTarget() && !target.ManualTarget() && !target.ScriptTarget() {
 		for _, host := range target.Hosts {
@@ -498,7 +501,7 @@ func (m *ReleaseManager) ValidateTarget(service, environment, reason string) (*S
 	if active := m.st.ActiveReleaseForServiceEnvironment(service, environment); active != nil {
 		return nil, fmt.Errorf("%w: 该应用环境已有进行中的发布单 %s", ErrRunConflict, active.DisplayLabel())
 	}
-	if target.RequireReason && strings.TrimSpace(reason) == "" {
+	if target.Protected && target.RequireReason && strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("该环境要求填写发布原因")
 	}
 	if target.Protected && strings.TrimSpace(target.Approvers) == "" {
@@ -875,7 +878,7 @@ func (m *ReleaseManager) Rollback(id int64, reason, actor string) error {
 		return fmt.Errorf("已进入回退流程，不可重复发起回退")
 	}
 	env := m.st.GetEnvironment(o.Environment)
-	if env != nil && env.RequireReason && strings.TrimSpace(reason) == "" {
+	if ((env != nil && env.Protected && env.RequireReason) || (o.Target.Protected && o.Target.RequireReason)) && strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("受保护环境回滚必须填写原因")
 	}
 	if o.Target.ManagedTarget() && o.Status == "waiting_next_batch" {

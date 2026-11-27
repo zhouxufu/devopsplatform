@@ -110,6 +110,13 @@ func registerDeliveryMCPRoutes(mux *http.ServeMux, s *Store, m *ReleaseManager, 
 		}
 		var step *DeliveryStep
 		for i := range run.Steps {
+			if run.Plan.ExecutionMode == dependencyExecution {
+				if run.NextIndex != nil && *run.NextIndex == i {
+					step = &run.Steps[i]
+					break
+				}
+				continue
+			}
 			if run.Steps[i].Status != "success" {
 				step = &run.Steps[i]
 				break
@@ -146,7 +153,7 @@ func registerDeliveryMCPRoutes(mux *http.ServeMux, s *Store, m *ReleaseManager, 
 		}
 		// Pass THIS revision to the CAS executor. Reloading by ID here could advance
 		// a different node between the outer check and execution.
-		result, e := s.advanceDeliveryRunState(run, deliveryActor(r), req.Manual, m, func(child int64) { go m.startNextBatch(child) }, nil, req.Comment)
+		result, e := s.advanceSelectedDeliveryStep(run, deliveryActor(r), req.Manual, m, func(child int64) { go m.startNextBatch(child) }, nil, step, req.Comment)
 		if e != nil {
 			deliveryWriteError(w, 409, e)
 			return

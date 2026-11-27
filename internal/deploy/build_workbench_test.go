@@ -312,3 +312,26 @@ func TestBuildCancellationStopsOwnedStep(t *testing.T) {
 		t.Fatal("detached/foreign executor cancellation accepted")
 	}
 }
+
+func TestBuildControlReasonUsesRunScope(t *testing.T) {
+	st, _, _ := deliveryFixture(t)
+	svc := st.GetService("orders")
+	for i, tc := range []struct {
+		scope    *buildReasonScope
+		deploy   string
+		required bool
+	}{
+		{&buildReasonScope{}, "", false}, {&buildReasonScope{Name: "test"}, "", false},
+		{&buildReasonScope{Name: "prod"}, "", true}, {&buildReasonScope{Name: "test", Protected: true}, "", true},
+		{&buildReasonScope{Name: "removed"}, "", true}, {&buildReasonScope{Name: "test"}, "prod", true},
+		{nil, "test", false}, {nil, "", true},
+	} {
+		run := &PipelineRun{ID: int64(i + 20), Service: svc.Name, DeployEnvironment: tc.deploy}
+		if e := st.saveBuildSnapshot(run.ID, svc, nil, tc.scope); e != nil {
+			t.Fatal(e)
+		}
+		if _, got := st.buildControlScope(run); got != tc.required {
+			t.Errorf("scope %v deploy %q: required=%t", tc.scope, tc.deploy, got)
+		}
+	}
+}

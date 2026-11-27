@@ -32,6 +32,7 @@ type attentionTarget struct {
 	SourceStatus   string
 	SourceDigest   string
 	CodeEvents     []any
+	ReasonOptional bool
 	CanIgnore      bool
 	LegacyDigest   string
 	LegacyClosed   bool
@@ -97,6 +98,7 @@ func (s *Store) attentionTarget(actor, key string) (attentionTarget, error) {
 		if v == nil || v.Owner != actor || actor == "" || actor == "local" {
 			return out, fmt.Errorf("仅发起人可以维护自己的关注记录")
 		}
+		out.ReasonOptional = s.environmentReasonOptional(v.Plan.Environment.Name, v.Plan.Environment.Protected)
 		out.SourceRevision, out.SourceStatus, out.SourceDigest = v.Revision, v.Status, v.Digest
 		// CAS compares persisted state; display projections never rewrite the ledger.
 		s.projectResearchCodeState(v)
@@ -145,6 +147,7 @@ func (s *Store) attentionTarget(actor, key string) (attentionTarget, error) {
 		if v == nil || v.Actor != actor || actor == "" || actor == "local" {
 			return out, fmt.Errorf("仅发起人可以维护自己的关注记录")
 		}
+		out.ReasonOptional = s.environmentReasonOptional(v.Environment, v.Target.Protected)
 		out.SourceStatus = v.Status
 		out.SourceDigest = releaseAttentionBase(v)
 		out.Task = researchReleaseSummary(v)
@@ -199,6 +202,7 @@ func attentionIsTerminal(t ResearchTask) bool {
 func applyAttention(t *ResearchTask, target attentionTarget, states map[string]researchAttentionState) {
 	t.AttentionKey = target.Task.AttentionKey
 	t.AttentionEvent = target.Task.AttentionEvent
+	t.AttentionReasonOptional = target.ReasonOptional
 	t.CanIgnore = target.CanIgnore
 	t.CanArchive = true
 	current, exists := states[t.AttentionKey+"\x00"+t.AttentionEvent]
@@ -323,10 +327,14 @@ func (s *Store) attentionTasks(actor, view string, tasks []ResearchTask) ([]Rese
 			t.CanRestore = false
 			if target, e := s.attentionTarget(actor, state.ItemKey); e == nil && target.Task.AttentionEvent == state.Event {
 				t.CanRestore = true
+				t.AttentionReasonOptional = target.ReasonOptional
 			}
 			t.At = state.UpdatedAt
 			t.UpdatedAt = state.UpdatedAt
-			t.NextAction = "忽略原因：" + state.Reason + "；原交付状态保留"
+			t.NextAction = "已忽略并归档，原交付状态保留"
+			if state.Reason != "" {
+				t.NextAction = "忽略原因：" + state.Reason + "；原交付状态保留"
+			}
 			out = append(out, t)
 		}
 	}
@@ -407,6 +415,9 @@ func (s *Store) setResearchAttention(actor string, item researchAttentionItem, a
 		old.Actor, old.ItemKey, old.Event = actor, item.ID, item.Event
 		return old, nil
 	}
+	if !target.ReasonOptional && utf8.RuneCountInString(strings.TrimSpace(reason)) < 6 {
+		return empty, fmt.Errorf("此记录需要填写至少6字的原因")
+	}
 	if action == "archive" && (old.State == "ignored" || target.LegacyClosed && old.State == "") {
 		return empty, fmt.Errorf("此事件已经忽略并归档，请使用恢复入口")
 	}
@@ -446,8 +457,8 @@ func registerResearchAttention(mux *http.ServeMux, s *Store) {
 		var req researchAttentionRequest
 		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 		d.DisallowUnknownFields()
-		if d.Decode(&req) != nil || len(req.Items) < 1 || len(req.Items) > 100 || utf8.RuneCountInString(strings.TrimSpace(req.Reason)) < 6 || len(req.Reason) > 2000 || len(req.RequestID) < 8 || len(req.RequestID) > 80 || (req.Action != "ignore" && req.Action != "archive" && req.Action != "restore") {
-			deliveryWriteError(w, 400, "请选择1–100条记录、有效操作，填写至少6字的原因和请求编号")
+		if d.Decode(&req) != nil || len(req.Items) < 1 || len(req.Items) > 100 || len(req.Reason) > 2000 || len(req.RequestID) < 8 || len(req.RequestID) > 80 || (req.Action != "ignore" && req.Action != "archive" && req.Action != "restore") {
+			deliveryWriteError(w, 400, "请选择1–100条记录、有效操作，有效请求编号，原因最多2000字节")
 			return
 		}
 		actor := deliveryActor(r)
