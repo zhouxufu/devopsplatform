@@ -1,5 +1,7 @@
-export function canDispose(node) {
-  return !!node && node.kind !== 'approval' && !node.approvers?.length && !node.monitor && !(node.kind === 'verify' && node.verification?.mode === 'manual')
+export function canDispose(node, nodes = []) {
+  return !!node && !['approval','xxl_job'].includes(node.kind) && !node.xxl_job_verification &&
+    !nodes.some(item => item.xxl_job_verification && item.depends_on?.includes(node.id)) &&
+    !node.approvers?.length && !node.monitor && !(node.kind === 'verify' && node.verification?.mode === 'manual')
 }
 export function dependentNodes(nodes, id) {
   const affected = new Set([id])

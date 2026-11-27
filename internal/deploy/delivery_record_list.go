@@ -67,7 +67,7 @@ func (f *DeliveryRecordFilter) Validate() error {
 	if f.Status != "" && f.Status != "draft" && f.Status != "ready" && !(f.Type == "changes" && f.Status == "archived") && !(f.Type == "versions" && (f.Status == "completed" || f.Status == "canceled")) {
 		return fmt.Errorf("状态不支持")
 	}
-	if f.Kind != "" && f.Kind != "code" && f.Kind != "artifact" && f.Kind != "mysql" && f.Kind != "nacos" && f.Kind != "redis" && f.Kind != "manual" {
+	if f.Kind != "" && f.Kind != "code" && f.Kind != "artifact" && !deliveryResourceKind(f.Kind) && f.Kind != "manual" {
 		return fmt.Errorf("变更类型不支持")
 	}
 	if f.Association != "" && f.Association != "linked" && f.Association != "independent" {

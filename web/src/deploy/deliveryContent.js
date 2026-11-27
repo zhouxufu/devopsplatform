@@ -21,11 +21,12 @@ export function expandDeliveryRows(rows, title, origins=[], includeUnchanged=fal
     if(row.kind==='code'&&row.originals.some(c=>!names.includes(c.service)))throw Object.assign(new Error('已保存的代码应用不能在此移除；请在变更记录核对版本引用后处理'),{rowKey:row.key,field:'services'});
     for(const service of [...new Set(names)]){
       const old=row.originals.find(c=>(c.service||'')===service);
-      const c={...row,id:old?.id||0,service,title:row.title||old?.title||`${title} · ${{code:'代码',mysql:'SQL',nacos:'配置',manual:'自定义记录',redis:'Redis',artifact:'制品'}[row.kind]||row.kind}${service?' · '+service:''}`};
+      const c={...row,id:old?.id||0,service,title:row.title||old?.title||`${title} · ${{code:'代码',mysql:'SQL',nacos:'配置',manual:'自定义记录',redis:'Redis',artifact:'制品',xxl_job:'定时任务'}[row.kind]||row.kind}${service?' · '+service:''}`};
       delete c.key;delete c.services;delete c.originals;delete c.readonly;delete c.work_items;
       if(c.kind!=='mysql')delete c.sql;if(c.kind!=='nacos')delete c.nacos;if(c.kind!=='redis')delete c.redis;
+      if(c.kind!=='xxl_job')delete c.xxl_job;
       // Unchanged rows, including shared ones, are not rewritten.
-      if(!includeUnchanged&&old&&['kind','title','service','reference','summary','risk_level','rollback_plan','sql','nacos','redis','delivery_ownership','prerequisites'].every(k=>k==='service'?(c[k]||'')===(old[k]||''):JSON.stringify(c[k])===JSON.stringify(old[k])))continue;
+      if(!includeUnchanged&&old&&['kind','title','service','reference','summary','risk_level','rollback_plan','sql','nacos','redis','xxl_job','delivery_ownership','prerequisites'].every(k=>k==='service'?(c[k]||'')===(old[k]||''):JSON.stringify(c[k])===JSON.stringify(old[k])))continue;
       out.push(c);
       origins.push(row.key);
     }

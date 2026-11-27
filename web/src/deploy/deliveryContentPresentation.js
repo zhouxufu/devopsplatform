@@ -1,4 +1,4 @@
-const groupNames = {nacos:'Nacos 配置',mysql:'MySQL 变更',redis:'Redis 命令',manual:'人工处理'}
+const groupNames = {nacos:'Nacos 配置',mysql:'MySQL 变更',redis:'Redis 命令',xxl_job:'定时任务',manual:'人工处理'}
 
 export function resourceContentGroups(changes = []) {
   const groups = new Map()
@@ -22,6 +22,11 @@ export function resourceContentSummary(change, environment) {
   if (change.kind === 'nacos') return change.nacos?.restore?'恢复历史配置快照':`${change.nacos?.entries?.length || 0} 个配置项`
   if (change.kind === 'mysql') return sqlContentSelection(change,environment).label
   if (change.kind === 'redis') return `${String(change.redis?.commands || '').split(/\r?\n/).filter(line => line.trim()).length} 行命令`
+  if (change.kind === 'xxl_job') {
+    const job=change.xxl_job
+    const action={create:'创建（初始停用）',update:'修改配置',enable:'启用',disable:'停用'}[job?.action]
+    return [action,job?.target_title||job?.config?.jobDesc||(job?.created_by_change_id?`等待变更 #${job.created_by_change_id} 创建`:'')].filter(Boolean).join(' · ') || '缺少任务配置'
+  }
   return change.summary || change.reference || '展开查看处理说明'
 }
 

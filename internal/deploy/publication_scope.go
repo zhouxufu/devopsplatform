@@ -101,7 +101,11 @@ func publicationResourceDigest(p *DeliveryPlan) string {
 			existing[svc.Service] = svc.Artifact
 		}
 	}
-	return digestJSON([]any{existing, p.PolicyDigest, nodes, p.ResourceTargets, p.SQLPlans, publicNacosPlans(p.NacosPlans), p.RedisPlans})
+	snapshot := []any{existing, p.PolicyDigest, nodes, p.ResourceTargets, p.SQLPlans, publicNacosPlans(p.NacosPlans), p.RedisPlans}
+	if len(p.XXLJobPlans) != 0 {
+		snapshot = append(snapshot, p.XXLJobPlans)
+	}
+	return digestJSON(snapshot)
 }
 func validatePublicationOrder(draft *DeliveryDraftPlan, nodes []DeliveryNode) error {
 	base := draft.Nodes
@@ -437,6 +441,17 @@ func publicationDifferences(p *DeliveryPlan) []publicationDifference {
 				}
 			}
 		}
+	}
+	for _, job := range p.XXLJobPlans {
+		target := job.Connection + " / " + job.AppName
+		content := job.Action + " · " + job.After.Title + " / " + job.After.Handler + " · " + job.After.Schedule
+		if job.Before != nil {
+			target += fmt.Sprintf(" / 任务 #%d", job.Before.ID)
+		}
+		if job.CreatedBy > 0 {
+			content += fmt.Sprintf(" · 取变更 #%d 的本次创建回执", job.CreatedBy)
+		}
+		result = append(result, publicationDifference{job.NodeID, target, job.ChangeID, content})
 	}
 	return result
 }

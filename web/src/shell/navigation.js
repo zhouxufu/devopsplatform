@@ -6,6 +6,7 @@ export const navigationGroups=[
   {id:'build',label:'应用与构建',plugin:'deploy',hash:'#/'},
   {id:'changes',label:'变更记录',plugin:'deploy',hash:'#/changes?tab=changes'},
   {id:'orchestration',label:'发布记录',plugin:'deploy',hash:'#/orchestration?area=runs'},
+  {id:'xxl-job',label:'定时任务',plugin:'deploy',hash:'#/xxl-job'},
   {id:'delivery-settings',label:'交付设置',items:[{id:'orchestration-templates',label:'编排模板',plugin:'deploy',hash:'#/orchestration?area=templates'}]},
  ]},
  {id:'api-center',label:'接口中心',icon:'api-center',items:[{id:'api-documents',label:'接口文档',plugin:'api-center',hash:'#/documents'},{id:'api-reports',label:'上报记录',plugin:'api-center',hash:'#/reports'},{id:'api-test-cases',label:'测试用例',plugin:'api-center',hash:'#/test-cases'},{id:'api-testing',label:'执行测试',plugin:'api-center',hash:'#/test-execution'}]},

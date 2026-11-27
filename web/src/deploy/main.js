@@ -20,6 +20,7 @@ const router = createRouter({
     { path: '/plugins', component: PluginsView },
     { path: '/changes', component: ChangesView },
     { path: '/orchestration', component: OrchestrationView },
+    { path: '/xxl-job', component: () => import('./pages/XXLJobView.vue') },
     { path: '/svc/:name/:tab?', component: DetailView },
     { path: '/run/:id', component: RunView },
   ],

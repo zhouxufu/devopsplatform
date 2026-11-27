@@ -215,6 +215,12 @@ func (s *Store) probeResourceBinding(ctx context.Context, kind string, b Applica
 	case "redis":
 		err = testIntegrationConnection(ctx, c)
 		message = "认证、DB 选择和 PING 通过；未验证维护权限，未执行写操作"
+	case xxlJobKind:
+		err = validateXXLBinding(c, b)
+		if err == nil {
+			_, err = (xxlJobBinding{Connection: c, AppName: b.Config["app_name"]}).group(ctx)
+		}
+		message = "目标执行器可读取，未触发任务"
 	default:
 		return ResourceCheck{Status: "unsupported", Code: "unsupported_kind", Message: "此资源类型尚不支持独立核验"}
 	}

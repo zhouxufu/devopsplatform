@@ -14,7 +14,11 @@ const props=defineProps({connections:Array,hosts:Array,environments:Array,connec
 const emit=defineEmits(['create','edit','fork','remove','test','refresh','agent-config','agent-check','agent-install','agent-deployment','audit'])
 const query=ref(''),kind=ref(''),page=ref(1)
 const kinds=computed(()=>[...(props.allowHosts?[{value:'host',label:'主机（SSH）'}]:[]),...(props.connectionKinds||[])])
-const all=computed(()=>resourceInventory(props.connections,props.allowHosts?props.hosts:[],props.connectionKinds).map(r=>({...r,typeLabel:r.kind==='host'?'主机（SSH）':resourceKindLabels[r.kind]||r.kind,environmentLabel:r.category==='hosts'?(props.environments||[]).find(e=>e.name===r.environment)?.display_name||r.environment:'跨环境复用'})))
+function environmentLabel(row){
+ const environment=row.category==='hosts'?row.environment:row.kind==='xxl_job'?row.config?.environment:''
+ return environment?(props.environments||[]).find(item=>item.name===environment)?.display_name||environment:'跨环境复用'
+}
+const all=computed(()=>resourceInventory(props.connections,props.allowHosts?props.hosts:[],props.connectionKinds).map(r=>({...r,typeLabel:r.kind==='host'?'主机（SSH）':resourceKindLabels[r.kind]||r.kind,environmentLabel:environmentLabel(r)})))
 const filtered=computed(()=>filterResourceInventory(all.value,query.value,kind.value))
 const rows=computed(()=>filtered.value.slice((page.value-1)*listPageSize.value,page.value*listPageSize.value))
 watch([query,kind],()=>page.value=1)

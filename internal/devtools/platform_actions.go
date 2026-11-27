@@ -286,6 +286,7 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 		}
 		allowed := map[string]bool{"kind": true, "title": true, "service": true, "reference": true, "summary": true, "risk_level": true, "rollback_plan": true, "sql": true, "nacos": true, "redis": true, "delivery_ownership": true}
 		allowed["prerequisites"] = true
+		allowed["xxl_job"] = true
 		for _, r := range newRows {
 			c := mapValue(cloneJSON(r))
 			if len(c) == 0 || stringArg(c, "title") == "" {
@@ -307,7 +308,7 @@ func (s *ToolService) prepareAction(ctx context.Context, t *AccessToken, name st
 				c["service"] = service
 			}
 			switch stringArg(c, "kind") {
-			case "code", "artifact", "mysql", "nacos", "redis", "manual":
+			case "code", "artifact", "mysql", "nacos", "redis", "manual", "xxl_job":
 			default:
 				return nil, fmt.Errorf("变更类型无效")
 			}

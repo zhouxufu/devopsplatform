@@ -63,7 +63,7 @@ func platformTools() []Tool {
 		makeTool("get_platform_action", "读取 MCP 写操作确认状态；结果不确定时不得自动重试", "", map[string]any{"confirmation_id": str("预览返回的 ID")}, "confirmation_id"),
 	}
 	for _, t := range []Tool{
-		makeTool("mark_independent_changes_ready", "按同一应用批量校验本人独立的代码、SQL、Nacos、Redis 草稿。展示全部待就绪编号，用户确认一次后整批就绪；不会执行资源或部署。已就绪项保留在后续发布范围中", "changes:write", map[string]any{"service": str("应用稳定标识"), "change_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 50}}, "service", "change_ids"),
+		makeTool("mark_independent_changes_ready", "按同一应用批量校验本人独立的代码、SQL、Nacos、Redis、定时任务草稿。展示全部待就绪编号，用户确认一次后整批就绪；不会执行资源或部署。已就绪项保留在后续发布范围中", "changes:write", map[string]any{"service": str("应用稳定标识"), "change_ids": map[string]any{"type": "array", "items": id, "minItems": 1, "maxItems": 50}}, "service", "change_ids"),
 		makeTool("maintain_change", "预览维护本人原编号变更：就绪代码仅修改title/summary保留ready，其他内容修改经冻结检查后退回draft；独立代码草稿可用 ready 就绪；草稿可编辑/归档及调整归属。不执行", "changes:write", map[string]any{"service": str("原应用"), "change_id": id, "digest": str("get_change_maintenance返回的原摘要"), "action": map[string]any{"type": "string", "enum": []string{"edit", "archive", "ready"}}, "reason": str("修改或撤销原因"), "patch": changeMaintenancePatchSchema(), "work_item_ids": map[string]any{"type": "array", "minItems": 0, "maxItems": 100, "items": id}, "origin_work_item_id": id}, "service", "change_id", "digest", "action"),
 		makeTool("report_changes", "预览登记开发变更草稿：代码、数据库表结构/数据 SQL、Nacos 等；可独立保存或关联工作项，不执行构建或发布", "changes:write", map[string]any{"service": str("应用稳定标识；未填写应用的变更使用此应用，禁止混入其他应用"), "work_item_id": id, "changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": changeDraftSchema()}}, "service", "changes"),
 		makeTool("attach_source_work_item", "预览关联来源需求或 Bug 引用，返回平台工作项 ID", "workitems:write", map[string]any{"connection": str("来源连接名"), "external_id": str("来源编号"), "kind": map[string]any{"type": "string", "enum": []string{"bug", "requirement"}}}, "connection", "external_id"),
@@ -514,13 +514,26 @@ func changeMaintenancePatchSchema() map[string]any {
 }
 func changeDraftSchema() map[string]any {
 	str := map[string]any{"type": "string"}
+	taskConfig := map[string]any{}
+	for _, field := range []string{"jobDesc", "author", "alarmEmail", "scheduleType", "scheduleConf",
+		"misfireStrategy", "executorRouteStrategy", "executorHandler", "executorParam", "executorBlockStrategy"} {
+		taskConfig[field] = str
+	}
+	for _, field := range []string{"executorTimeout", "executorFailRetryCount"} {
+		taskConfig[field] = map[string]any{"type": "integer", "minimum": 0}
+	}
 	return objectSchema(map[string]any{
-		"kind": map[string]any{"type": "string", "enum": []string{"code", "artifact", "mysql", "nacos", "redis", "manual"}}, "title": str, "service": str, "reference": map[string]any{"type": "string", "description": "代码分支（code）、制品引用或自定义文本记录；代码改动说明放 summary，不伪造已构建的 Commit 证据"}, "summary": str,
+		"kind": map[string]any{"type": "string", "enum": []string{"code", "artifact", "mysql", "nacos", "redis", "manual", "xxl_job"}}, "title": str, "service": str, "reference": map[string]any{"type": "string", "description": "代码分支（code）、制品引用或自定义文本记录；代码改动说明放 summary，不伪造已构建的 Commit 证据"}, "summary": str,
 		"risk_level": map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}}, "rollback_plan": str,
-		"prerequisites":      map[string]any{"type": "array", "minItems": 0, "maxItems": 32, "description": "根据本次代码、SQL、配置及兼容性分析，列出必须先完成的已有变更编号和原因。不要猜测或扩大范围。空数组清除依赖。", "items": objectSchema(map[string]any{"change_id": map[string]any{"type": "integer", "minimum": 1}, "reason": str}, "change_id")},
-		"sql":                objectSchema(map[string]any{"resource_alias": str, "content": str, "max_affected_rows": map[string]any{"type": "integer", "minimum": 1}}, "resource_alias", "content", "max_affected_rows"),
-		"nacos":              objectSchema(map[string]any{"resource_alias": str, "data_id": str, "group": str, "format": map[string]any{"type": "string", "enum": []string{"yaml", "properties", "json"}}, "entries": map[string]any{"type": "array", "items": objectSchema(map[string]any{"key": str, "value": str, "action": map[string]any{"type": "string", "enum": []string{"set", "delete"}}}, "key", "action")}}, "resource_alias", "group", "format", "entries"),
-		"redis":              objectSchema(map[string]any{"resource_alias": str, "commands": str}, "resource_alias", "commands"),
+		"prerequisites": map[string]any{"type": "array", "minItems": 0, "maxItems": 32, "description": "根据本次代码、SQL、配置及兼容性分析，列出必须先完成的已有变更编号和原因。不要猜测或扩大范围。空数组清除依赖。", "items": objectSchema(map[string]any{"change_id": map[string]any{"type": "integer", "minimum": 1}, "reason": str}, "change_id")},
+		"sql":           objectSchema(map[string]any{"resource_alias": str, "content": str, "max_affected_rows": map[string]any{"type": "integer", "minimum": 1}}, "resource_alias", "content", "max_affected_rows"),
+		"nacos":         objectSchema(map[string]any{"resource_alias": str, "data_id": str, "group": str, "format": map[string]any{"type": "string", "enum": []string{"yaml", "properties", "json"}}, "entries": map[string]any{"type": "array", "items": objectSchema(map[string]any{"key": str, "value": str, "action": map[string]any{"type": "string", "enum": []string{"set", "delete"}}}, "key", "action")}}, "resource_alias", "group", "format", "entries"),
+		"redis":         objectSchema(map[string]any{"resource_alias": str, "commands": str}, "resource_alias", "commands"),
+		"xxl_job": objectSchema(map[string]any{
+			"resource_alias": str, "action": map[string]any{"type": "string", "enum": []string{"create", "update", "enable", "disable"}},
+			"target_title": str, "target_handler": str, "created_by_change_id": map[string]any{"type": "integer", "minimum": 1},
+			"config": objectSchema(taskConfig),
+		}, "resource_alias", "action"),
 		"delivery_ownership": objectSchema(map[string]any{"mode": map[string]any{"type": "string", "enum": []string{"draft", "self", "follow"}}, "work_item_id": map[string]any{"type": "integer", "minimum": 1}}, "mode"),
 	}, "kind", "title")
 }

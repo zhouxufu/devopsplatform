@@ -8,13 +8,19 @@ import (
 )
 
 func deliveryResourceKind(kind string) bool {
-	return kind == "mysql" || kind == "redis" || kind == "nacos"
+	return kind == "mysql" || kind == "redis" || kind == "nacos" || kind == xxlJobKind
 }
 
 type deliveryResourceOperation func(context.Context, *DeliveryRun) (string, error)
 
 func (s *Store) resourceOperation(plan *DeliveryPlan, step *DeliveryStep) (deliveryResourceOperation, error) {
 	switch step.Kind {
+	case xxlJobKind:
+		for _, p := range plan.XXLJobPlans {
+			if p.NodeID == step.NodeID {
+				return func(ctx context.Context, r *DeliveryRun) (string, error) { return s.executeXXLJob(ctx, r, p) }, nil
+			}
+		}
 	case "mysql":
 		for _, p := range plan.SQLPlans {
 			if p.NodeID == step.NodeID {
@@ -59,11 +65,14 @@ func (s *Store) dispatchResourceStep(run *DeliveryRun, index int, actor string, 
 			if detail == "" {
 				detail = err.Error()
 			}
+			if errors.Is(err, errXXLJobUncertain) {
+				return "uncertain", detail
+			}
 			return "failed", detail
 		}
 		return "success", detail
 	}
-	auditKind := map[string]string{"mysql": "sql", "nacos": "nacos", "redis": "redis"}[step.Kind]
+	auditKind := map[string]string{"mysql": "sql", "nacos": "nacos", "redis": "redis", xxlJobKind: "xxl-job"}[step.Kind]
 	audit := func(r *DeliveryRun, st DeliveryStep) {
 		s.Audit(actor, "execute-"+auditKind, "delivery-run", fmt.Sprint(r.ID), map[string]any{"node": st.NodeID, "status": st.Status, "digest": r.Digest})
 	}

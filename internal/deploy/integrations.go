@@ -56,6 +56,9 @@ func integrationSchema(identity, doc string) []string {
 }
 
 func validateIntegrationConnection(c *ResourceConnection) error {
+	if c.Kind == xxlJobKind {
+		return validateXXLConnection(c)
+	}
 	if c.Kind == "redis" {
 		return validateRedisConnection(c)
 	}
@@ -137,6 +140,16 @@ func openChangeMySQL(ctx context.Context, c *ResourceConnection) (*sql.DB, error
 }
 
 func testIntegrationConnection(ctx context.Context, c *ResourceConnection) error {
+	if c.Kind == xxlJobKind {
+		var result struct{ Version int }
+		if err := xxlCall(ctx, c, "ping", map[string]any{}, &result); err != nil {
+			return err
+		}
+		if result.Version != 1 {
+			return fmt.Errorf("此 XXL-JOB 调度中心的接入接口版本不受支持")
+		}
+		return nil
+	}
 	if c.Kind == "redis" {
 		client, err := newRedisClient(ctx, c)
 		if err == nil {

@@ -21,26 +21,27 @@ import (
 )
 
 type DeliveryNode struct {
-	BuildConcurrency  int                   `json:"build_concurrency,omitempty"`
-	SQLGroup          string                `json:"sql_group,omitempty"`
-	Extension         *workflownode.Binding `json:"extension,omitempty"`
-	Verification      *VerificationSpec     `json:"verification,omitempty"`
-	Script            *DeliveryScript       `json:"script,omitempty"`
-	Monitor           *MonitorGate          `json:"monitor,omitempty"`
-	ApplicationScope  string                `json:"application_scope,omitempty"`
-	DefaultCodePolicy *CodePolicy           `json:"default_code_policy,omitempty"`
-	AssignedWorkItems map[string][]int64    `json:"assigned_work_items,omitempty"`
-	AssigneeSource    string                `json:"assignee_source,omitempty"`
-	Policies          map[string]CodePolicy `json:"policies,omitempty"`
-	DependsOn         []string              `json:"depends_on,omitempty"`
-	ID                string                `json:"id"`
-	Kind              string                `json:"kind"`
-	Name              string                `json:"name"`
-	Service           string                `json:"service,omitempty"`
-	Instructions      string                `json:"instructions,omitempty"`
-	Approvers         []string              `json:"approvers,omitempty"`
-	ApprovalMode      string                `json:"approval_mode,omitempty"`
-	ChangeIDs         []int64               `json:"change_ids,omitempty"`
+	BuildConcurrency   int                   `json:"build_concurrency,omitempty"`
+	SQLGroup           string                `json:"sql_group,omitempty"`
+	XXLJobVerification bool                  `json:"xxl_job_verification,omitempty"`
+	Extension          *workflownode.Binding `json:"extension,omitempty"`
+	Verification       *VerificationSpec     `json:"verification,omitempty"`
+	Script             *DeliveryScript       `json:"script,omitempty"`
+	Monitor            *MonitorGate          `json:"monitor,omitempty"`
+	ApplicationScope   string                `json:"application_scope,omitempty"`
+	DefaultCodePolicy  *CodePolicy           `json:"default_code_policy,omitempty"`
+	AssignedWorkItems  map[string][]int64    `json:"assigned_work_items,omitempty"`
+	AssigneeSource     string                `json:"assignee_source,omitempty"`
+	Policies           map[string]CodePolicy `json:"policies,omitempty"`
+	DependsOn          []string              `json:"depends_on,omitempty"`
+	ID                 string                `json:"id"`
+	Kind               string                `json:"kind"`
+	Name               string                `json:"name"`
+	Service            string                `json:"service,omitempty"`
+	Instructions       string                `json:"instructions,omitempty"`
+	Approvers          []string              `json:"approvers,omitempty"`
+	ApprovalMode       string                `json:"approval_mode,omitempty"`
+	ChangeIDs          []int64               `json:"change_ids,omitempty"`
 }
 type DeliveryTemplate struct {
 	Preparation []DeliveryNode `json:"preparation,omitempty"`
@@ -121,6 +122,7 @@ type DeliveryPlan struct {
 	Warnings                  []string                 `json:"warnings"`
 	SQLPlans                  []*SQLExecutionPlan      `json:"sql_plans,omitempty"`
 	NacosPlans                []*NacosExecutionPlan    `json:"nacos_plans,omitempty"`
+	XXLJobPlans               []*XXLJobPlan            `json:"xxl_job_plans,omitempty"`
 	RedisPlans                []*RedisExecutionPlan    `json:"redis_plans,omitempty"`
 }
 type DeliveryManualRecovery struct {
@@ -248,7 +250,7 @@ func validateDeliveryNodes(nodes []DeliveryNode) error {
 			executionSeen = true
 		}
 		switch n.Kind {
-		case "deploy", "manual", "mysql", "nacos", "data-sync", "redis", "approval", "verify", "script", "extension":
+		case "deploy", "manual", "mysql", "nacos", "data-sync", "redis", "approval", "verify", "script", "extension", xxlJobKind:
 		default:
 			return fmt.Errorf("不支持的节点类型：%s", n.Kind)
 		}
@@ -269,6 +271,9 @@ func (s *Store) SaveDeliveryTemplate(v *DeliveryTemplate) error {
 	var nodesErr error
 	if v.Workbench == "research" {
 		return fmt.Errorf("独立准备模板已移除，请使用部署编排的准备阶段")
+	}
+	if slices.ContainsFunc(v.Nodes, func(node DeliveryNode) bool { return node.Kind == xxlJobKind || node.XXLJobVerification }) {
+		return fmt.Errorf("定时任务节点随所选变更生成，请在变更中维护")
 	}
 	nodesErr = validateDeliveryNodes(v.Nodes)
 	if err := nodesErr; err != nil {
@@ -425,6 +430,9 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 			return nil, nil, err
 		}
 		if err := validateManualRecordOverrides(nodes, req.Nodes); err != nil {
+			return nil, nil, err
+		}
+		if err := validateXXLOverrides(nodes, req.Nodes); err != nil {
 			return nil, nil, err
 		}
 		if req.StrategyKind == "standard" {
@@ -606,7 +614,7 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 				} else {
 					services[c.Service] = true
 				}
-			} else if c.Kind != "manual" && c.Kind != "mysql" && c.Kind != "nacos" && c.Kind != "redis" {
+			} else if c.Kind != "manual" && !deliveryResourceKind(c.Kind) {
 				p.Blockers = append(p.Blockers, "变更执行器尚未接通："+c.Title+"（"+c.Kind+"）")
 			}
 		}
@@ -753,6 +761,7 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 	nacosCount := 0
 	redisAllocated := map[int64]int{}
 	redisCount := 0
+	xxlTargets := map[string]bool{}
 	for nodeIndex, node := range nodes {
 		if _, skip := p.SkippedNodes[node.ID]; skip && node.Kind != "deploy" {
 			switch node.Kind {
@@ -777,6 +786,26 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 			continue
 		}
 		switch node.Kind {
+		case xxlJobKind:
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			frozen, err := s.prepareXXLJob(ctx, p, node)
+			cancel()
+			if err != nil {
+				p.Blockers = append(p.Blockers, node.Name+"："+err.Error())
+				continue
+			}
+			if frozen.CreatedBy == 0 {
+				target := fmt.Sprint(frozen.After.Title)
+				if frozen.Before != nil {
+					target = fmt.Sprintf("#%d", frozen.Before.ID)
+				}
+				key := digestJSON([]any{frozen.Connection, frozen.GroupID, target})
+				if xxlTargets[key] {
+					p.Blockers = append(p.Blockers, "同一 XXL-JOB 任务出现多个写入步骤，请合并配置或分次交付："+frozen.After.Title)
+				}
+				xxlTargets[key] = true
+			}
+			p.XXLJobPlans = append(p.XXLJobPlans, frozen)
 		case "extension":
 			binding, err := s.resolveWorkflowExtension(node, p.Services, env.Name, beforeBuild)
 			if err != nil {
@@ -988,7 +1017,7 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 			p.Blockers = append(p.Blockers, fmt.Sprintf("Redis 变更 #%d 在多个节点重复", id))
 		}
 	}
-	if len(names) == 0 && manualCount == 0 && sqlCount == 0 && nacosCount == 0 && redisCount == 0 {
+	if len(names) == 0 && manualCount == 0 && sqlCount == 0 && nacosCount == 0 && redisCount == 0 && len(p.XXLJobPlans) == 0 {
 		hasScript := false
 		for _, n := range nodes {
 			hasScript = hasScript || n.Kind == "script"
@@ -1019,6 +1048,9 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	p, secrets, err := s.ResolveDelivery(req, manager)
 	if err != nil {
 		return nil, err
+	}
+	if len(p.XXLJobPlans) > 0 && req.PreflightToken == "" {
+		return nil, fmt.Errorf("包含定时任务的交付必须先预检")
 	}
 	if err := validateDeliveryReviewerDirectory(p, req.reviewerDirectory, actor); err != nil {
 		return nil, err
@@ -1313,6 +1345,15 @@ func (s *Store) advanceSelectedDeliveryStep(v *DeliveryRun, actor string, confir
 	if err != nil {
 		return nil, err
 	}
+	if !confirmManual && retry == nil {
+		nodeID := ""
+		if expected != nil {
+			nodeID = expected.NodeID
+		}
+		if recovered, err := s.reconcileXXLJobStep(v, nodeID); recovered || err != nil {
+			return v, err
+		}
+	}
 	id := v.ID
 	chosen := -1
 	if v.Plan.ExecutionMode == dependencyExecution {
@@ -1409,6 +1450,11 @@ func (s *Store) advanceSelectedDeliveryStep(v *DeliveryRun, actor string, confir
 			}
 			if len(comment) > 8000 {
 				return nil, fmt.Errorf("处理说明不能超过 8000 字节")
+			}
+			for _, job := range v.Plan.XXLJobPlans {
+				if job.Verification == step.NodeID && comment == "" {
+					return nil, fmt.Errorf("请填写执行器实例或版本以及 Handler 的验证结果")
+				}
 			}
 			step.Status, v.Status = "success", "running"
 			step.EndedAt = time.Now().Unix()

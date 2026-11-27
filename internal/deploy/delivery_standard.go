@@ -319,6 +319,10 @@ func (s *Store) DraftDelivery(req DeliveryRequest) (*DeliveryDraftPlan, error) {
 		if req.ExecutionMode == dependencyExecution {
 			nodes = expandScheduleApplications(nodes, tpl, scope)
 		}
+		nodes, err = includeXXLJobNodes(nodes, scope)
+		if err != nil {
+			return nil, err
+		}
 		nodes, err = orderChangeNodes(nodes, scope, true)
 		if err != nil {
 			return nil, err

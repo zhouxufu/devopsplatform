@@ -10,6 +10,33 @@ import (
 	"testing"
 )
 
+func TestXXLJobMCPPreservesRunIdentityAndScope(t *testing.T) {
+	const runID = "9007199254740999"
+	var called atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called.Add(1)
+		query := r.URL.Query()
+		if r.Method != "GET" || r.URL.Path != "/api/xxl-job/run" || query.Get("run_id") != runID ||
+			query.Get("task_id") != "31" || query.Get("service") != "orders" ||
+			query.Get("environment") != "test" || query.Get("alias") != "jobs" || r.Header.Get("X-User") != "alice" {
+			t.Errorf("incorrect scoped run lookup: %s %s", r.Method, r.URL)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": runID, "jobId": 31, "handleCode": 500, "executorParam": "private fixture"})
+	}))
+	defer up.Close()
+	service := NewToolService(Upstreams{Deploy: up.URL})
+	token := &AccessToken{Owner: "alice", role: "admin", verified: true, Scopes: []string{"resources:read"}, Applications: []string{"orders"}, Environments: []string{"test"}}
+	args := map[string]any{"service": "orders", "environment": "test", "alias": "jobs", "task_id": 31, "run_id": runID}
+	result, _, _, err := service.Call(context.Background(), token, "get_xxl_job_run", args)
+	if err != nil || mapValue(result)["id"] != runID || mapValue(result)["executorParam"] != nil {
+		t.Fatalf("invalid run projection: %v, %v", result, err)
+	}
+	args["environment"] = "prod"
+	if _, _, _, err := service.Call(context.Background(), token, "get_xxl_job_run", args); err == nil || called.Load() != 1 {
+		t.Fatalf("outside environment reached the scheduler: %v", err)
+	}
+}
+
 func TestScopedResourceOnboardingListsOnlyEnvironmentCandidatesAndForcesSourceProof(t *testing.T) {
 	var discoveries atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

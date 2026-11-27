@@ -17,11 +17,15 @@ const navigationKey=computed(()=>route.path==='/plugins'?'plugins':selectedNavig
 const navigationOpen=ref([])
 watch(navigationKey,key=>navigationOpen.value=navigationPath(key,navigation).slice(0,-1),{immediate:true})
 function navigateMenu(key){if(key==='plugins')return router.push('/plugins');const item=navigationLeaves(navigation).find(i=>i.id===key);if(item)router.push(item.hash.slice(1))}
-watch(()=>route.fullPath,()=>{if(embedded){window.parent.postMessage({type:'context.visibility',service:false,environment:false},location.origin);window.parent.postMessage({type:'workspace.label',label:route.params.name|| (route.params.id?'构建 #'+route.params.id:route.path==='/changes'?(route.query.tab==='work'?'需求与 Bug · 待上线':route.query.item?'变更 #'+route.query.item:'变更记录'):route.path==='/orchestration'?(route.query.run?'执行单 #'+route.query.run:route.query.preparation?'准备单 #'+route.query.preparation:route.query.area==='templates'?'编排模板':'发布记录'):route.path==='/plugins'?'插件扩展':'应用与构建')},location.origin)}},{immediate:true})
+watch(()=>route.fullPath,()=>{if(embedded){window.parent.postMessage({type:'context.visibility',service:false,environment:false},location.origin);window.parent.postMessage({type:'workspace.label',label:route.params.name|| (route.params.id?'构建 #'+route.params.id:route.path==='/changes'?(route.query.tab==='work'?'需求与 Bug · 待上线':route.query.item?'变更 #'+route.query.item:'变更记录'):route.path==='/orchestration'?(route.query.run?'执行单 #'+route.query.run:route.query.preparation?'准备单 #'+route.query.preparation:route.query.area==='templates'?'编排模板':'发布记录'):route.path==='/plugins'?'插件扩展':route.path==='/xxl-job'?'定时任务':'应用与构建')},location.origin)}},{immediate:true})
 const environmentKey=embedded?'lp-deploy-environment:'+window.name:'lp-deploy-environment'
 const globalEnvironment = ref(sessionStorage.getItem(environmentKey) || '')
 const globalService = ref('')
 const platformPanel = ref('')
+provide('openResourceCenter', () => {
+  if (embedded) window.parent.postMessage({ type: 'platform.open', view: 'resources' }, location.origin)
+  else platformPanel.value = 'resources'
+})
 provide('globalEnvironment', globalEnvironment)
 provide('globalService', globalService)
 function setPlatformContext(patch) {

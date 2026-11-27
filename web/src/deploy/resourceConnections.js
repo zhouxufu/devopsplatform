@@ -1,4 +1,4 @@
-export const resourceKindLabels={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 数据库',redis:'Redis',nacos:'Nacos 配置中心（2.4 / 2.5）',zentao:'禅道 16.0（需求来源）'}
+export const resourceKindLabels={git:'Git 代码凭据',maven:'Maven 私服',docker:'Docker Registry','aliyun-sae':'阿里云 SAE',mysql:'MySQL 数据库',redis:'Redis',nacos:'Nacos 配置中心（2.4 / 2.5）',zentao:'禅道 16.0（需求来源）',xxl_job:'XXL-JOB 调度中心'}
 // Only enable the parameter tab when the editor actually renders fields.
 export function hasConnectionParameters(kind){
  return ['mysql','redis','nacos','zentao','maven','aliyun-sae'].includes(kind)
@@ -17,5 +17,6 @@ export function filterResourceConnections(connections,allowedKinds,kind='',query
 export function instanceConnectionConfig(kind,config={}){
  const copy={...config}
  if(kind==='mysql')delete copy.database
+ if(kind==='xxl_job')return {environment:copy.environment||''}
  return copy
 }

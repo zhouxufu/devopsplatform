@@ -256,7 +256,7 @@ func (s *Store) normalizeApplicationResources(service string, resources *Applica
 			return nil, err
 		}
 		if !validResourceName(r.Alias) || !validApplicationResourceKind(r.Kind) {
-			return nil, fmt.Errorf("资源别名需有效标识，类型仅支持 mysql、nacos、redis")
+			return nil, fmt.Errorf("资源别名需有效标识，类型仅支持 mysql、nacos、redis、xxl_job")
 		}
 		if _, ok := requirements[r.Alias]; ok {
 			return nil, fmt.Errorf("资源别名不能重复")
@@ -291,6 +291,10 @@ func (s *Store) normalizeApplicationResources(service string, resources *Applica
 				return nil, fmt.Errorf("资源 %s：%w", b.Alias, err)
 			}
 			b.Config = map[string]string{"database": target.Config["database"]}
+		} else if req.Kind == xxlJobKind {
+			if err := validateXXLBinding(c, *b); err != nil {
+				return nil, err
+			}
 		} else if len(b.Config) > 0 {
 			return nil, fmt.Errorf("Redis 目标参数在连接中指定，不支持绑定覆盖")
 		}

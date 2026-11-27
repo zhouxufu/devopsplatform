@@ -125,7 +125,7 @@ func normalizeConnectionEndpoint(kind, endpoint string) string {
 	}
 	// Resource endpoints are HTTP(S) service roots. HTTPS is the safe and most
 	// common default; explicitly configured http:// addresses remain unchanged.
-	if kind == "git" || kind == "maven" || kind == "docker" || kind == "zentao" || kind == "nacos" {
+	if kind == "git" || kind == "maven" || kind == "docker" || kind == "zentao" || kind == "nacos" || kind == xxlJobKind {
 		return "https://" + endpoint
 	}
 	return endpoint
@@ -148,8 +148,8 @@ func (s *Store) upsertConnection(c ResourceConnection) error {
 	if !validConnectionName(c.Name) {
 		return fmt.Errorf("连接名称支持中文、字母、数字、点、短横线和下划线，长度 1-64")
 	}
-	if c.Kind != "git" && c.Kind != "maven" && c.Kind != "docker" && c.Kind != TargetAliyunSAE && c.Kind != "mysql" && c.Kind != "zentao" && c.Kind != "nacos" && c.Kind != "redis" {
-		return fmt.Errorf("连接类型仅支持 git、maven、docker、aliyun-sae、mysql、zentao、nacos、redis")
+	if c.Kind != "git" && c.Kind != "maven" && c.Kind != "docker" && c.Kind != TargetAliyunSAE && c.Kind != "mysql" && c.Kind != "zentao" && c.Kind != "nacos" && c.Kind != "redis" && c.Kind != xxlJobKind {
+		return fmt.Errorf("连接类型仅支持 git、maven、docker、aliyun-sae、mysql、zentao、nacos、redis、xxl_job")
 	}
 	if current != nil && current.Kind != c.Kind {
 		return fmt.Errorf("已有连接不能更换类型，请新建连接")
@@ -194,6 +194,14 @@ func (s *Store) upsertConnection(c ResourceConnection) error {
 	}
 	if err := validateIntegrationConnection(&c); err != nil {
 		return err
+	}
+	if c.Kind == xxlJobKind {
+		if s.GetEnvironment(c.Config["environment"]) == nil {
+			return fmt.Errorf("XXL-JOB 连接的环境不存在")
+		}
+		if current != nil && current.Config["environment"] != c.Config["environment"] {
+			return fmt.Errorf("已有 XXL-JOB 连接的环境不能更换，请新建连接")
+		}
 	}
 	if current != nil && (c.Kind == "zentao" || c.Kind == "mysql") && (current.Endpoint != c.Endpoint || current.Config["database"] != c.Config["database"]) {
 		var refs int
@@ -288,6 +296,12 @@ func (s *Store) upsertConnection(c ResourceConnection) error {
 		}
 		if c.Config["redis_auth"] == "password" && c.Password == "" {
 			return fmt.Errorf("请填写 Redis 密码")
+		}
+	}
+	if c.Kind == xxlJobKind {
+		c.Username, c.PrivateKey, c.Passphrase = "", "", ""
+		if len(c.Password) < 32 || strings.ContainsAny(c.Password, " \r\n\t") {
+			return fmt.Errorf("请填写至少 32 个字符的 XXL-JOB DevOps 专用接入令牌")
 		}
 	}
 	config, _ := json.Marshal(c.Config)
