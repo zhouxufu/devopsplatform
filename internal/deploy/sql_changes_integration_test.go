@@ -135,30 +135,34 @@ func TestSQLMySQLResourceGroupMultipleDatabases(t *testing.T) {
 		t.Skip("enable only on disposable delivery_qa + delivery_qa_groups schemas")
 	}
 	st, m, firstDB, table := sqlTargetFixture(t)
-	c := *st.GetConnection("qa-mysql")
-	c.Name = "qa-mysql-groups"
-	c.Config = map[string]string{"database": "delivery_qa_groups", "tls": "false"}
-	if err := st.UpsertConnection(c); err != nil {
-		t.Fatal(err)
+	g := &ResourceGroup{
+		Name: "mysql-integration",
+		Requirements: []ApplicationResourceRequirement{
+			{Alias: "db", Kind: "mysql"}, {Alias: "other-db", Kind: "mysql"},
+		},
+		Bindings: []ApplicationEnvironmentResource{
+			{Alias: "db", Environment: "test", Connection: "qa-mysql", Config: map[string]string{"database": "delivery_qa"}},
+			{Alias: "other-db", Environment: "test", Connection: "qa-mysql", Config: map[string]string{"database": "delivery_qa_groups"}},
+		},
 	}
-	secondDB, err := func() (*sql.DB, error) {
-		target, err := st.sqlBinding("orders", "test", "db")
-		if err != nil {
-			return nil, err
-		}
-		return openChangeMySQL(context.Background(), target)
-	}()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { secondDB.Exec("DROP TABLE IF EXISTS `" + table + "`"); secondDB.Close() })
-	g := &ResourceGroup{Name: "mysql-integration", Requirements: []ApplicationResourceRequirement{{Alias: "db", Kind: "mysql"}, {Alias: "other-db", Kind: "mysql"}}, Bindings: []ApplicationEnvironmentResource{{Alias: "db", Environment: "test", Connection: "qa-mysql", Config: map[string]string{"database": "delivery_qa"}}, {Alias: "other-db", Environment: "test", Connection: c.Name, Config: map[string]string{"database": "delivery_qa"}}}}
 	if err := st.SaveResourceGroup(g); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SaveApplicationResources("orders", ApplicationResources{ResourceGroup: g.Name}); err != nil {
 		t.Fatal(err)
 	}
+	target, err := st.sqlBinding("orders", "test", "other-db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDB, err := openChangeMySQL(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = secondDB.Exec("DROP TABLE IF EXISTS `" + table + "`")
+		secondDB.Close()
+	})
 	ids := []int64{}
 	for _, alias := range []string{"db", "other-db"} {
 		ch := &Change{Kind: "mysql", Title: "Create in " + alias, Service: "orders", SQL: &SQLChange{ResourceAlias: alias, Content: fmt.Sprintf("CREATE TABLE %s (id bigint NOT NULL, PRIMARY KEY (id))", table), MaxAffectedRows: 100}}
