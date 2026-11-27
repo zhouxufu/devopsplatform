@@ -127,6 +127,6 @@ func registerAPITestAssetRoutes(mux *http.ServeMux, st *Store, wj func(http.Resp
 		}
 		c.Owner = ""
 		c.CanEdit = false
-		wj(w, map[string]any{"valid": true, "case": c, "execution": map[bool]string{true: "graph", false: "sequential"}[c.Graph != nil], "max_steps": 10})
+		wj(w, map[string]any{"valid": true, "case": c, "execution": map[bool]string{true: "graph", false: "sequential"}[c.Graph != nil], "max_steps": apitest.MaxCaseSteps})
 	})
 }

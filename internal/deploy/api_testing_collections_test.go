@@ -10,7 +10,60 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
+
+func TestAPITestLongCaseWithGeneratedUUID(t *testing.T) {
+	st, routes := apiTestingFixture(t)
+	var seen []string
+	var lock sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lock.Lock()
+		seen = append(seen, r.URL.Query().Get("id"))
+		lock.Unlock()
+		if r.URL.Path == "/login" {
+			fmt.Fprint(w, `{"token":"issued+share/test"}`)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer issued+share/test" || r.URL.Query().Get("shareToken") != "issued+share/test" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+	defer server.Close()
+	st.apiTests.client = apiTestingClient(server)
+	row := apiTestDataRow{Name: "一", Values: map[string]apiTestCell{"id": {Type: "uuid"}}}
+	c := apiTestCase{Name: "长流程", DataRows: []apiTestDataRow{row, {Name: "二", Values: row.Values}}}
+	c.Steps = []apiTestStep{{Name: "登录", Request: apitest.Request{Path: "/login?id={{data.id}}"}, Extractions: []apitest.Extraction{{Source: "json", Name: "share", Path: "/token"}}}}
+	for index := 1; index < 12; index++ {
+		c.Steps = append(c.Steps, apiTestStep{Name: fmt.Sprintf("步骤%d", index+1), Request: apitest.Request{Path: "/item?id={{data.id}}&shareToken={{step.share}}", Headers: map[string]string{"Authorization": "Bearer {{step.share}}"}}})
+	}
+	c = saveTeamCase(t, routes, "alice", "member", c)
+	input := apiTestingInput(t, st, "generated-uuid-long-case")
+	input.Request, input.CaseID, input.CaseRevision = apitest.Request{}, c.ID, c.Revision
+	run, err := st.apiTests.start(st.GetService("orders"), "alice", false, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := waitAPITest(t, st, "alice", run.ID)
+	lock.Lock()
+	defer lock.Unlock()
+	if result.Status != "success" || len(seen) != 24 || seen[0] == seen[12] {
+		t.Fatalf("status=%s, requests=%d", result.Status, len(seen))
+	}
+	raw, _ := json.Marshal(result)
+	if strings.Contains(string(raw), "issued+share/test") || strings.Contains(string(raw), "issued%2Bshare%2Ftest") {
+		t.Fatal("credential leaked into the report")
+	}
+	for index, value := range seen {
+		id, err := uuid.Parse(value)
+		if err != nil || id.Version() != 4 || value != seen[index/12*12] {
+			t.Fatalf("incorrect UUID scope at request %d", index+1)
+		}
+	}
+}
 
 func saveTeamCase(t *testing.T, h http.Handler, who, role string, c apiTestCase) apiTestCase {
 	t.Helper()

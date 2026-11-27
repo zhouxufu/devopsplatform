@@ -14,7 +14,7 @@ func deliveryOrderedNodes(generated, requested []any) ([]any, error) {
 	for _, raw := range requested {
 		selection := mapValue(raw)
 		for key := range selection {
-			if key != "id" && key != "sql_group" && key != "change_ids" {
+			if key != "id" && key != "sql_group" && key != "change_ids" && key != "depends_on" {
 				return nil, fmt.Errorf("执行顺序不能改写节点字段 %s", key)
 			}
 		}
@@ -44,6 +44,19 @@ func deliveryOrderedNodes(generated, requested []any) ([]any, error) {
 				node["sql_group"] = group
 				node["name"] = stringArg(base, "name") + " · 分阶段"
 			}
+		}
+		if raw, ok := selection["depends_on"]; ok {
+			deps, ok := raw.([]any)
+			if !ok || len(deps) > 30 {
+				return nil, fmt.Errorf("前置依赖列表无效")
+			}
+			for _, dep := range deps {
+				id, ok := dep.(string)
+				if !ok || !safeDeliveryID(id) {
+					return nil, fmt.Errorf("前置依赖标识无效")
+				}
+			}
+			node["depends_on"] = cloneJSON(deps)
 		}
 		node["id"] = id
 		out = append(out, node)

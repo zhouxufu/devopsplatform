@@ -463,7 +463,7 @@ func (s *Store) advanceChangeDeployment(mux *http.ServeMux, r *http.Request, t *
 			}
 			appSpec := spec
 			appSpec.Service = app.Service
-			config, dest, _, err := s.serviceDeploymentTerms(appSpec)
+			config, dest, _, err := s.deploymentTerms(appSpec, app.PendingTarget)
 			if err != nil {
 				return block(err)
 			}

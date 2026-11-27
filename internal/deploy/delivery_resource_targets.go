@@ -112,8 +112,12 @@ func omitEmptyDeliveryResourceNodes(nodes []DeliveryNode, scope *DeliveryScope) 
 			warnings = append(warnings, node.Name+"：本次交付范围无匹配变更，已跳过；流程模板保持不变")
 		}
 	}
+	return withoutInapplicableNodes(nodes, skipped), warnings
+}
+
+func withoutInapplicableNodes(nodes []DeliveryNode, skipped map[string]DeliveryNode) []DeliveryNode {
 	if len(skipped) == 0 {
-		return nodes, warnings
+		return nodes
 	}
 	out := []DeliveryNode{}
 	for _, node := range nodes {
@@ -145,12 +149,12 @@ func omitEmptyDeliveryResourceNodes(nodes []DeliveryNode, scope *DeliveryScope) 
 		}
 		out = append(out, node)
 	}
-	return out, warnings
+	return out
 }
 
 // Expand the logical node in-place, preserving approval/manual ordering and
 // selection order. This is target resolution only: no network writes or reads.
-func (s *Store) expandDeliveryResourceNodes(nodes []DeliveryNode, scope *DeliveryScope, environment string) ([]DeliveryNode, []DeliveryResourceTarget, error) {
+func (s *Store) expandDeliveryResourceNodes(nodes []DeliveryNode, scope *DeliveryScope, environment string, skips ...map[string]string) ([]DeliveryNode, []DeliveryResourceTarget, error) {
 	out := []DeliveryNode{}
 	targets := []DeliveryResourceTarget{}
 	for _, node := range nodes {
@@ -193,6 +197,11 @@ func (s *Store) expandDeliveryResourceNodes(nodes []DeliveryNode, scope *Deliver
 			if c == nil || c.Kind != node.Kind || (node.Service != "" && c.Service != node.Service) {
 				return nil, nil, fmt.Errorf("节点变更类型或应用不匹配 #%d", id)
 			}
+			if len(skips) > 0 {
+				if _, ok := skips[0][node.ID]; ok {
+					continue
+				}
+			}
 			t, err := s.deliveryChangeTarget(c, environment)
 			if err != nil {
 				return nil, nil, fmt.Errorf("变更 #%d · %s：%w", id, c.Title, err)
@@ -203,6 +212,11 @@ func (s *Store) expandDeliveryResourceNodes(nodes []DeliveryNode, scope *Deliver
 			}
 			buckets[key] = append(buckets[key], id)
 			resolved = append(resolved, t)
+		}
+		if len(order) == 0 {
+			node.ChangeIDs = ids
+			out = append(out, node)
+			continue
 		}
 		for _, key := range order {
 			n := node

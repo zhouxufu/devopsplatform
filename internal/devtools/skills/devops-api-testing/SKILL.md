@@ -2,7 +2,7 @@
 name: devops-api-testing
 description: 通过研发效能平台 MCP 创建或修改接口测试用例、测试集与画布，编排条件、并行与汇合，执行回归、检索报告和停止指定运行。适用于平台接口测试与回归任务；普通编码或文档维护不自动创建或执行测试。
 metadata:
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # 接口测试与画布
@@ -17,6 +17,8 @@ metadata:
 - 业务预期来自需求、接口契约或明确的验收条件。实际响应只作证据；不通过放宽断言、删除失败步骤或用实际值替换预期来使回归通过。缺失的关键业务预期明确标为待核实。
 
 ## 创建或修改用例
+
+迁移 Apifox 处理器时，先用 `python3 scripts/apifox_processor.py` 从标准输入读取一段脚本。它识别命名 GUID、登录 Bearer 提取、数组包含或排除、成组数值校验提取，输出原生断言、提取和后续变量引用。将 `data_columns` 加入每组数据（无数据组时创建一组），把 `references` 用于对应的下游请求，合并原有断言。按 `review` 核对字段类型。未识别的脚本会报错，保留为待迁移项。此转换只生成定义片段。
 
 1. 先用 `list_api_test_cases` 检查已有用例，需要完整定义时用 `get_api_test_case`。支持 `q/limit/before_id`，每页默认20、最多100条。只要 `has_more:true`，保持原应用、环境和筛选条件，使用返回的 `next_before_id` 继续；空页也可能有下一页。新查询清除旧游标，不知道编号时不要猜ID或凭同名覆盖。
 2. 新用例使用 `id:0/revision:0`；修改时保留已读 `id/revision/definition_version`、未涉及的参数组/断言/接口来源以及稳定的 `steps[].id`。图的入口、连线和引用都使用节点ID，不使用画布坐标或步骤序号。结构与示例见 [图与布局契约](references/test-graphs.md)。

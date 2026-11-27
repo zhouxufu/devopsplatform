@@ -243,6 +243,9 @@ func validateOrderBarriers(expected, actual []DeliveryNode) error {
 	segment := 0
 	for _, node := range actual {
 		if releaseOrderBarrier(node) {
+			if segment < len(gates) && node.Kind != "approval" && !slices.ContainsFunc(gates[segment].DependsOn, func(dep string) bool { return !slices.Contains(node.DependsOn, dep) }) {
+				node.DependsOn = gates[segment].DependsOn
+			}
 			if segment >= len(gates) || digestJSON(node) != digestJSON(gates[segment]) {
 				return fmt.Errorf("发布依赖所用的流程关卡发生变化，请重新预检")
 			}

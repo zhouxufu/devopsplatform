@@ -473,8 +473,8 @@ func validateAPITestCase(v *apiTestCase) error {
 	if v.Visibility != "private" && v.Visibility != "team" {
 		return fmt.Errorf("共享范围无效")
 	}
-	if len(v.Steps) > 10 {
-		return fmt.Errorf("一个用例最多 10 个步骤")
+	if len(v.Steps) > apitest.MaxCaseSteps {
+		return fmt.Errorf("一个用例最多 %d 个步骤", apitest.MaxCaseSteps)
 	}
 	if len(v.Module) > 200 || len(v.Preconditions) > 8000 || len(v.TestData) > 16000 {
 		return fmt.Errorf("用例说明或测试数据过长")
@@ -778,7 +778,7 @@ func (m *apiTestManager) startAuthorized(sv *Service, owner string, admin bool, 
 			data := map[string]any{}
 			if len(c.DataRows) > 0 {
 				var e error
-				data, e = apiTestDataScope(row)
+				data, e = runAPITestDataScope(row)
 				if e != nil {
 					return nil, e
 				}

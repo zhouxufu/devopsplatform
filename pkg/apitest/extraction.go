@@ -3,6 +3,7 @@ package apitest
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 
 // Extracted values are private to one execution; explicit suite mappings may pass them to later cases. Only checks belong in reports.
 type Extraction struct {
+	Format string `json:"format,omitempty"`
 	Event  string `json:"event,omitempty"`
 	Select string `json:"select,omitempty"`
 	Name   string `json:"name"`
@@ -52,6 +54,9 @@ func ValidateExtractions(extractions []Extraction, mode string) error {
 	}
 	names := map[string]bool{}
 	for _, e := range extractions {
+		if e.Format != "" && (e.Format != "finite_number_text" || e.Source != "json") {
+			return fmt.Errorf("仅 JSON 数值提取支持 finite_number_text")
+		}
 		if !extractionName.MatchString(e.Name) || names[e.Name] {
 			return fmt.Errorf("提取变量名须以字母或下划线开头，且不能重复（最多 64 字符）")
 		}
@@ -167,7 +172,23 @@ func extractionValue(e Extraction, r Result) (any, string) {
 		if r.Truncated {
 			return nil, "响应已截断，不能提取"
 		}
-		return decodeScalar(r.Body, e.Path)
+		value, message := decodeScalar(r.Body, e.Path)
+		if message != "" || e.Format == "" {
+			return value, message
+		}
+		text, _ := ScalarText(value)
+		number, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+			return nil, "字段须为有限数值或数值文本"
+		}
+		if _, ok := value.(json.Number); ok {
+			if number == 0 {
+				return "0", ""
+			}
+			raw, _ := json.Marshal(number)
+			return string(raw), ""
+		}
+		return text, ""
 	case "sse":
 		if len(r.Events) == 0 {
 			return nil, "没有收到 SSE 事件"
@@ -342,10 +363,13 @@ func BindStepRequest(r Request, env map[string]string, scope map[string]any) (Re
 	parts := strings.SplitN(r.Path, "?", 2)
 	var failure error
 	for i := range parts {
-		parts[i] = scopedVariable.ReplaceAllStringFunc(parts[i], func(t string) string {
-			match := scopedVariable.FindStringSubmatch(t)
+		parts[i] = requestVariable.ReplaceAllStringFunc(parts[i], func(t string) string {
+			match := requestVariable.FindStringSubmatch(t)
 			key := scopeKey(match[1], match[2])
 			value, ok := scopedText(match[1], scope[key])
+			if match[1] == "var" {
+				value, ok = env[match[2]]
+			}
 			if !ok {
 				failure = fmt.Errorf("步骤变量 %s 无效", key)
 				return ""

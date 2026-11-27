@@ -13,6 +13,7 @@ import (
 )
 
 type publicationApp struct {
+	PendingTarget    bool     `json:"pending_target,omitempty"`
 	Service          string   `json:"service"`
 	Mode             string   `json:"mode"`
 	Config           string   `json:"configuration_digest"`
@@ -30,6 +31,7 @@ type publicationChange struct {
 	Title   string `json:"title"`
 }
 type publicationScope struct {
+	InitialDispatch      *[]string                `json:"initial_dispatch,omitempty"`
 	RequiresReview       bool                     `json:"requires_review,omitempty"`
 	EnvironmentReviewers []string                 `json:"environment_reviewers,omitempty"`
 	Builds               []PreparedBuild          `json:"builds"`
@@ -140,6 +142,9 @@ func validatePublicationOrder(draft *DeliveryDraftPlan, nodes []DeliveryNode) er
 		}
 		if o.Kind == "mysql" && len(o.ChangeIDs) > 0 {
 			o.ID, o.Name, o.SQLGroup, o.ChangeIDs = n.ID, n.Name, n.SQLGroup, n.ChangeIDs
+		}
+		if !slices.ContainsFunc(o.DependsOn, func(id string) bool { return !slices.Contains(n.DependsOn, id) }) {
+			o.DependsOn = n.DependsOn
 		}
 		if digestJSON(o) != digestJSON(n) {
 			return fmt.Errorf("排序不能改写节点 %s", k)
@@ -276,15 +281,19 @@ func (s *Store) previewPublicationScope(r *http.Request, m *ReleaseManager, spec
 	for _, app := range names {
 		a := publicationApp{Service: app, Mode: "resource"}
 		if apps[app] {
-			cfg, dest, _, err := s.serviceDeploymentTerms(ServiceDeploymentSpec{Service: app, Environment: req.Environment, Reason: req.Reason})
-			if err != nil {
-				return nil, err
-			}
 			target, err := m.ValidateTarget(app, req.Environment, req.Reason)
+			a.PendingTarget = req.ExecutionMode == dependencyExecution && errors.Is(err, errMissingDeliveryTarget)
+			if err != nil && !a.PendingTarget {
+				return nil, err
+			}
+			if target != nil {
+				a.Targets = target.ExecutionTargets()
+			}
+			cfg, dest, _, err := s.deploymentTerms(ServiceDeploymentSpec{Service: app, Environment: req.Environment, Reason: req.Reason}, a.PendingTarget)
 			if err != nil {
 				return nil, err
 			}
-			a.Config, a.Destination, a.Targets = cfg, dest, target.ExecutionTargets()
+			a.Config, a.Destination = cfg, dest
 			a.Mode = req.CodeModes[app]
 			if a.Mode == "" {
 				a.Mode = "merge"
@@ -375,6 +384,10 @@ func (s *Store) previewPublicationScope(r *http.Request, m *ReleaseManager, spec
 	}
 	if len(plan.Blockers) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(plan.Blockers, "；"))
+	}
+	if plan.ExecutionMode == dependencyExecution {
+		ids := initialDeliveryDispatch(plan)
+		batch.InitialDispatch = &ids
 	}
 	batch.RequiresReview = deliveryReviewRequired(plan)
 	if batch.RequiresReview {

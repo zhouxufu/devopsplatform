@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "web/src/deploy/pages/ServicesView.vue"
+        ],
+        "createdAt": "2026-11-27T00:42:15.105Z",
+        "reason": "核对原版本及模板：高级构建参数折叠区使用中性色边线标识嵌套层级。此规则不支持按声明值忽略。"
+      }
+    ]
+  }
+}

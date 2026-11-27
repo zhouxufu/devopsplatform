@@ -3,6 +3,7 @@ package deploy
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -463,13 +464,15 @@ func (m *ReleaseManager) CreateArtifact(service string, artifactID int64, enviro
 // ValidateTarget checks whether a release can be submitted to an application
 // environment. It is also used before a one-click build starts so an expensive
 // build is not launched for an environment that cannot accept its artifact.
+var errMissingDeliveryTarget = errors.New("应用环境缺少部署目标")
+
 func (m *ReleaseManager) ValidateTarget(service, environment, reason string) (*ServiceEnvironment, error) {
 	target := m.st.GetServiceEnvironment(service, environment)
 	if target == nil {
-		return nil, fmt.Errorf("应用环境不存在")
+		return nil, fmt.Errorf("应用环境不存在：%w", errMissingDeliveryTarget)
 	}
 	if !target.ManualTarget() && len(target.ExecutionTargets()) == 0 {
-		return nil, fmt.Errorf("环境没有可用执行目标")
+		return nil, fmt.Errorf("环境没有可用执行目标：%w", errMissingDeliveryTarget)
 	}
 	if !target.ManagedTarget() && !target.ManualTarget() && !target.ScriptTarget() {
 		for _, host := range target.Hosts {

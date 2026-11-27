@@ -64,11 +64,18 @@ func deliveryControlDecision(s *Store, run *DeliveryRun) (string, string) {
 	if run == nil {
 		return "finish", "执行单不存在"
 	}
+	if run.Status == "completed_with_exceptions" {
+		return "finish", "交付已结束，含跳过或人工完成的节点"
+	}
 	if run.Status == "success" {
 		return "complete", "交付已完成"
 	}
 	if run.Status != "approved" && run.Status != "running" {
 		return "finish", "交付已停止：" + run.Status
+	}
+	if run.Plan.ExecutionMode == dependencyExecution {
+		_, d, m := s.deliveryGraphNext(run)
+		return d, m
 	}
 	for _, step := range run.Steps {
 		if step.Status == "success" || step.Status == "skipped" {
@@ -170,7 +177,9 @@ func (s *Store) runDeliveryControlWithAdvance(id int64, lease string, advance fu
 						}
 					}
 				}
-				break
+				if decision != "pause" || run.Plan.ExecutionMode != dependencyExecution {
+					break
+				}
 			}
 		}
 		switch decision {
@@ -239,8 +248,8 @@ func registerDeliveryControlRoutes(mux *http.ServeMux, s *Store, m *ReleaseManag
 				}
 				for i := range run.Steps {
 					step := &run.Steps[i]
-					if step.Kind == "script" && step.Status == "executing" {
-						deliveryWriteError(w, 409, "脚本执行中或中断待核对，请先在节点中记录核对结果")
+					if (step.Kind == "script" || run.Plan.ExecutionMode == dependencyExecution) && step.Status == "executing" {
+						deliveryWriteError(w, 409, "已有操作执行中或中断待核对，请先核对实际执行结果")
 						return
 					}
 					if step.ReleaseID <= 0 {

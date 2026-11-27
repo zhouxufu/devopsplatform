@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -30,6 +31,26 @@ func loginBody(a Auth, vars map[string]string) (string, error) {
 // ReferenceAuth is the MCP boundary: secrets stay in the existing encrypted
 // application variables. Legacy inline credentials are never exported to MCP.
 func ReferenceAuth(a Auth) (Auth, error) { return referenceAuth(a, true) }
+
+var requestCredential = regexp.MustCompile(`^(?:(?i:Bearer|Basic) +)?\{\{(?:var|step)\.[A-Za-z_][A-Za-z0-9_]*\}\}$`)
+
+func credentialField(key string) bool {
+	key = strings.ToLower(key)
+	switch key {
+	case "user", "username", "user_name", "account", "client_id", "pwd", "pass", "auth", "jwt", "credential", "signature", "access_key", "accesskey":
+		return true
+	}
+	return SecretKey(key) || strings.Contains(key, "session") || strings.HasSuffix(key, "-auth") || strings.HasSuffix(key, "_auth")
+}
+
+func validRequestField(key, value string) bool {
+	return value == "" || !credentialField(key) || IsCredentialReference(value)
+}
+
+func IsCredentialReference(value string) bool {
+	return requestCredential.MatchString(strings.TrimSpace(value))
+}
+
 func referenceAuth(a Auth, strictBody bool) (Auth, error) {
 	clone, _ := json.Marshal(a)
 	a.Headers = nil
@@ -45,9 +66,16 @@ func referenceAuth(a Auth, strictBody bool) (Auth, error) {
 		}
 	}
 	check := func(key, value string) string {
-		credential := SecretKey(key) || strings.EqualFold(key, "pwd") || strings.EqualFold(key, "pass") || strings.Contains(strings.ToLower(key), "user") || strings.Contains(strings.ToLower(key), "account") || strings.Contains(strings.ToLower(key), "client_id")
+		k := strings.ToLower(key)
+		credential := credentialField(k)
+		if strictBody && k != "user-agent" {
+			credential = credential || strings.Contains(k, "user") || strings.Contains(k, "account") || strings.Contains(k, "client_id")
+		}
 		remainder := strings.TrimSpace(variable.ReplaceAllString(value, ""))
 		reference := variable.MatchString(value) && (remainder == "" || remainder == "Bearer" || remainder == "Basic")
+		if !strictBody {
+			reference = IsCredentialReference(value)
+		}
 		if credential && value != "" && !reference {
 			invalid = true
 			return "[REDACTED]"
@@ -109,7 +137,7 @@ func referenceAuth(a Auth, strictBody bool) (Auth, error) {
 					if text, ok := v.(string); ok {
 						x[k] = checkBody(k, text)
 					} else {
-						if SecretKey(k) || strings.EqualFold(k, "pwd") {
+						if credentialField(k) {
 							invalid = true
 							x[k] = "[REDACTED]"
 						} else {
@@ -132,6 +160,9 @@ func referenceAuth(a Auth, strictBody bool) (Auth, error) {
 		a.Body = string(raw)
 	}
 	if invalid {
+		if !strictBody {
+			return a, fmt.Errorf("请求凭据须引用 {{var.NAME}} 或上游提取的 {{step.NAME}}")
+		}
 		return a, fmt.Errorf("登录凭据必须引用受保护变量，例如 {{var.API_PASSWORD}}；请先在应用环境绑定变量")
 	}
 	return a, nil
@@ -148,19 +179,29 @@ func ValidateReferences(r Request) error {
 	if _, err := referenceAuth(check, false); err != nil {
 		return err
 	}
-	for _, f := range r.Form {
-		if _, err := ReferenceAuth(Auth{Headers: map[string]string{f.Name: f.Value}}); err != nil {
-			return err
-		}
-	}
 	u, err := url.Parse(r.Path)
 	if err != nil {
 		return fmt.Errorf("请求路径无效")
 	}
-	for k, rows := range u.Query() {
+	fields, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return fmt.Errorf("请求查询参数无效")
+	}
+	for _, part := range strings.Split(u.RawQuery, "&") {
+		key, encoded, _ := strings.Cut(part, "=")
+		name, _ := url.QueryUnescape(key)
+		value, _ := url.QueryUnescape(encoded)
+		if credentialField(name) && IsCredentialReference(value) && !requestVariable.MatchString(encoded) {
+			return fmt.Errorf("凭据参数 %s 的变量引用请保留原始双花括号", name)
+		}
+	}
+	for _, f := range r.Form {
+		fields.Add(f.Name, f.Value)
+	}
+	for k, rows := range fields {
 		for _, v := range rows {
-			if _, err := ReferenceAuth(Auth{Headers: map[string]string{k: v}}); err != nil {
-				return err
+			if !validRequestField(k, v) {
+				return fmt.Errorf("参数 %s 的凭据须引用 {{var.NAME}} 或上游提取的 {{step.NAME}}", k)
 			}
 		}
 	}

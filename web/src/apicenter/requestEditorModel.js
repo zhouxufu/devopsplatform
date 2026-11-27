@@ -2,7 +2,12 @@ import {parse,stringify} from 'lossless-json'
 import {composeRequest} from './testingModel.js'
 
 export const assertionOptions=[{value:'status',label:'HTTP 状态码等于'},{value:'json',label:'JSON 字段等于'},{value:'contains',label:'响应正文包含'},{value:'header',label:'响应头等于'},{value:'sse_count',label:'SSE 事件数至少'},{value:'regex',label:'响应正文匹配正则'},{value:'json_regex',label:'JSON 字段匹配正则'},{value:'json_range',label:'JSON 数值范围'},{value:'duration',label:'响应耗时不超过（ms）'},{value:'schema',label:'JSON Schema 校验'},{value:'sse_json',label:'SSE 事件字段等于'},{value:'sse_contains',label:'SSE 事件数据包含'}]
-export const extractionSources=[{value:'json',label:'JSON 响应正文'},{value:'header',label:'响应头'},{value:'sse',label:'SSE 匹配事件'}]
+export const extractionSources=[{value:'json',label:'JSON 响应正文'},{value:'finite_number_text',label:'JSON 数值转文本'},{value:'header',label:'响应头'},{value:'sse',label:'SSE 匹配事件'}]
+export function setExtractionSource(extraction, value){
+ extraction.source=value==='finite_number_text'?'json':value
+ if(value==='finite_number_text')extraction.format=value
+ else delete extraction.format
+}
 export function requestDraft(request,extra={}){
  const draft={request:JSON.parse(JSON.stringify(request)),headersJSON:JSON.stringify(request.headers||{},null,2),pathValues:{},queryRows:[],...extra}
  initializeHeaders(draft)

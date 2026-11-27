@@ -130,6 +130,26 @@ func TestReferenceAuthHidesLegacyLoginQuery(t *testing.T) {
 	}
 }
 
+func TestRequestCredentialSourcesAndBusinessConstants(t *testing.T) {
+	request := Request{Path: "/share?page=2&userId=42&shareToken={{step.share}}", Headers: map[string]string{"Authorization": "Bearer {{step.login}}", "User-Agent": "mobile/2"}, Form: []FormField{{Name: "category", Value: "house"}, {Name: "token", Value: "{{step.share}}"}}}
+	if err := ValidateReferences(request); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"literal", "Bearer {{step.login}}suffix", "{{data.token}}", "{{step.missing", "A{{var.PASS}}"} {
+		request.Headers["Authorization"] = value
+		if ValidateReferences(request) == nil {
+			t.Fatalf("accepted invalid credential source %q", value)
+		}
+	}
+	if _, err := ReferenceAuth(Auth{Headers: map[string]string{"Authorization": "Bearer {{step.login}}"}}); err == nil {
+		t.Fatal("login profile accepted an execution-only reference")
+	}
+	bound, err := BindStepRequest(Request{Path: "/share?token={{var.TOKEN}}&shareToken={{step.share}}"}, map[string]string{"TOKEN": "x+y"}, map[string]any{"share": "a&b"})
+	if err != nil || bound.Path != "/share?token=x%2By&shareToken=a%26b" {
+		t.Fatal("incorrect query binding", err)
+	}
+}
+
 func TestMaskedLoginIdentityRetainsResponseEvidence(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"token":"issued-private","account":"bound-person"}`)

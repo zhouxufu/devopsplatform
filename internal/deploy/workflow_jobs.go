@@ -89,7 +89,9 @@ func (s *Store) finishWorkflowExtension(runID int64, nodeID string, success, unk
 					step.Status = "success"
 				} else {
 					step.Status = "failed"
-					latest.Status = "failed"
+					if latest.Status == "running" {
+						latest.Status = deliveryFailureStatus(latest)
+					}
 				}
 			}
 		}
@@ -99,10 +101,10 @@ func (s *Store) finishWorkflowExtension(runID int64, nodeID string, success, unk
 		if success && latest.Status == "running" {
 			all := len(latest.Steps) > 0
 			for _, step := range latest.Steps {
-				all = all && step.Status == "success"
+				all = all && (step.Status == "success" || latest.Plan.ExecutionMode == dependencyExecution && scheduleStepDone(step))
 			}
 			if all {
-				latest.Status = "success"
+				latest.Status = deliveryCompletedStatus(latest)
 			}
 		}
 		if s.saveDeliveryRun(latest) == nil {

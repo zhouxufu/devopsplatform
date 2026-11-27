@@ -63,6 +63,9 @@ func conditionExpected(c apiTestCondition) (any, error) {
 	if c.Operator == "exists" {
 		return nil, nil
 	}
+	if c.Expected.Type == "uuid" {
+		return nil, fmt.Errorf("条件预期值须为常量")
+	}
 	m, err := apiTestDataScope(apiTestDataRow{Name: "condition", Values: map[string]apiTestCell{"expected": c.Expected}})
 	return m["data.expected"], err
 }

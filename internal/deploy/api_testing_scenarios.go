@@ -302,7 +302,7 @@ func (m *apiTestManager) startScenario(owner string, admin bool, in apiScenarioI
 	for _, row := range rows {
 		data := map[string]any{}
 		if len(c.DataRows) > 0 {
-			data, err = apiTestDataScope(row)
+			data, err = runAPITestDataScope(row)
 			if err != nil {
 				return nil, err
 			}

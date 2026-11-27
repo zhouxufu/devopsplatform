@@ -66,6 +66,9 @@ func releaseChecklist(plan *DeliveryPlan) []ReleaseChecklistStep {
 					}
 				}
 			}
+			if note, skip := plan.SkippedNodes[node.ID]; skip {
+				item.Status, item.Reason = "skipped", note
+			}
 			step.Items = append(step.Items, item)
 		}
 		steps = append(steps, step)

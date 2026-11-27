@@ -57,6 +57,29 @@ func testingAgentFixture(t *testing.T) (*ToolService, *AccessToken, *atomic.Int3
 	svc.actions = store
 	return svc, tok, writes
 }
+
+func TestAPITestCredentialTemplatesRoundTripThroughMCP(t *testing.T) {
+	svc, token, _ := testingAgentFixture(t)
+	consumer := map[string]any{"path": "/share?shareToken={{step.share}}&page=2", "headers": map[string]any{"Authorization": "Bearer {{step.share}}", "User-Agent": "house/2"}}
+	args := map[string]any{"service": "orders", "environment": "test", "case": map[string]any{"name": "分享流程", "steps": []any{
+		map[string]any{"name": "登录", "request": map[string]any{"path": "/login"}, "extractions": []any{map[string]any{"name": "share", "source": "json", "path": "/data/token"}}},
+		map[string]any{"name": "读取分享", "request": consumer},
+	}}}
+	validated := mapValue(docCall(t, svc, token, "validate_api_test_case", args))
+	args["case"] = validated["case"]
+	preview := mapValue(docCall(t, svc, token, "save_api_test_case", args))
+	shown := mapValue(mapValue(preview["preview"])["after"])["steps"].([]any)
+	if mapValue(mapValue(shown[1])["request"])["path"] != consumer["path"] {
+		t.Fatal("confirmation preview lost the query template")
+	}
+	saved := mapValue(docConfirm(t, svc, token, preview)["result"])
+	read := mapValue(docCall(t, svc, token, "get_api_test_case", map[string]any{"service": "orders", "environment": "test", "case_id": saved["id"]}))
+	steps := mapValue(read["case"])["steps"].([]any)
+	request := mapValue(mapValue(steps[1])["request"])
+	if request["path"] != consumer["path"] || mapValue(request["headers"])["Authorization"] != "Bearer {{step.share}}" {
+		t.Fatal("saved case lost a credential template")
+	}
+}
 func TestTestingAgentSuiteMCPRealRoutesFrozenSaveAndRevocation(t *testing.T) {
 	svc, tok, writes := testingAgentFixture(t)
 	args := map[string]any{"service": "orders", "environment": "test", "case": map[string]any{"id": 0, "revision": 0, "name": "agent contract", "steps": []any{map[string]any{"name": "status", "request": map[string]any{"path": "/contract", "assertions": []any{map[string]any{"type": "status", "expected": "200"}}}}}}}

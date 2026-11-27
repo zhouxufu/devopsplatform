@@ -126,6 +126,8 @@ const closeActions = [
         variant="ghost"
         size="sm"
         class="gap-1"
+        aria-label="搜索应用、环境"
+        title="搜索应用、环境 (Ctrl+K / ⌘K)"
         @click="$emit('search-open')"
       >
         <SearchIcon class="size-4" />

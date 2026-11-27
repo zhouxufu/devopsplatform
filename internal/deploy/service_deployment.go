@@ -105,13 +105,16 @@ func (s *Store) saveServiceDeployment(t *ServiceDeployment) error {
 	return e
 }
 func (s *Store) serviceDeploymentTerms(spec ServiceDeploymentSpec) (string, string, map[string]any, error) {
+	return s.deploymentTerms(spec, false)
+}
+func (s *Store) deploymentTerms(spec ServiceDeploymentSpec, allowMissing bool) (string, string, map[string]any, error) {
 	env := s.GetEnvironment(spec.Environment)
 	sv := s.GetService(spec.Service)
 	target := s.GetServiceEnvironment(spec.Service, spec.Environment)
-	if env == nil || sv == nil || target == nil {
+	if env == nil || sv == nil || (target == nil && !allowMissing) {
 		return "", "", nil, fmt.Errorf("应用或目标环境不存在")
 	}
-	if env.Protected || env.Purpose == "production" || target.Protected {
+	if env.Protected || env.Purpose == "production" || target != nil && target.Protected {
 		return "", "", nil, fmt.Errorf("一次授权部署仅支持非受保护开发/测试环境；受保护环境请走原审批流程")
 	}
 	effective, e := s.environmentBuildService(sv, spec.Environment)
@@ -123,6 +126,14 @@ func (s *Store) serviceDeploymentTerms(spec ServiceDeploymentSpec) (string, stri
 		return "", "", nil, e
 	}
 	delete(policy["workflow_binding"].(map[string]any), "checked_at")
+	config := digestJSON([]any{preparationConfiguration(effective, s.GetServiceDelivery(spec.Service)), policy})
+	if allowMissing && (target == nil || (!target.ManualTarget() && len(target.ExecutionTargets()) == 0)) {
+		var secrets string
+		if target != nil {
+			secrets = target.runtimeEnvEncrypted
+		}
+		return config, digestJSON([]any{"pending_target", target, secrets, env}), policy, nil
+	}
 	if e := s.freezeDeploymentAgents(target); e != nil {
 		return "", "", nil, e
 	}
@@ -132,7 +143,7 @@ func (s *Store) serviceDeploymentTerms(spec ServiceDeploymentSpec) (string, stri
 	}
 	// Include encrypted variable material without ever returning it to clients.
 	td := digestJSON([]any{target, target.runtimeEnvEncrypted, dest, env})
-	config := digestJSON([]any{preparationConfiguration(effective, s.GetServiceDelivery(spec.Service)), policy})
+
 	return config, td, policy, nil
 }
 func (s *Store) previewServiceDeployment(ctx context.Context, m *ReleaseManager, spec ServiceDeploymentSpec) (*ServiceDeploymentGrant, error) {

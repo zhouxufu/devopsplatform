@@ -9,9 +9,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"logplatform/pkg/workflownode"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +53,9 @@ type DeliveryTemplate struct {
 	Owner       string         `json:"owner"`
 }
 type DeliveryRequest struct {
+	ExecutionMode     string            `json:"execution_mode,omitempty"`
+	MaxActiveNodes    int               `json:"max_active_nodes,omitempty"`
+	SkippedNodes      map[string]string `json:"skipped_nodes,omitempty"`
 	CodeModes         map[string]string `json:"code_modes,omitempty"`
 	Scene             string            `json:"scene,omitempty"`
 	PreparationRunID  int64             `json:"preparation_run_id,omitempty"`
@@ -79,12 +84,16 @@ type DeliveryRequest struct {
 	previewDrafts      bool   // Set only by the read-only preview route, never from JSON.
 }
 type DeliveryService struct {
+	PendingTarget     bool               `json:"pending_target,omitempty"`
 	Service           string             `json:"service"`
 	Artifact          Artifact           `json:"artifact"`
 	Target            ServiceEnvironment `json:"target"`
 	DestinationDigest string             `json:"destination_digest"`
 }
 type DeliveryPlan struct {
+	ExecutionMode             string                   `json:"execution_mode,omitempty"`
+	MaxActiveNodes            int                      `json:"max_active_nodes,omitempty"`
+	SkippedNodes              map[string]string        `json:"skipped_nodes,omitempty"`
 	Checklist                 []ReleaseChecklistStep   `json:"checklist,omitempty"`
 	Scene                     string                   `json:"scene,omitempty"`
 	PreparationRunID          int64                    `json:"preparation_run_id,omitempty"`
@@ -123,6 +132,7 @@ type DeliveryManualRecovery struct {
 }
 
 type DeliveryStep struct {
+	Disposition        *DeliveryDisposition    `json:"disposition,omitempty"`
 	APIReports         []workflowAPIReport     `json:"api_reports,omitempty"`
 	PreviousReleaseIDs []int64                 `json:"previous_release_ids,omitempty"`
 	ManualRecovery     *DeliveryManualRecovery `json:"manual_recovery,omitempty"`
@@ -140,6 +150,7 @@ type DeliveryStep struct {
 	Reviews            []ApprovalDecision      `json:"reviews,omitempty"`
 }
 type DeliveryRun struct {
+	NextIndex         *int               `json:"next_step_index,omitempty"`
 	SQLStageBaselines []SQLStageBaseline `json:"sql_stage_baselines,omitempty"`
 	ID                int64              `json:"id"`
 	Plan              DeliveryPlan       `json:"plan"`
@@ -405,6 +416,11 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 	tpl, env := &draft.Template, s.GetEnvironment(req.Environment)
 	nodes := draft.Nodes
 	if req.Nodes != nil {
+		if req.ExecutionMode == dependencyExecution {
+			if err := validateOrderBarriers(draft.Nodes, req.Nodes); err != nil {
+				return nil, nil, err
+			}
+		}
 		if err := validateChangeOrderGates(draft, req.Nodes); err != nil {
 			return nil, nil, err
 		}
@@ -425,7 +441,7 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 		if len(n.DependsOn) > 0 {
 			found := false
 			for _, a := range nodes {
-				if a.ID == n.ID && digestJSON(a.DependsOn) == digestJSON(n.DependsOn) {
+				if a.ID == n.ID && !slices.ContainsFunc(n.DependsOn, func(id string) bool { return !slices.Contains(a.DependsOn, id) }) {
 					found = true
 				}
 			}
@@ -457,6 +473,9 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 	}
 	p := &DeliveryPlan{RequestDigest: deliveryRequestDigest(req), StrategyKind: draft.StrategyKind, StrategyVersion: draft.StrategyVersion, PolicySnapshot: &draft.PolicySnapshot, PolicyDigest: draft.PolicyDigest, CodePreparationID: req.CodePreparationID, Template: *tpl, Environment: *env, Reason: strings.TrimSpace(req.Reason), Nodes: nodes, Services: []DeliveryService{}, Blockers: []string{}, Warnings: []string{}}
 	p.Scene, p.PreparationRunID = req.Scene, req.PreparationRunID
+	if err := configureDeliverySchedule(p, req); err != nil {
+		return nil, nil, err
+	}
 	defer func() {
 		p.Checklist = releaseChecklist(p)
 		for _, step := range p.Checklist {
@@ -642,6 +661,11 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 		sv, artifact := s.GetService(name), s.GetArtifact(req.Artifacts[name])
 		if beforeBuild && modes[name] == "build" && artifact == nil {
 			target, e := manager.ValidateTarget(name, env.Name, p.Reason)
+			if sv != nil && p.ExecutionMode == dependencyExecution && errors.Is(e, errMissingDeliveryTarget) {
+				p.Services = append(p.Services, DeliveryService{Service: name, PendingTarget: true})
+				p.Warnings = append(p.Warnings, name+"：部署目标待配置")
+				continue
+			}
 			if e != nil {
 				p.Blockers = append(p.Blockers, e.Error())
 				continue
@@ -659,6 +683,20 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 			continue
 		}
 		target, err := manager.ValidateTarget(name, env.Name, p.Reason)
+		if p.ExecutionMode == dependencyExecution && errors.Is(err, errMissingDeliveryTarget) {
+			if e := s.artifactBuildComplete(artifact); e != nil {
+				p.Blockers = append(p.Blockers, e.Error())
+			}
+			if artifact.Digest == "" {
+				p.Blockers = append(p.Blockers, name+"：制品缺少摘要")
+			}
+			if e := s.validateArtifactBuildVariant(artifact, env.Name); e != nil {
+				p.Blockers = append(p.Blockers, e.Error())
+			}
+			p.Services = append(p.Services, DeliveryService{Service: name, Artifact: *artifact, PendingTarget: true})
+			p.Warnings = append(p.Warnings, name+"：部署目标待配置，可保留节点生成发布单")
+			continue
+		}
 		if err != nil {
 			p.Blockers = append(p.Blockers, name+"："+err.Error())
 			continue
@@ -683,12 +721,17 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 	}
 	var skippedWarnings []string
 	nodes, skippedWarnings = omitEmptyDeliveryResourceNodes(nodes, p.Scope)
+	for id := range p.SkippedNodes {
+		if nodeByID(nodes, id) == nil {
+			return nil, nil, fmt.Errorf("所选跳过节点 %s 不在本次变更范围", id)
+		}
+	}
 	p.Warnings = append(p.Warnings, skippedWarnings...)
 	if len(nodes) == 0 {
 		p.Blockers = append(p.Blockers, "本次交付没有可执行节点，请核对交付范围和流程")
 		return p, secrets, nil
 	}
-	expanded, targets, expandErr := s.expandDeliveryResourceNodes(nodes, p.Scope, env.Name)
+	expanded, targets, expandErr := s.expandDeliveryResourceNodes(nodes, p.Scope, env.Name, p.SkippedNodes)
 	if expandErr != nil {
 		p.Blockers = append(p.Blockers, expandErr.Error())
 		return p, secrets, nil
@@ -711,6 +754,28 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 	redisAllocated := map[int64]int{}
 	redisCount := 0
 	for nodeIndex, node := range nodes {
+		if _, skip := p.SkippedNodes[node.ID]; skip && node.Kind != "deploy" {
+			switch node.Kind {
+			case "mysql":
+				sqlCount++
+				for _, id := range node.ChangeIDs {
+					sqlAllocated[id]++
+				}
+			case "nacos":
+				nacosCount++
+				for _, id := range node.ChangeIDs {
+					nacosAllocated[id]++
+				}
+			case "redis":
+				redisCount++
+				for _, id := range node.ChangeIDs {
+					redisAllocated[id]++
+				}
+			case "manual":
+				manualCount++
+			}
+			continue
+		}
 		switch node.Kind {
 		case "extension":
 			binding, err := s.resolveWorkflowExtension(node, p.Services, env.Name, beforeBuild)
@@ -935,6 +1000,9 @@ func (s *Store) resolveDelivery(req DeliveryRequest, manager *ReleaseManager, be
 	if err := s.freezeOperations(p, tpl); err != nil {
 		p.Blockers = append(p.Blockers, err.Error())
 	}
+	if err := freezeScheduleDependencies(p); err != nil {
+		return nil, nil, err
+	}
 	return p, secrets, nil
 }
 
@@ -945,7 +1013,7 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 	} else if old != nil {
 		return old, nil
 	}
-	if req.StrategyKind == "standard" && req.PreflightToken == "" {
+	if (req.StrategyKind == "standard" || req.ExecutionMode == dependencyExecution) && req.PreflightToken == "" {
 		return nil, fmt.Errorf("标准交付必须先预检并使用有效凭证")
 	}
 	p, secrets, err := s.ResolveDelivery(req, manager)
@@ -982,11 +1050,24 @@ func (s *Store) CreateDeliveryRun(req DeliveryRequest, actor string, manager *Re
 		if node.Kind == "deploy" {
 			for _, app := range p.Services {
 				if node.Service == "" || node.Service == app.Service {
-					run.Steps = append(run.Steps, DeliveryStep{NodeID: node.ID, Name: node.Name + " · " + app.Service, Kind: "deploy", Service: app.Service, Status: "pending"})
+					status := "pending"
+					if app.PendingTarget {
+						status = "pending_target"
+					}
+					name := strings.TrimSuffix(node.Name, " · "+app.Service) + " · " + app.Service
+					run.Steps = append(run.Steps, DeliveryStep{NodeID: node.ID, Name: name, Kind: "deploy", Service: app.Service, Status: status})
 				}
 			}
 		} else {
 			run.Steps = append(run.Steps, DeliveryStep{NodeID: node.ID, Name: node.Name, Kind: node.Kind, Status: "pending"})
+		}
+	}
+	for i := range run.Steps {
+		step := &run.Steps[i]
+		if note, ok := p.SkippedNodes[step.NodeID]; ok {
+			step.Status = "skipped"
+			step.EndedAt = run.CreatedAt
+			step.Disposition = &DeliveryDisposition{Action: "skip", Stage: "scope", Actor: actor, At: run.CreatedAt, Comment: note}
 		}
 	}
 	execution, _ := json.Marshal(run.Steps)
@@ -1100,6 +1181,10 @@ func (s *Store) deliveryRunLedger(id int64) *DeliveryRun {
 }
 func (s *Store) DeliveryRun(id int64) *DeliveryRun {
 	v := s.deliveryRunLedger(id)
+	if v != nil && v.Plan.ExecutionMode == dependencyExecution && (v.Status == "approved" || v.Status == "running") {
+		index, _, _ := s.deliveryGraphNext(v)
+		v.NextIndex = &index
+	}
 	s.loadSQLStageBaselines(v)
 	s.projectResearchCodeState(v)
 	return v
@@ -1200,10 +1285,14 @@ func (s *Store) validateDeliveryExecution(v *DeliveryRun) (*Environment, error) 
 	// Check ALL application artifacts before any SQL/config/script side effect,
 	// not merely when eventually reaching the application's deploy node.
 	for _, app := range v.Plan.Services {
-		if err := s.artifactBuildComplete(s.GetArtifact(app.Artifact.ID)); err != nil {
+		artifact := s.GetArtifact(app.Artifact.ID)
+		if artifact == nil || artifact.Service != app.Service || artifact.Digest != app.Artifact.Digest {
+			return nil, fmt.Errorf("应用 %s 的制品与审核快照不一致", app.Service)
+		}
+		if err := s.artifactBuildComplete(artifact); err != nil {
 			return nil, err
 		}
-		if err := s.validateArtifactBuildVariant(s.GetArtifact(app.Artifact.ID), env.Name); err != nil {
+		if err := s.validateArtifactBuildVariant(artifact, env.Name); err != nil {
 			return nil, err
 		}
 	}
@@ -1211,6 +1300,9 @@ func (s *Store) validateDeliveryExecution(v *DeliveryRun) (*Environment, error) 
 }
 
 func (s *Store) advanceDeliveryRunState(v *DeliveryRun, actor string, confirmManual bool, manager *ReleaseManager, launch func(int64), retry *deliveryDeploymentRetry, comments ...string) (*DeliveryRun, error) {
+	return s.advanceSelectedDeliveryStep(v, actor, confirmManual, manager, launch, retry, nil, comments...)
+}
+func (s *Store) advanceSelectedDeliveryStep(v *DeliveryRun, actor string, confirmManual bool, manager *ReleaseManager, launch func(int64), retry *deliveryDeploymentRetry, expected *DeliveryStep, comments ...string) (*DeliveryRun, error) {
 	if v != nil && v.Plan.Template.Workbench == "research" {
 		return nil, fmt.Errorf("版本准备通过研发工作台推进，不使用部署执行器")
 	}
@@ -1222,7 +1314,35 @@ func (s *Store) advanceDeliveryRunState(v *DeliveryRun, actor string, confirmMan
 		return nil, err
 	}
 	id := v.ID
+	chosen := -1
+	if v.Plan.ExecutionMode == dependencyExecution {
+		var decision, message string
+		chosen, decision, message = s.deliveryGraphNext(v)
+		if expected != nil && (chosen < 0 || v.Steps[chosen].NodeID != expected.NodeID || v.Steps[chosen].Service != expected.Service || (confirmManual && v.Steps[chosen].Kind != "manual")) {
+			return nil, ErrRunConflict
+		}
+		if retry != nil {
+			if deliveryNodeLimitReached(v) {
+				return nil, fmt.Errorf("本单已达到节点并发上限，请等待在途节点完成")
+			}
+			chosen = -1
+			for i, step := range v.Steps {
+				if step.ReleaseID == 0 && step.NodeID == retry.NodeID && step.Service == retry.Service {
+					chosen = i
+					break
+				}
+			}
+			if chosen < 0 {
+				return nil, ErrRunConflict
+			}
+		} else if decision != "advance" && !(decision == "pause" && confirmManual && chosen >= 0 && v.Steps[chosen].Kind == "manual") {
+			return nil, fmt.Errorf("%s", message)
+		}
+	}
 	for i := range v.Steps {
+		if v.Plan.ExecutionMode == dependencyExecution && i != chosen {
+			continue
+		}
 		step := &v.Steps[i]
 		if step.Status == "success" || step.Status == "skipped" {
 			continue
@@ -1250,116 +1370,12 @@ func (s *Store) advanceDeliveryRunState(v *DeliveryRun, actor string, confirmMan
 			}
 			return nil, fmt.Errorf("执行节点快照不存在")
 		}
-		if step.Kind == "redis" {
-			if step.Status == "executing" {
-				return nil, fmt.Errorf("Redis 节点正在执行或中断待核对，禁止自动重试")
-			}
-			var plan *RedisExecutionPlan
-			for _, candidate := range v.Plan.RedisPlans {
-				if candidate.NodeID == step.NodeID {
-					plan = candidate
-					break
-				}
-			}
-			if plan == nil {
-				return nil, fmt.Errorf("Redis 节点缺少已审核快照")
-			}
-			step.Status, v.Status = "executing", "running"
-			if err := s.saveDeliveryRun(v); err != nil {
-				return nil, err
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			detail, err := s.executeRedisNode(ctx, v, plan)
-			cancel()
-			step.Detail = detail
-			step.EndedAt = time.Now().Unix()
+		if deliveryResourceKind(step.Kind) {
+			op, err := s.resourceOperation(&v.Plan, step)
 			if err != nil {
-				step.Status, v.Status = "failed", "failed"
-				if detail == "" {
-					step.Detail = err.Error()
-				}
-			} else {
-				step.Status = "success"
-			}
-			if err := s.saveDeliveryRun(v); err != nil {
 				return nil, err
 			}
-			s.Audit(actor, "execute-redis", "delivery-run", fmt.Sprint(id), map[string]any{"node": step.NodeID, "status": step.Status, "digest": v.Digest})
-			return v, nil
-		}
-		if step.Kind == "nacos" {
-			if step.Status == "executing" {
-				return nil, fmt.Errorf("Nacos 节点正在执行或中断待核对，禁止自动重试")
-			}
-			var plan *NacosExecutionPlan
-			for _, candidate := range v.Plan.NacosPlans {
-				if candidate.NodeID == step.NodeID {
-					plan = candidate
-					break
-				}
-			}
-			if plan == nil {
-				return nil, fmt.Errorf("Nacos 节点缺少已审核快照")
-			}
-			step.Status, v.Status = "executing", "running"
-			if err := s.saveDeliveryRun(v); err != nil {
-				return nil, err
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			detail, err := s.executeNacosNode(ctx, v, plan)
-			cancel()
-			step.Detail = detail
-			step.EndedAt = time.Now().Unix()
-			if err != nil {
-				step.Status, v.Status = "failed", "failed"
-				if detail == "" {
-					step.Detail = err.Error()
-				}
-			} else {
-				step.Status = "success"
-			}
-			if err := s.saveDeliveryRun(v); err != nil {
-				return nil, err
-			}
-			s.Audit(actor, "execute-nacos", "delivery-run", fmt.Sprint(id), map[string]any{"node": step.NodeID, "status": step.Status, "digest": v.Digest})
-			return v, nil
-		}
-		if step.Kind == "mysql" {
-			if step.Status == "executing" {
-				return nil, fmt.Errorf("SQL 节点正在执行或上次执行中断，请检查执行台账；禁止自动重复执行")
-			}
-			var plan *SQLExecutionPlan
-			for _, candidate := range v.Plan.SQLPlans {
-				if candidate.NodeID == step.NodeID {
-					plan = candidate
-					break
-				}
-			}
-			if plan == nil {
-				return nil, fmt.Errorf("SQL 节点缺少已审核执行计划")
-			}
-			step.Status, v.Status = "executing", "running"
-			if err := s.saveDeliveryRun(v); err != nil {
-				return nil, err
-			}
-			ctx, cancel := sqlExecutionContext()
-			detail, err := s.executeSQLNode(ctx, v, plan)
-			cancel()
-			step.Detail = detail
-			step.EndedAt = time.Now().Unix()
-			if err != nil {
-				step.Status, v.Status = "failed", "failed"
-				if step.Detail == "" {
-					step.Detail = err.Error()
-				}
-			} else {
-				step.Status = "success"
-			}
-			if saveErr := s.saveDeliveryRun(v); saveErr != nil {
-				return nil, saveErr
-			}
-			s.Audit(actor, "execute-sql", "delivery-run", fmt.Sprint(id), map[string]any{"node": step.NodeID, "status": step.Status, "digest": v.Digest})
-			return v, nil
+			return v, s.dispatchResourceStep(v, i, actor, op)
 		}
 		if step.ReleaseID > 0 {
 			child := s.GetReleaseOrder(step.ReleaseID)
@@ -1370,7 +1386,7 @@ func (s *Store) advanceDeliveryRunState(v *DeliveryRun, actor string, confirmMan
 				step.Status = "success"
 				step.EndedAt = time.Now().Unix()
 			} else if !releaseStatusActive(child.Status) {
-				step.Status, v.Status = "failed", "failed"
+				step.Status, v.Status = "failed", deliveryFailureStatus(v)
 				if child.Status == "failed" {
 					v.Status = "running"
 				}
@@ -1516,7 +1532,7 @@ func (s *Store) advanceDeliveryRunState(v *DeliveryRun, actor string, confirmMan
 		}
 		return v, nil
 	}
-	v.Status = "success"
+	v.Status = deliveryCompletedStatus(v)
 	if err := s.saveDeliveryRun(v); err != nil {
 		return nil, err
 	}
@@ -1524,6 +1540,7 @@ func (s *Store) advanceDeliveryRunState(v *DeliveryRun, actor string, confirmMan
 }
 
 func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManager) {
+	st.registerDispositionRoute(mux)
 	registerPublicationRoutes(mux, st, manager)
 	registerDeliveryDeploymentRecoveryRoutes(mux, st, manager)
 	registerOperationRoutes(mux, st)
@@ -1623,6 +1640,13 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 				p.PreflightToken, p.PreflightExpires = st.signDeliveryPreflight(req, p, secrets, actor(r))
 			}
 			p.NacosPlans = publicNacosPlans(p.NacosPlans)
+			if err == nil && p.ExecutionMode == dependencyExecution {
+				reply(w, struct {
+					*DeliveryPlan
+					InitialDispatch []string `json:"initial_dispatch"`
+				}{p, initialDeliveryDispatch(p)}, nil)
+				return
+			}
 		}
 		reply(w, p, err)
 	})
@@ -1666,6 +1690,8 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 			var req struct {
 				Digest        string `json:"digest"`
 				ConfirmManual bool   `json:"confirm_manual"`
+				Revision      int64  `json:"revision"`
+				Service       string `json:"service"`
 				NodeID        string `json:"node_id"`
 				Comment       string `json:"comment"`
 			}
@@ -1686,7 +1712,7 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 					return
 				}
 				if action == "advance" {
-					if step, node := researchNextNode(v); node != nil && step.Kind == "manual" && (req.Digest != v.Digest || req.NodeID != node.ID) {
+					if step, node := researchNextNode(v); v.Plan.ExecutionMode != dependencyExecution && node != nil && step.Kind == "manual" && (req.Digest != v.Digest || req.NodeID != node.ID) {
 						reply(w, nil, fmt.Errorf("人工处理节点已变化，请刷新后核对；不会代替确认下一项"))
 						return
 					}
@@ -1695,7 +1721,20 @@ func registerDeliveryRoutes(mux *http.ServeMux, st *Store, manager *ReleaseManag
 						reply(w, nil, fmt.Errorf("自动协调器运行中，请先暂停后续步骤"))
 						return
 					}
-					v, err = st.AdvanceDeliveryRun(v.ID, actor(r), req.ConfirmManual, manager, req.Comment)
+					var expected *DeliveryStep
+					if v.Plan.ExecutionMode == dependencyExecution && (req.ConfirmManual || req.Revision != 0) {
+						if req.Digest != v.Digest || req.Revision != v.Revision || (req.ConfirmManual && req.NodeID == "") {
+							reply(w, nil, ErrRunConflict)
+							return
+						}
+						if req.NodeID != "" {
+							expected = &DeliveryStep{NodeID: req.NodeID, Service: req.Service}
+						} else if idx, _, _ := st.deliveryGraphNext(v); idx >= 0 {
+							reply(w, nil, ErrRunConflict)
+							return
+						}
+					}
+					v, err = st.advanceSelectedDeliveryStep(v, actor(r), req.ConfirmManual, manager, func(id int64) { go manager.startNextBatch(id) }, nil, expected, req.Comment)
 				} else {
 					if v.Status != "pending_approval" && v.Status != "approved" {
 						reply(w, nil, fmt.Errorf("仅未执行的编排可取消；运行中的子发布单请单独停止"))
