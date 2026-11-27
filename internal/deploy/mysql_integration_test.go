@@ -181,7 +181,7 @@ func TestMySQLStoreSmoke(t *testing.T) {
 	if _, err := st.SetReleaseVersionReady(version.ID); err != nil {
 		t.Fatal(err)
 	}
-	tpl := &DeliveryTemplate{Name: "MySQL 编排", Mode: "version", Owner: "local", Nodes: []DeliveryNode{{ID: "check", Kind: "manual", Name: "人工验收", Instructions: "确认数据库验证通过"}}}
+	tpl := &DeliveryTemplate{Name: "MySQL 编排", Mode: "version", Owner: "local", Nodes: []DeliveryNode{{ID: "check", Kind: "manual", Name: "人工验收", Instructions: "确认数据库验证通过", ChangeIDs: []int64{change.ID}}}}
 	if err := st.SaveDeliveryTemplate(tpl); err != nil {
 		t.Fatal(err)
 	}
