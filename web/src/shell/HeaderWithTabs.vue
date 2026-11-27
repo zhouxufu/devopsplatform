@@ -85,6 +85,7 @@ const closeActions = [
               :value="String(tab.value)"
               :title="tab.label"
               class="h-10 flex-none gap-2 rounded-none px-3"
+              @dblclick.left.prevent.stop="canClose('current', tab.value) && $emit('tab-close', 'current', tab.value)"
               @mousedown.middle.prevent
               @auxclick.middle.prevent.stop="canClose('current', tab.value) && $emit('tab-close', 'current', tab.value)"
             >
