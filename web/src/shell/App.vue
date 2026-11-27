@@ -1,6 +1,6 @@
 <script setup>
 
-import {AUTH_REQUIRED_EVENT, resetPlatformAuth} from '../shared/platformAuth.js'
+import {AUTH_REQUIRED_EVENT, resetPlatformAuth, requirePlatformLogin} from '../shared/platformAuth.js'
 import {workspaceTitle as formatWorkspaceTitle} from './workspaceTitle.js'
 import PersonalHome from './PersonalHome.vue'
 import LoginView from './LoginView.vue'
@@ -20,7 +20,7 @@ import {randomUUID} from '../shared/uuid.js'
 import {reactive, ref, onMounted, onBeforeUnmount, computed, nextTick, watch} from 'vue'
 import TimeRangeControl from './TimeRangeControl.vue'
 import OptionPicker from '../shared/components/OptionPicker.vue'
-import {confirmDialog} from '../shared/shadcnFeedback.js'
+import {confirmDialog,finishConfirmation} from '../shared/shadcnFeedback.js'
 
 import {themeDark, themeSyncPayload, toggleTheme} from '../shared/composables/theme.js'
 
@@ -95,6 +95,7 @@ onBeforeUnmount(()=>workspaceHistory.dispose())
 let loginResumeURL='/'
 watch(()=>st.showLogin,value=>{document.documentElement.toggleAttribute('data-console-auth-page',value);document.title=value?'登录 · DevOps 控制台':'DevOps 控制台'},{immediate:true})
 function currentWorkspaceHash(w){
+ if(w.loginRedirected)return w.hash
  try{if(w.el.contentWindow.location.href!=='about:blank'&&w.el.contentWindow.location.origin===location.origin)return runtimeWorkspaceHash(w.el.contentWindow.location.hash||'#/',w.plugin.name)}catch{}
  return w.hash
 }
@@ -220,6 +221,15 @@ function openPlugin(p, hash = '', source=activeWorkspace.value, restored=null) {
     const workspace=st.workspaces.find(w=>w.id===ws.id)
     if(!workspace)return
     try{if(el.contentWindow.location.href==='about:blank')return}catch{}
+    // Preserve the last plugin route when its document was redirected to login.
+    // This frame must be reloaded only after explicit successful authentication.
+    try{if(el.contentWindow.location.pathname==='/login'){
+      workspace.loginRedirected=true
+      workspace.ready=false
+      el.style.visibility='hidden'
+      requirePlatformLogin()
+      return
+    }}catch{}
     const readRoute=()=>{try{const target=st.workspaces.find(w=>w.id===ws.id);if(target)target.hash=runtimeWorkspaceHash(el.contentWindow.location.hash,p.name);rememberWindows()}catch{}}
     readRoute()
     try{
@@ -320,7 +330,8 @@ function requireLogin(){
  if(st.showLogin)return
  loginResumeURL=location.pathname==='/'?location.pathname+location.search+location.hash:'/'
  st.reauthUser=st.me.username||'';st.username=st.reauthUser||st.username;st.pwd='';st.loginError='';st.loginExpired=!!st.reauthUser;st.showLogin=true
- history.replaceState(history.state,'',loginPageURL(loginReturnTarget(),st.loginExpired))
+ history.replaceState(history.state,'',loginPageURL(loginResumeURL,st.loginExpired))
+ globalSearchOpen.value=false;st.plusOpen=false;finishConfirmation(false)
  for(const ws of st.workspaces)ws.el.contentWindow?.postMessage({type:'workspace.visibility',active:false},location.origin)
 }
 function loginRouteChanged(){if(st.showLogin&&location.pathname!=='/login')history.replaceState(history.state,'',loginPageURL(loginReturnTarget(),st.loginExpired))}
@@ -336,7 +347,10 @@ async function login() {
   if(st.loginExpired&&st.reauthUser===result.username){
    await loadIdentity();st.showLogin=false;st.loginExpired=false
    history.replaceState(history.state,'',loginResumeURL)
-   for(const ws of st.workspaces)ws.el.contentWindow?.postMessage({type:'platform.auth.restored'},location.origin)
+   for(const ws of st.workspaces){
+    if(ws.loginRedirected){ws.loginRedirected=false;ws.el.src=ws.plugin.url+ws.hash}
+    else ws.el.contentWindow?.postMessage({type:'platform.auth.restored'},location.origin)
+   }
    switchWs(st.active)
    return
   }
@@ -428,7 +442,7 @@ window.addEventListener('message', e => {
   // 只响应当前工作区 iframe，避免页面中其他 frame 伪造上下文消息。
   if (e.origin !== location.origin) return
   const ws = st.workspaces.find(w => w.el.contentWindow === e.source)
-  if(ws&&e.data?.type==='platform.auth.required'){requireLogin();return}
+  if(ws&&e.data?.type==='platform.auth.required'){requirePlatformLogin();return}
   if(ws&&e.data?.type==='workspace.history'){workspaceHistory.fromFrame(ws.el.name);return}
   if(ws&&e.data?.type==='workspace.route'){ws.hash=currentWorkspaceHash(ws);rememberWindows()}
   if(ws&&e.data?.type==='workspace.label'&&typeof e.data.label==='string')ws.label=e.data.label.trim().slice(0,160)
@@ -512,7 +526,9 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
 <template>
 <TooltipProvider>
 <LoginView v-if="st.showLogin" v-model:username="st.username" v-model:password="st.pwd" :busy="st.loginBusy" :error="st.loginError" :expired="st.loginExpired" :preserve-workspace="!!st.reauthUser" @submit="login"/>
-<SidebarProvider v-show="authReady&&!st.showLogin" class="h-svh min-h-0" :style="{'--sidebar-width':'var(--console-sidebar-width,15rem)',...(activeWorkspace?.plugin?.name==='api-center'&&/^#\/(documents|reports)(\?|$)/.test(activeWorkspace.hash||'')?{'--sidebar-width':'12.5rem'}:{})}" :inert="st.showLogin?true:undefined">
+<!-- v-show must target a native element: SidebarProvider has a provider root. -->
+<div v-show="authReady&&!st.showLogin" class="h-svh" :inert="st.showLogin?true:undefined" data-console-workspace>
+<SidebarProvider class="h-svh min-h-0" :style="{'--sidebar-width':'var(--console-sidebar-width,15rem)',...(activeWorkspace?.plugin?.name==='api-center'&&/^#\/(documents|reports)(\?|$)/.test(activeWorkspace.hash||'')?{'--sidebar-width':'12.5rem'}:{})}">
  <ConsoleNavigation :plugins="st.plugins" :workspace="activeWorkspace" :home="st.active===0" :admin="st.me.role==='admin'" @home="openHome" @open="navigationOpen" @platform="openPlatformWorkspace"/>
  <SidebarInset class="h-svh min-w-0 overflow-hidden">
   <HeaderWithTabs
@@ -566,9 +582,10 @@ import {Badge,Button,Checkbox,ContextMenu,ContextMenuContent,ContextMenuItem,Con
   </div>
  </SidebarInset>
 </SidebarProvider>
-<Dialog :open="!!renameWorkspace" @update:open="v=>{if(!v)renameWorkspace=null}"><DialogContent class="sm:max-w-sm"><DialogHeader><DialogTitle>重命名工作区</DialogTitle><DialogDescription class="sr-only">仅修改当前页签名称</DialogDescription></DialogHeader><form class="space-y-5" @submit.prevent="saveWorkspaceName"><Field><FieldLabel for="workspace-name">工作区名称</FieldLabel><Input id="workspace-name" v-model="workspaceName" maxlength="60" required/></Field><DialogFooter><Button type="button" variant="outline" @click="renameWorkspace=null">取消</Button><Button type="submit" :disabled="!workspaceName.trim()">保存名称</Button></DialogFooter></form></DialogContent></Dialog>
-<MembersDialog :show="st.showUsers" :current="st.me" @close="st.showUsers=false;loadIdentity()"/>
-<Dialog :open="st.showSetup"><DialogContent :show-close-button="false" class="flex max-h-[94dvh] flex-col sm:max-w-4xl" @escape-key-down="e=>e.preventDefault()" @interact-outside="e=>e.preventDefault()"><DialogHeader><DialogTitle>配置团队的发布环境</DialogTitle><DialogDescription class="sr-only">选择模板，配置环境策略，确认创建</DialogDescription></DialogHeader>
+</div>
+<Dialog :open="!st.showLogin&&!!renameWorkspace" @update:open="v=>{if(!v)renameWorkspace=null}"><DialogContent class="sm:max-w-sm"><DialogHeader><DialogTitle>重命名工作区</DialogTitle><DialogDescription class="sr-only">仅修改当前页签名称</DialogDescription></DialogHeader><form class="space-y-5" @submit.prevent="saveWorkspaceName"><Field><FieldLabel for="workspace-name">工作区名称</FieldLabel><Input id="workspace-name" v-model="workspaceName" maxlength="60" required/></Field><DialogFooter><Button type="button" variant="outline" @click="renameWorkspace=null">取消</Button><Button type="submit" :disabled="!workspaceName.trim()">保存名称</Button></DialogFooter></form></DialogContent></Dialog>
+<MembersDialog :show="!st.showLogin&&st.showUsers" :current="st.me" @close="st.showUsers=false;loadIdentity()"/>
+<Dialog :open="!st.showLogin&&st.showSetup"><DialogContent :show-close-button="false" class="flex max-h-[94dvh] flex-col sm:max-w-4xl" @escape-key-down="e=>e.preventDefault()" @interact-outside="e=>e.preventDefault()"><DialogHeader><DialogTitle>配置团队的发布环境</DialogTitle><DialogDescription class="sr-only">选择模板，配置环境策略，确认创建</DialogDescription></DialogHeader>
  <Stepper :model-value="st.setupStep" class="flex w-full gap-2"><StepperItem v-for="(label,index) in ['选择模板','配置策略','确认创建']" :key="label" :step="index+1" class="relative flex flex-1 flex-col items-center gap-2"><StepperTrigger class="pointer-events-none flex items-center gap-2"><StepperIndicator>{{index+1}}</StepperIndicator><StepperTitle class="text-sm">{{label}}</StepperTitle></StepperTrigger><StepperSeparator v-if="index<2" class="absolute top-4 left-[calc(50%+70px)] h-px w-[calc(100%-140px)] bg-border"/></StepperItem></Stepper>
  <div class="min-h-0 overflow-auto py-5"><div v-if="st.setupStep===1" class="grid gap-3 sm:grid-cols-3"><Button v-for="entry in [{id:'simple',label:'简单流程',detail:'开发 → 测试 → 生产'},{id:'standard',label:'标准流程',detail:'开发 → 测试 → 预发 → 生产'},{id:'custom',label:'完全自定义',detail:'从空环境开始'}]" :key="entry.id" :variant="st.setupTemplate===entry.id?'secondary':'outline'" class="h-28 flex-col gap-2" @click="chooseEnvironmentTemplate(entry.id)"><strong>{{entry.label}}</strong><span class="text-xs text-muted-foreground">{{entry.detail}}</span></Button></div>
  <div v-else-if="st.setupStep===2" class="space-y-4"><div class="flex items-center justify-between"><ContextHelp text="审核人员从平台成员中选择；发起人不能审批自己的发布单。环境后续可修改，已被引用的环境不能直接删除。"/><Button variant="outline" size="sm" @click="addSetupEnvironment"><PlusIcon class="size-3.5"/>添加环境</Button></div><section v-for="(row,index) in st.setupRows" :key="index" class="grid items-start gap-4 rounded-lg border p-4 sm:grid-cols-2"><Field><FieldLabel :for="'env-id-'+index">环境标识</FieldLabel><Input :id="'env-id-'+index" v-model="row.name" placeholder="如 uat"/></Field><Field><FieldLabel :for="'env-label-'+index">显示名称</FieldLabel><Input :id="'env-label-'+index" v-model="row.display_name" placeholder="如 用户验收"/></Field><div class="flex items-center gap-4"><Field orientation="horizontal"><Checkbox :id="'env-reason-'+index" v-model="row.require_reason" :disabled="!row.protected"/><FieldLabel :for="'env-reason-'+index">原因必填</FieldLabel></Field><Field orientation="horizontal"><Checkbox :id="'env-protected-'+index" v-model="row.protected"/><FieldLabel :for="'env-protected-'+index">审批保护</FieldLabel></Field></div><Field><FieldLabel :for="'env-reviewer-'+index">审批人</FieldLabel><OptionPicker :id="'env-reviewer-'+index" v-model="row.approver_list" :disabled="!row.protected" multiple :options="st.users.filter(u=>u.enabled).map(u=>({value:u.username,label:u.display_name+' · '+u.username}))" placeholder="选择审核人员"/></Field><Button variant="ghost" size="sm" class="justify-self-end text-destructive sm:col-span-2" :disabled="st.setupRows.length<=1" @click="removeSetupEnvironment(index)">移除此环境</Button></section></div>
