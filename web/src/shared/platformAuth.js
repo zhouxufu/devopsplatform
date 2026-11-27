@@ -6,6 +6,7 @@ export const AUTH_REQUIRED_EVENT='platform-auth-required'
 export const AUTH_RESTORED_EVENT='platform-auth-restored'
 let guard
 export function resetPlatformAuth(){guard?.reset()}
+export function requirePlatformLogin(){guard?.requireLogin()}
 export function installPlatformAuthGuard({shell=false}={}){
  if(guard)return guard
  const nativeFetch=window.fetch.bind(window)
@@ -16,8 +17,8 @@ export function installPlatformAuthGuard({shell=false}={}){
   if(expired)return
   expired=true
   window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT))
-  if(shell)return
   if(window.parent!==window){window.parent.postMessage({type:'platform.auth.required'},location.origin);return}
+  if(shell)return
   const target=safePluginReturn(location.href)
   location.replace(loginPageURL(target||'/',true))
  }

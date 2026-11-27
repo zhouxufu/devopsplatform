@@ -3728,3 +3728,16 @@ fixture.html 为临时组件验收页备份，测试后已从 web/ 移除。只�
 - Ego + 本地19844内存夹具实测：全部44条、指派给我22条、第二页刷新保留2/2、关注分类空状态、503读取失败后重试恢复；旧偏好模拟包含关键词／closed／来源／级别，重载仍读全部44条。最终列表输入框0；1440／900／390px页面均无横向溢出，横向滚动仅在表格内；分页底部884px小于900px视口。1440px表格净宽／scrollWidth均1153px。已目视核对 final-desktop.png 与 dark.png；深色是隔离组件根主题切换，不计为完整壳主题联动验收。
 - 第二页打开临时工作项21携带 return_to=/work，返回列表仍2/3；列设置菜单可展开。详情夹具只提供工作项1，工作项21详情内容未验收，仅验证返回路径与列表KeepAlive保留。没有修改任何真实工作项、发布或资源；夹具业务写请求0，已停止且退出码0，浏览器验收空间已结束。
 - 本轮未重跑后端全量race，上一轮已确认原生Windows Agent源码／测试的Stat_t／Flock／Kill编译限制；不作完整发布就绪声明。未重跑个人工作台嵌入列表、认证过期及真实来源连接的浏览器矩阵；生产内嵌资源、运行服务与远端环境未更新。
+
+### 2026-11-27 登录过期跳转独立登录页（本地修改）
+
+- 已修复 P1 实测问题：未登录插件文档跳转 `/login` 后在 iframe 中挂载第二套控制台；壳的 `v-show` 原本作用于 Provider 组件，未可靠隐藏实际布局。现在 iframe 内的壳入口只通知所属工作区，由最外层切换 `/login`；主界面通过原生 DOM 隐藏并 inert，登录采用不透明的独立整页布局。保留既有工作区隔离、前端草稿和安全返回地址白名单，不把 SQL／配置内容写入视图记忆。
+- 插件文档已经因 HTTP 303 被替换时，冻结其最后插件路由，成功登录后仅恢复这些已失去原文档的 frame；其他存活 frame 原地保留。来自工作区的过期通知也会暂停壳的受保护 API。原提交不重放，登录前关闭搜索和取消待确认动作；壳内成员、环境初始化和重命名弹层在登录页暂停显示。
+- 生产 shell + `scripts/serve-login-fixture.mjs` 合成工作区的隔离浏览器实测通过：POST 遇平台 401 后只有一份最外层登录表单，导航隐藏，密码框获得焦点；错误密码保留登录和草稿；同账号恢复原 frame、原路由、未提交 SQL 文本；两次同步表单提交只产生一次登录请求。失败业务提交仅发送一次，成功登录后未重试，夹具业务写入为 0。来源系统 401 且平台会话仍有效时不跳登录。
+- 实测插件刷新过期：子 frame 跳到 `/login` 后正文为空，不渲染套娃控制台；最外层登录后准确恢复原插件 `#/versions`，另一个工作区的未提交文本保留。搜索弹层打开期间过期，弹层关闭，登录输入与页面 pointer-events 正常；登录页执行返回后仍不显示工作区。改用另一账号登录不继承原账号的存活草稿。独立插件入口的 HTTP 跳转、主动请求过期及重新登录均保留 `?embedded=0#/work/42`。
+- 已修复 P2 实测问题：小高度窗口中登录 Card 被 flex 压缩并裁掉按钮。改为不压缩的内容和自动边距，整页纵向滚动。最终 1115×518、390×844、390×320 均无页面横向溢出；320px 高度的滚动内容为 431px，聚焦后登录按钮可见。浅／深色截图已目视检查，窄屏与小高度截图已检查；未测试实体移动设备和软键盘。
+- 最终全部 **409 项前端测试**通过；生产构建及组件／表格／样式隔离检查通过，`git diff --check` 通过。`go test -race -ldflags=-linkmode=external -count=1 -timeout=2m ./internal/platform -run 'TestAuthMiddleware|TestExpiredConsole|TestSourceUnauthorized|TestLoginPageRoute|TestLoginAndUserManagementAPI'` 通过。
+- 已实际尝试全量 `go test -race -ldflags=-linkmode=external -count=1 -timeout=30m ./...`，现有 Agent 的 `syscall.Stat_t/Flock/Kill` 在 Windows 编译失败。确认失败后终止本轮 Go 进程及其 deploy 测试子进程，未取得其他包完整结果，不宣称全量后端通过或上线就绪。此次未修改后端、发布配置或运行二进制，未访问真实外部鉴权／执行服务，未部署或提交。
+- 证据在 `artifacts/login-page-20261127/`：frontend-tests.log、build.log、backend-race.log、backend-auth-race.log、expiry.json、reauth.json、frame-refresh.json、account-switch.json、standalone.json、responsive-fixed.json、api-calls.json、login-*.png 与分轮浏览器脚本。原生 dblclick 的第二击因首次登录已隐藏按钮而定位超时，另用两次同步表单提交验证防重；空 frame 正文首次断言未去除换行，修正断言后完成验证，均未算作产品失败。初版夹具的个人待办返回格式不匹配产生合成提示，已修正夹具路由，个人待办业务不属于本次验收。临时 19849 夹具正常退出码 0，端口已关闭；Ego 隔离空间已结束，用户原浏览器会话与服务保留。
+
+- main 提交前适配验证：只移入登录修复、对应回归测试及夹具，保留 main 已有快捷搜索、iframe 快捷键和文档侧栏宽度；原工作区其他修改保持。main 上全部420项前端测试、生产构建及组件／表格／样式隔离检查通过，差异检查通过；日志在原工作区 artifacts/login-page-20261127/main-frontend-tests.log、main-build.log。本次适配 main 未重复浏览器矩阵或后端全量 race，不计为新增实测通过；仅提交源码与记录，不更新内嵌资源、运行二进制或远端环境。
