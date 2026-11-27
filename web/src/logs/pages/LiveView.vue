@@ -7,7 +7,7 @@ import LogEventRow from '../LogEventRow.vue'
 import {logRowKey} from '../logReading.js'
 import {evidenceWorkspace} from '../../shared/bugEvidence.js'
 import {useWS} from '../../shared/composables/ws.js'
-import {serviceNames} from '../services.js'
+import {useLogScopeOptions} from '../useLogScopeOptions.js'
 import BugEvidenceLink from '../../shared/components/BugEvidenceLink.vue'
 import {evidenceLogInput} from '../../shared/bugEvidence.js'
 const bugEvidence=ref(null),bugTitle=ref('')
@@ -22,7 +22,7 @@ import {LOG_LEVELS} from '../levels.js'
 
 const svc = ref(''), environment = ref(''), lv = ref([]), kw = ref('')
 const platformContext = inject('platformContext', ref(null))
-const services = ref([])
+const {applicationOptions, environmentOptions} = useLogScopeOptions()
 const hits = ref([]), pending = ref(0), connected = ref(false), wrap=ref(false)
 const streamEl = ref(null)
 const openHit = ref(null), paused = ref(false)
@@ -99,8 +99,13 @@ function connect() {
     onClose: () => { if (current === connection) connected.value = false },
   })
 }
-onMounted(async () => {
-  services.value = serviceNames(await fetch('api/services').then(r => r.json()).catch(() => ({})))
+function scopeChanged() {
+  if (window.parent !== window) {
+    window.parent.postMessage({type:'context.update', service:svc.value, environment:environment.value}, location.origin)
+  }
+  connect()
+}
+onMounted(() => {
   if (platformContext.value) { svc.value = platformContext.value.service || ''; environment.value = platformContext.value.environment || '' }
   connect()
 })
@@ -121,7 +126,14 @@ import {InputGroup,InputGroupInput,InputGroupAddon,InputGroupButton} from '../..
 
 import {XIcon,WrapTextIcon} from '@lucide/vue'
 </script>
-<template><div class="log-page"><div class="log-page-heading"><PageHeader compact title="实时日志" help="查看本地采集的实时日志，按服务、级别和关键词过滤。"/></div><div class="live-toolbar"><OptionPicker v-model="svc" :options="services" all-label="全部服务" :style="{width:'130px',maxWidth:'100%'}" @change="connect"/><span v-if="environment" style="color:var(--brand);font-size:.75rem">环境 {{ environment }}</span><OptionPicker v-model="lv" :options="LOG_LEVELS" multiple placeholder="全部级别（可多选）" all-label="全部级别（可多选）" :style="{width:'220px',maxWidth:'100%'}" @change="connect"/><InputGroup style="flex:1;min-width:180px" class="min-w-0 "><InputGroupInput v-model="kw" placeholder="实时过滤，例如 level:ERROR timeout*" @keydown.enter="connect"/><InputGroupAddon align="inline-end"><InputGroupButton v-if="kw" :disabled="false" size="icon-xs" aria-label="清空输入" @click="kw='' "><XIcon/></InputGroupButton></InputGroupAddon></InputGroup><HelpTip :text="QUERY_HELP" align="right"/><Button @click="connect" variant="default" size="default" type="button">应用</Button><Button @click="wrap=!wrap" :aria-pressed="wrap" :variant="wrap?'secondary':'outline'" size="default" type="button"><WrapTextIcon/>换行</Button><span :style="{ color: connected ? 'var(--ok)' : 'var(--dim)', fontSize: '.75rem' }">{{ connected ? '● Live' : '○ 未连接' }}</span></div>
+<template><div class="log-page"><div class="log-page-heading"><PageHeader compact title="实时日志" help="查看本地采集的实时日志，按服务、环境、级别和关键词过滤。"/></div>
+<div class="live-toolbar">
+  <OptionPicker v-model="svc" aria-label="日志应用" :options="applicationOptions" all-label="全部服务" class="w-32" @change="scopeChanged"/>
+  <OptionPicker v-model="environment" aria-label="日志环境" :options="environmentOptions" all-label="全部环境" class="w-32" @change="scopeChanged"/>
+  <OptionPicker v-model="lv" :options="LOG_LEVELS" multiple placeholder="全部级别（可多选）" all-label="全部级别（可多选）" class="w-44" @change="connect"/>
+  <InputGroup style="flex:1;min-width:180px" class="min-w-0"><InputGroupInput v-model="kw" placeholder="实时过滤，例如 level:ERROR timeout*" @keydown.enter="connect"/><InputGroupAddon align="inline-end"><InputGroupButton v-if="kw" size="icon-xs" aria-label="清空输入" @click="kw=''"><XIcon/></InputGroupButton></InputGroupAddon></InputGroup>
+  <HelpTip :text="QUERY_HELP" align="right"/><Button @click="connect" variant="default" size="default" type="button">应用</Button><Button @click="wrap=!wrap" :aria-pressed="wrap" :variant="wrap?'secondary':'outline'" size="default" type="button"><WrapTextIcon/>换行</Button><span :style="{ color: connected ? 'var(--ok)' : 'var(--dim)', fontSize: '.75rem' }">{{ connected ? '● Live' : '○ 未连接' }}</span>
+</div>
 <div ref="streamEl" @scroll="onScroll" class="stream">
   <LogEventRow v-for="hit in hits" :key="logRowKey(hit)" :hit="hit" :expanded="openHit===hit" :service="svc" :environment="environment" :wrap="wrap" @toggle="toggleHit(hit)" @context="viewContext(hit)" @bug="linkLogBug(hit)"/>
   <div v-if="!hits.length" class="p-4 text-sm text-muted-foreground">等待日志…</div>

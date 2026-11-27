@@ -1,6 +1,7 @@
 <script setup>
 
 import LogEventRow from '../LogEventRow.vue'
+import {useLogScopeOptions} from '../useLogScopeOptions.js'
 import {logRowKey, queryPattern} from '../logReading.js'
 import PageHeader from '../../shared/components/PageHeader.vue'
 import UiIcon from '../../shared/components/UiIcon.vue'
@@ -30,12 +31,8 @@ const hasLinkedEvidence=linkedRequest.evidence==='1'
 const hasLinkedRange=(/^[a-f0-9]{32}$/.test(linkedRequestID)||hasLinkedEvidence)&&linkedRange.every(Number.isFinite)&&linkedRange[0]>0&&linkedRange[1]>linkedRange[0]&&linkedRange[1]-linkedRange[0]<=86400000
 let linkedRangeApplied=false
 const embedded = window.parent !== window
-const services = inject('logServices', ref([]))
 const platformContext = inject('platformContext', ref(null))
-const contextOptions=inject('logContextOptions',ref({applications:[],environments:[]}))
-const environments=ref([])
-const applicationOptions=computed(()=>embedded?contextOptions.value.applications:services.value)
-const environmentOptions=computed(()=>embedded?contextOptions.value.environments:environments.value)
+const {applicationOptions, environmentOptions} = useLogScopeOptions()
 const svc = ref(''), environment = ref(''), host = ref(''), lv = ref([]), kw = ref('')
 if(/^[a-f0-9]{32}$/.test(linkedRequestID)){kw.value=linkedRequestID;svc.value=String(linkedRequest.service||'').slice(0,191);environment.value=String(linkedRequest.environment||'').slice(0,191)}
 if(hasLinkedEvidence){svc.value=String(linkedRequest.service||'').slice(0,191);environment.value=String(linkedRequest.environment||'').slice(0,191);host.value=String(linkedRequest.host||'').slice(0,191);if(/^[A-Za-z0-9_-]{8,128}$/.test(String(linkedRequest.trace_id||'')))kw.value=String(linkedRequest.trace_id)}
@@ -138,7 +135,7 @@ function timeRangeChanged(value) { recentMinutes.value = inferRecentMinutes(valu
 function useRecentRange(){recentMinutes.value=DEFAULT_RECENT_MINUTES;range.value=recentRange();updateContext()}
 
 watch(platformContext, applyPlatformContext)
-onMounted(() => { if(!embedded)fetch('api/environments').then(r=>r.ok?r.json():[]).then(v=>{environments.value=Array.isArray(v)?v.map(e=>typeof e==='string'?e:{value:e.name,label:e.display_name||e.name}):[]}).catch(()=>{});discoverSources();discoveryTimer=setInterval(discoverSources,10000);if (!applyPlatformContext(platformContext.value)) search() })
+onMounted(() => { discoverSources();discoveryTimer=setInterval(discoverSources,10000);if (!applyPlatformContext(platformContext.value)) search() })
 onBeforeUnmount(()=>{clearInterval(discoveryTimer);activeController?.abort();searchRequest++})
 
 import OptionPicker from '../../shared/components/OptionPicker.vue'
