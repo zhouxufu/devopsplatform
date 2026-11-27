@@ -1,1 +1,0 @@
-import{d as o,o as r,A as t,B as n,e as c,z as d,b as l}from"./OptionPicker-0iTB1buH.js";const u=o({__name:"CardFooter",props:{class:{}},setup(e){const s=e;return(a,p)=>(r(),t("div",{"data-slot":"card-footer",class:n(c(d)("bg-muted/50 rounded-b-xl border-t p-4 group-data-[size=sm]/card:p-3 flex items-center",s.class))},[l(a.$slots,"default")],2))}});export{u as _};

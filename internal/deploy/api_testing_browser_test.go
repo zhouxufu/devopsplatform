@@ -116,7 +116,7 @@ func TestAPITestingBrowserFixture(t *testing.T) {
 		}
 		c := apiTestCase{Name: "跨应用订单查询", Visibility: "team", Steps: []apiTestStep{
 			{Name: "订单查询", Service: "orders", Request: apitest.Request{Path: "/orders/7", Assertions: []apitest.Assertion{{Type: "status", Expected: "200"}}}, Extractions: []apitest.Extraction{{Name: "order_id", Source: "json", Path: "/data/id"}}},
-			{Name: "其他应用核对", Service: "other", Request: apitest.Request{Path: "/orders/{{step.order_id}}", Assertions: []apitest.Assertion{{Type: "json", Path: "/data/id", Expected: "7"}}}},
+			{Name: "其他应用核对", Service: "other", Request: apitest.Request{Path: "/orders/{{step.order_id}}", Assertions: []apitest.Assertion{{Type: "json", Path: "/data/id", Expected: `"7"`}}}},
 		}}
 		w := apiTestingRequest(h, "POST", "/api/api-testing/scenario-cases", "fixture-admin", "admin", c)
 		if w.Code != 200 {

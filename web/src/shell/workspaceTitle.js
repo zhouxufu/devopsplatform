@@ -14,7 +14,7 @@ export function workspaceTitle(workspace,workspaces){
  const peers=workspaces.filter(w=>workspaceNavigation(w).id===navigation.id)
  if(workspace.plugin.name==='api-center'){
   const target=workspaceTarget('api-center',workspace.hash)
-  if(target?.detail){
+  if(target?.detail&&['/documents','/reports'].includes(target.path)){
    const label=withoutPageLabel(workspace.label||'',base)
    const fallback=[target.scope[0],target.scope[1]&&!target.scope[1].startsWith('__')?target.scope[1]:'',target.path==='/documents'?'文档 #'+target.id:'上报 '+target.id.slice(0,8)].filter(Boolean).join(' · ')
    const detail=label.includes(target.path==='/documents'?'文档 #':' · R')?label:fallback

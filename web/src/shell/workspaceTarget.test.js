@@ -77,3 +77,14 @@ test('historical unassigned environment aliases refer to the same document',()=>
  const current=ws(1,doc(7,'orders','__unassigned')+'&detail_environment=')
  assert.equal(chooseWorkspace([current],plugin.name,doc(7,'orders','__unassigned')).workspace.id,1)
 })
+
+test('opening or editing a test case keeps the workspace title renderable',()=>{
+ const overview=ws(1,'#/test-cases')
+ const editor=ws(2,'#/test-cases?service=&case=12',{label:'测试用例'})
+ const execution=ws(3,'#/test-execution?scope=scenario&case=12')
+ const report=ws(4,'#/test-execution?service=orders&run=18',{label:'测试报告 · orders'})
+ const workspaces=[overview,editor,execution,report]
+ assert.equal(workspaceTitle(editor,workspaces),'测试用例 · 2')
+ assert.equal(workspaceTitle(execution,workspaces),'执行测试')
+ assert.equal(workspaceTitle(report,workspaces),'执行测试 · 测试报告 · orders')
+})

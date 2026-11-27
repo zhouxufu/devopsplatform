@@ -1,8 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {copyCase,moduleOptions,filterCases,suitePlan,validateDataRows} from './collectionModel.js'
+import {copyCase,moduleTree,searchModuleTree,filterCases,suitePlan,validateDataRows} from './collectionModel.js'
 import {emptyCase,casePayload,caseDraft} from './caseModel.js'
-test('team copy is a new private draft; directory filters include descendants',()=>{const source={id:8,revision:4,name:'查询',owner:'alice',visibility:'team',module:'订单/查询',steps:[{name:'执行'}]};const c=copyCase(source);assert.equal(c.id,0);assert.equal(c.visibility,'private');assert.equal(c.owner,'');c.steps[0].name='副本';assert.equal(source.steps[0].name,'执行');assert.deepEqual(moduleOptions([source]),['订单','订单/查询']);assert.equal(filterCases([source],{module:'订单',visibility:'team',owner:'alice',search:'查询'}).length,1);assert.equal(filterCases([source],{owner:'bob'}).length,0)})
+test('team copy is a new private draft; directory filters include descendants',()=>{const source={id:8,revision:4,name:'查询',owner:'alice',visibility:'team',module:'订单 / 查询',steps:[{name:'执行'}]};const c=copyCase(source);assert.equal(c.id,0);assert.equal(c.visibility,'private');assert.equal(c.owner,'');c.steps[0].name='副本';assert.equal(source.steps[0].name,'执行');assert.equal(filterCases([source],{module:'订单',visibility:'team',owner:'alice',search:'查询'}).length,1);assert.equal(filterCases([source],{module:'订单/查询'}).length,1);assert.equal(filterCases([source],{owner:'bob'}).length,0)})
+test('module tree merges shared ancestors and search preserves the matching branch',()=>{
+ const rows=['住房宝/房主认领/自荐提交','住房宝/房主认领/审核','住房宝/房主认领','聚垚/自荐提交',''].map(module=>({module}))
+ const tree=moduleTree(rows)
+ assert.deepEqual(tree.map(node=>node.label),['住房宝','聚垚'])
+ assert.deepEqual(tree[0].children[0].children.map(node=>node.label),['审核','自荐提交'])
+ const matches=searchModuleTree(tree,'自荐')
+ assert.deepEqual(matches.items[0].children[0].children.map(node=>node.label),['自荐提交'])
+ assert.deepEqual(new Set(matches.expanded),new Set(['住房宝','住房宝/房主认领','聚垚']))
+ assert.deepEqual(searchModuleTree(tree,'无结果').items,[])
+ assert.deepEqual(filterCases(rows,{module:'住房宝/房主认领'}),rows.slice(0,3))
+})
 test('suite plan preserves order, versions and bounded data combinations',()=>{const a={id:1,revision:2,steps:[{},{}],data_rows:[{},{}]},b={id:2,revision:3,steps:[{}]};const p=suitePlan({case_ids:[2,1]},[a,b]);assert.deepEqual(p.selected,[b,a]);assert.equal(p.units,3);assert.equal(p.steps,5);assert.deepEqual(p.revisions,{'1':2,'2':3});assert.equal(suitePlan({case_ids:[3]},[a,b]).missing,true)})
 test('typed data stays exact in case payload; missing values and types focus data panel',()=>{const c=emptyCase();c.name='数据用例';c.steps[0].name='查询';c.steps[0].request.path='/{{data.id}}';c.data_rows=[{name:'大数字',values:{id:{type:'number',value:'9007199254740993123'},ok:{type:'boolean',value:'false'}}}];const p=casePayload(c);assert.equal(p.data_rows[0].values.id.value,'9007199254740993123');assert.equal(caseDraft(p).visibility,'private');c.data_rows=[];assert.throws(()=>casePayload(c),e=>e.field==='data');const rows=[{name:'a',values:{id:{type:'number',value:'NaN'}}}];assert.throws(()=>validateDataRows(rows,[]),e=>e.field==='data');rows[0].values.id.value='1';rows.push({...rows[0]});assert.throws(()=>validateDataRows(rows,[]),/重复/)})
 test('negative input cases accept empty text and null as explicit typed data',()=>{const rows=[{name:'缺失字段',values:{text:{type:'string',value:''},optional:{type:'null',value:''}}}];const steps=[{request:{path:'/',body:'{"text":"{{data.text}}","optional":"{{data.optional}}"}',headers:{},assertions:[]}}];assert.deepEqual(validateDataRows(rows,steps),rows);assert.equal(copyCase({name:'a',data_rows:rows}).data_rows[0].values.text.value,'')})
