@@ -62,9 +62,9 @@ const closeActions = [
           <BreadcrumbSeparator v-if="i" class="hidden sm:block" />
           <BreadcrumbItem :class="i === 0 ? 'hidden sm:inline-flex' : 'min-w-0'">
             <BreadcrumbPage v-if="i === breadcrumbs.length - 1" class="truncate font-normal">
-              {{ item.label }}
+              {{ item }}
             </BreadcrumbPage>
-            <span v-else>{{ item.label }}</span>
+            <span v-else>{{ item }}</span>
           </BreadcrumbItem>
         </template>
       </BreadcrumbList>
